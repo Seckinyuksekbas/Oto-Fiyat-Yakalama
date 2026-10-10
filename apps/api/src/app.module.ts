@@ -7,6 +7,7 @@ import { loggerOptions } from './common/logger';
 import { ConfigModule, ENV } from './config/config.module';
 import type { Env } from './config/env';
 import { InfraModule } from './infra/infra.module';
+import { AuthModule } from './modules/auth/auth.module';
 import { HealthModule } from './modules/health/health.module';
 
 @Module({
@@ -16,6 +17,7 @@ import { HealthModule } from './modules/health/health.module';
     InfraModule,
     CryptoModule,
     HealthModule,
+    AuthModule,
   ],
   providers: [{ provide: APP_FILTER, useClass: AllExceptionsFilter }],
 })
