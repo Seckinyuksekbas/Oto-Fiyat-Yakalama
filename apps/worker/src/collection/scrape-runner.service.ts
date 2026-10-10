@@ -215,6 +215,14 @@ export class ScrapeRunner {
         .catch((e: unknown) => this.logger.error(`İş durumu güncellenemedi: ${message(e)}`));
       throw err;
     }
+    if (status === 'SUCCEEDED') {
+      try {
+        const n = await this.ingest.enqueuePostScrapeAnalysis(source.id, startedAt, job.id);
+        if (n > 0) this.logger.log(`Kaynak ${source.code}: ${n} yeni/yetersiz ilan için tarama sonrası yeniden analiz kuyruğa alındı`);
+      } catch (err) {
+        this.logger.warn(`Kaynak ${source.code} tarama sonrası yeniden analiz kuyruğa alınamadı: ${message(err)}`);
+      }
+    }
     return { status, pages: c.pages, cards: c.cards, created: c.created, updated: c.updated, removed: c.removed, failed: c.failed };
   }
 }

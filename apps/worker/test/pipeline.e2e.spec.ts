@@ -75,7 +75,10 @@ describe('collection pipeline (scheduler → queue → worker → DB → analyze
     // 1) İlk tarama: 60 ilan, her biri için NEW analiz işi
     await cycle(at(0));
     expect(await prisma.listing.count({ where: { status: 'ACTIVE' } })).toBe(60);
-    expect(await analyze.count()).toBe(60);
+    // + her ilan henüz analizsiz olduğundan tarama sonrası REFRESH işi (analyze-post-*)
+    const firstJobs = await analyze.getJobs(['waiting', 'prioritized', 'delayed']);
+    expect(firstJobs.filter((j) => !String(j.id).startsWith('analyze-post-'))).toHaveLength(60);
+    expect(firstJobs.filter((j) => String(j.id).startsWith('analyze-post-'))).toHaveLength(60);
 
     // 2) Fiyat düşüşü + kaldırma + fırsat ilanı
     const [drop, gone] = demo.site.store.active();

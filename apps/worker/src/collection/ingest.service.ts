@@ -143,6 +143,40 @@ export class IngestService {
     return this.prisma.listing.count({ where: { sourceId, status: 'ACTIVE' } });
   }
 
+  /**
+   * Tarama sonrası: bu taramada ilk görülen ve henüz yetersiz (INSUFFICIENT) ya da hiç analiz edilmemiş ilanlar
+   * için, havuz tamamlandıktan sonra REFRESH analizi kuyruğa alınır. Gerçek zamanlı (varsayılan) öncelik.
+   */
+  async enqueuePostScrapeAnalysis(sourceId: number, since: Date, collectionJobId: number): Promise<number> {
+    let cursor = 0;
+    let total = 0;
+    for (;;) {
+      const rows = await this.prisma.listing.findMany({
+        where: {
+          sourceId,
+          status: 'ACTIVE',
+          firstSeenAt: { gte: since },
+          id: { gt: cursor },
+          OR: [{ latestAnalysisId: null }, { latestAnalysis: { confidence: 'INSUFFICIENT' } }],
+        },
+        orderBy: { id: 'asc' },
+        take: 500,
+        select: { id: true },
+      });
+      if (rows.length === 0) break;
+      await this.queues.analyze.addBulk(
+        rows.map((r) => ({
+          name: 'analyze',
+          data: { listingId: r.id, reason: 'REFRESH' as const },
+          opts: { jobId: `analyze-post-${r.id}-${collectionJobId}`, ...RETRYING_JOB_OPTS },
+        })),
+      );
+      total += rows.length;
+      cursor = rows[rows.length - 1].id;
+    }
+    return total;
+  }
+
   private async enqueueAnalyze(listingId: number, reason: AnalyzeReason, contentHash: string, previousPrice?: bigint): Promise<void> {
     const data: AnalyzeJobData = { listingId, reason, ...(previousPrice !== undefined ? { previousPrice: previousPrice.toString() } : {}) };
     await this.queues.analyze.add('analyze', data, { jobId: analyzeJobId(listingId, reason, contentHash), ...RETRYING_JOB_OPTS });

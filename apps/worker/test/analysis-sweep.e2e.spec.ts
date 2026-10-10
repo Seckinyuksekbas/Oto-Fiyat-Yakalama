@@ -46,9 +46,9 @@ describe('AnalysisSweepService.maybeRunNightly', () => {
     expect(await sweep.maybeRunNightly(new Date('2026-10-11T23:30:00Z'))).toBe(0); // 02:30 İstanbul
     expect(await sweep.maybeRunNightly(new Date('2026-10-12T00:10:00Z'))).toBe(2); // 03:10
     expect(await sweep.maybeRunNightly(new Date('2026-10-12T05:00:00Z'))).toBe(0); // aynı gün
-    const jobs = await ref.get(QueueRegistry).analyze.getJobs(['waiting']);
+    const jobs = await ref.get(QueueRegistry).analyze.getJobs(['waiting', 'prioritized']);
     expect(jobs.map((j) => j.id).sort()).toEqual([`analyze-refresh-${a.id}-20261012`, `analyze-refresh-${b.id}-20261012`].sort());
-    expect(jobs.every((j) => j.data.reason === 'REFRESH')).toBe(true);
+    expect(jobs.every((j) => j.data.reason === 'REFRESH' && j.opts.priority === 100)).toBe(true);
     expect(await sweep.maybeRunNightly(new Date('2026-10-13T00:10:00Z'))).toBe(2); // ertesi gün
   });
 
@@ -111,7 +111,6 @@ describe('AnalysisSweepService.requeuePendingMatches', () => {
     const first = await prisma.listingAnalysis.create({ data: { ...base, matchEvent: 'NEW', createdAt: old } });
     const second = await prisma.listingAnalysis.create({ data: { ...base, matchEvent: 'NEW', createdAt: old } });
     const dispatcher = ref.get(MatchDispatcher);
-    const real = dispatcher.dispatch.bind(dispatcher);
     vi.spyOn(dispatcher, 'dispatch').mockImplementationOnce(async () => {
       throw new Error('boom');
     });
@@ -119,7 +118,6 @@ describe('AnalysisSweepService.requeuePendingMatches', () => {
     expect((await prisma.listingAnalysis.findUniqueOrThrow({ where: { id: first.id } })).matchQueuedAt).toBeNull();
     expect((await prisma.listingAnalysis.findUniqueOrThrow({ where: { id: second.id } })).matchQueuedAt).not.toBeNull();
     vi.restoreAllMocks();
-    void real;
     expect(await sweep.requeuePendingMatches(now)).toBe(1);
   });
 });

@@ -63,9 +63,35 @@ describe('AnalysisService.process', () => {
     await seedMarket();
     const t = await createListing(ref, sourceId, { price: 960_000n });
     await service.process(t.id);
-    await prisma.listing.updateMany({ where: { id: { not: t.id } }, data: { price: { increment: 100_000n } } });
+    await prisma.listing.updateMany({ where: { id: { not: t.id } }, data: { price: { decrement: 100_000n } } });
     const out = await service.process(t.id);
     expect(out).toMatchObject({ status: 'WRITTEN', event: 'REFRESH' });
+    expect((await prisma.listingAnalysis.findUniqueOrThrow({ where: { id: out.analysisId! } })).matchEvent).toBeNull();
+    expect(await matchJobs()).toHaveLength(1);
+  });
+
+  it('a REFRESH that makes the listing more matchable (INSUFFICIENT -> rated) emits NEW', async () => {
+    const t = await createListing(ref, sourceId, { price: 960_000n });
+    for (const p of MARKET.slice(0, 2)) await createListing(ref, sourceId, { price: BigInt(p) });
+    const first = await service.process(t.id);
+    expect(first).toMatchObject({ status: 'WRITTEN', event: 'NEW' });
+    expect((await prisma.listingAnalysis.findUniqueOrThrow({ where: { id: first.analysisId! } })).confidence).toBe('INSUFFICIENT');
+    for (const p of MARKET.slice(2)) await createListing(ref, sourceId, { price: BigInt(p) });
+    const out = await service.process(t.id);
+    expect(out).toMatchObject({ status: 'WRITTEN', event: 'REFRESH' });
+    const a = await prisma.listingAnalysis.findUniqueOrThrow({ where: { id: out.analysisId! } });
+    expect(a.matchEvent).toBe('NEW');
+    expect(a.confidence).not.toBe('INSUFFICIENT');
+    expect((await matchJobs()).map((j) => j.id)).toContain(`match-${a.id}`);
+  });
+
+  it('a REFRESH without improvement emits no match event', async () => {
+    await seedMarket();
+    const t = await createListing(ref, sourceId, { price: 960_000n });
+    await service.process(t.id);
+    await prisma.listing.updateMany({ where: { id: { not: t.id } }, data: { price: { decrement: 100_000n } } });
+    const out = await service.process(t.id);
+    expect(out.event).toBe('REFRESH');
     expect((await prisma.listingAnalysis.findUniqueOrThrow({ where: { id: out.analysisId! } })).matchEvent).toBeNull();
     expect(await matchJobs()).toHaveLength(1);
   });

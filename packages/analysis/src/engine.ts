@@ -43,7 +43,7 @@ function dedupe(candidates: Comparable[]): Comparable[] {
 function inLevel(t: AnalysisTarget, c: Comparable, l: Level): boolean {
   if (Math.abs(c.year - t.year) > l.yearDelta) return false;
   if (Math.abs(c.km - t.km) > l.kmPct * Math.max(t.km, 10_000)) return false;
-  if (l.sameTrim && t.trim && norm(c.trim) !== norm(t.trim)) return false;
+  if (l.sameTrim && norm(t.trim) && norm(c.trim) !== norm(t.trim)) return false;
   return true;
 }
 

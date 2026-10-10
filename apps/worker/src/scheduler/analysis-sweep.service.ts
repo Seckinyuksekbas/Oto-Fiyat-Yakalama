@@ -9,6 +9,8 @@ import { QueueRegistry } from '../queues/queue-registry';
 export const NIGHTLY_HOUR_ISTANBUL = 3;
 export const MATCH_REQUEUE_AFTER_MS = 60_000;
 const PAGE = 500;
+/** Gece yenilemesi gerçek zamanlı analizlerden düşük öncelikli (BullMQ: büyük sayı = geç). */
+export const REFRESH_PRIORITY = 100;
 
 export function istanbulDayKey(d: Date): string {
   const local = new Date(startOfIstanbulDay(d).getTime() + ISTANBUL_OFFSET_MS);
@@ -63,7 +65,7 @@ export class AnalysisSweepService {
         rows.map((r) => ({
           name: 'analyze',
           data: { listingId: r.id, reason: 'REFRESH' as const },
-          opts: { jobId: `analyze-refresh-${r.id}-${dayKey}`, ...RETRYING_JOB_OPTS },
+          opts: { jobId: `analyze-refresh-${r.id}-${dayKey}`, priority: REFRESH_PRIORITY, ...RETRYING_JOB_OPTS },
         })),
       );
       total += rows.length;
@@ -75,7 +77,7 @@ export class AnalysisSweepService {
   /** Commit sonrası kuyruğa alınamamış eşleştirme olaylarını yeniden gönderir. */
   async requeuePendingMatches(now: Date = new Date()): Promise<number> {
     const pending = await this.prisma.listingAnalysis.findMany({
-      where: { matchEvent: { not: null }, matchQueuedAt: null, createdAt: { lt: new Date(now.getTime() - MATCH_REQUEUE_AFTER_MS) } },
+      where: { matchEvent: { in: ['NEW', 'PRICE_DROP', 'RELIST'] }, matchQueuedAt: null, createdAt: { lt: new Date(now.getTime() - MATCH_REQUEUE_AFTER_MS) } },
       orderBy: { id: 'asc' },
       take: PAGE,
       select: { id: true, listingId: true, matchEvent: true, matchPreviousPrice: true },

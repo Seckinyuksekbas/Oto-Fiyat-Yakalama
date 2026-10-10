@@ -2,10 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { analyze } from '@oto/analysis';
 import { Prisma } from '@oto/db';
+import type { MatchEvent } from '@oto/shared';
 import { PrismaService } from '../infra/prisma.service';
 import { RedisService } from '../infra/redis.service';
 import { AnalysisSettingsService } from './analysis-settings.service';
-import { deriveEvent, isDamaged, isMatchEvent, materiallyChanged, type AnalysisEvent } from './events';
+import { becameMoreMatchable, deriveEvent, isDamaged, isMatchEvent, materiallyChanged, type AnalysisEvent } from './events';
 import { MatchDispatcher } from './match-dispatcher.service';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -93,7 +94,11 @@ export class AnalysisService {
       return { status: 'UNCHANGED', event, analysisId: latest.id };
     }
 
-    const matchEvent = isMatchEvent(event) ? event : null;
+    const matchEvent: MatchEvent | null = isMatchEvent(event)
+      ? event
+      : (event === 'REFRESH' || event === 'CHANGE') && latest && becameMoreMatchable(latest, result)
+        ? 'NEW'
+        : null;
     const matchPreviousPrice = event === 'PRICE_DROP' ? (latest?.listingPrice ?? null) : null;
     const analysis = await this.prisma.$transaction(async (tx) => {
       const created = await tx.listingAnalysis.create({

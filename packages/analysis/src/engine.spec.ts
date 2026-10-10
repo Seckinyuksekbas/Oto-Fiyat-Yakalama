@@ -43,6 +43,12 @@ describe('analyze — pool expansion', () => {
     expect(r.confidence).toBe('HIGH');
   });
 
+  it('treats a whitespace-only target trim as no trim', () => {
+    const r = analyze(target({ trim: '   ' }), prices(Array.from({ length: 8 }, (_, i) => 1_200_000 + i * 1000)));
+    expect(r.expansionLevel).toBe(0);
+    expect(r.comparableCount).toBe(8);
+  });
+
   it('ignores trim at L0 when the target has none', () => {
     const r = analyze(target({ trim: null }), prices(Array.from({ length: 8 }, (_, i) => 1_200_000 + i * 1000)));
     expect(r.expansionLevel).toBe(0);

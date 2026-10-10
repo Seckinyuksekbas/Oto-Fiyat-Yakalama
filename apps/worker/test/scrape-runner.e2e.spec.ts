@@ -6,7 +6,8 @@ import { CollectionModule } from '../src/collection/collection.module';
 import { IngestService } from '../src/collection/ingest.service';
 import { ScrapeRunner } from '../src/collection/scrape-runner.service';
 import { PrismaService } from '../src/infra/prisma.service';
-import { createAdmin, createContext, createQueuedJob, createSource, resetState, startDemo } from './helpers';
+import { QueueRegistry } from '../src/queues/queue-registry';
+import { createAdmin, createContext, createListing, createQueuedJob, createSource, resetState, startDemo } from './helpers';
 
 let ref: TestingModule;
 let prisma: PrismaService;
@@ -277,5 +278,45 @@ describe('ScrapeRunner robustness', () => {
     const keys = (await prisma.notification.findMany({ where: { kind: 'SYSTEM_ALERT' } })).map((n) => (n.payload as { key: string }).key).sort();
     expect(keys).toEqual([`source:${source.id}:degraded`, `source:${source.id}:down`]);
     expect(await prisma.systemLog.count({ where: { level: 'ERROR' } })).toBe(1);
+  });
+});
+
+describe('ScrapeRunner post-scrape re-analysis', () => {
+  const postJobs = async () =>
+    (await ref.get(QueueRegistry).analyze.getJobs(['waiting', 'prioritized', 'delayed'])).filter((j) => String(j.id).startsWith('analyze-post-'));
+
+  it('enqueues REFRESH jobs for new listings after a SUCCEEDED run', async () => {
+    const source = await createSource(ref, demo.baseUrl);
+    const job = await runOnce(source.id);
+    expect(job.status).toBe('SUCCEEDED');
+    const post = await postJobs();
+    expect(post).toHaveLength(45);
+    expect(post[0].data.reason).toBe('REFRESH');
+    expect(post.every((j) => String(j.id).endsWith(`-${job.id}`) && !String(j.id).includes(':'))).toBe(true);
+  });
+
+  it('only enqueues INSUFFICIENT or unanalyzed new listings, not already-matchable ones', async () => {
+    const source = await createSource(ref, 'http://demo.invalid');
+    const since = new Date(Date.now() - 1000);
+    const base = { engineVersion: 'rules-v1', opportunityScore: 50, comparableCount: 5, explanation: {}, comparableIds: [] };
+    const none = await createListing(ref, source.id);
+    const weak = await createListing(ref, source.id);
+    const strong = await createListing(ref, source.id);
+    const old = await createListing(ref, source.id, { firstSeenAt: new Date(since.getTime() - 86_400_000) });
+    for (const [l, confidence] of [[weak, 'INSUFFICIENT'], [strong, 'HIGH'], [old, 'INSUFFICIENT']] as const) {
+      const a = await prisma.listingAnalysis.create({ data: { ...base, listingId: l.id, confidence } });
+      await prisma.listing.update({ where: { id: l.id }, data: { latestAnalysisId: a.id } });
+    }
+    expect(await ref.get(IngestService).enqueuePostScrapeAnalysis(source.id, since, 99)).toBe(2);
+    expect((await postJobs()).map((j) => j.id).sort()).toEqual([`analyze-post-${none.id}-99`, `analyze-post-${weak.id}-99`].sort());
+  });
+
+  it('does not fail the scrape job when post-scrape enqueueing throws', async () => {
+    const source = await createSource(ref, demo.baseUrl);
+    vi.spyOn(ref.get(IngestService), 'enqueuePostScrapeAnalysis').mockRejectedValueOnce(new Error('redis down'));
+    const job = await runOnce(source.id);
+    expect(job.status).toBe('SUCCEEDED');
+    expect(await postJobs()).toHaveLength(0);
+    vi.restoreAllMocks();
   });
 });

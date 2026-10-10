@@ -48,3 +48,21 @@ export function materiallyChanged(
   if (a === 0n) return b !== 0n;
   return Math.abs(Number(b - a)) / Number(a) > settings.refreshMinChangePct;
 }
+
+const CONFIDENCE_RANK: Record<string, number> = { INSUFFICIENT: 0, LOW: 1, MEDIUM: 2, HIGH: 3 };
+/** İndirim oranındaki (0-1) bu kadarlık artış (1 puan) "daha eşleşebilir" sayılır; gürültüyü önler. */
+const MIN_DISCOUNT_GAIN = 0.01;
+
+/**
+ * REFRESH/CHANGE analizi ilanı daha eşleşebilir hale getirdiyse true: güven sırası yükseldi
+ * ya da (güven yeterliyken) indirim en az 1 puan arttı. Plan 04 bunu "bu profil için ilk eşleşme" olarak ele alır.
+ */
+export function becameMoreMatchable(
+  latest: { confidence: string; discountPct: { toString(): string } | number | null },
+  result: { confidence: string; discountPct: number | null },
+): boolean {
+  if ((CONFIDENCE_RANK[result.confidence] ?? 0) > (CONFIDENCE_RANK[latest.confidence] ?? 0)) return true;
+  if (result.confidence === 'INSUFFICIENT' || result.discountPct === null) return false;
+  if (latest.discountPct === null) return true;
+  return result.discountPct - Number(latest.discountPct) >= MIN_DISCOUNT_GAIN - 1e-9;
+}
