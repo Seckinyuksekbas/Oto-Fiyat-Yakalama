@@ -2,6 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { findMatchingProfiles, type ListingFacts } from '@oto/db';
 import type { MatchEvent, MatchJobData } from '@oto/shared';
 import { PrismaService } from '../infra/prisma.service';
+import { NotificationDispatcher } from '../notifications/notification-dispatcher';
+import { planNotifications, type PlannedMatch, type PlannedNotification } from '../notifications/notification-planner';
 import { decideMatchReason } from './decide';
 
 /** pg_advisory_xact_lock(ad alanı, ilan id): aynı ilanın eşleştirmesi tek seferde bir işte çalışır. */
@@ -15,14 +17,17 @@ export interface CreatedMatch {
 }
 
 export type MatchOutcome =
-  | { status: 'MATCHED'; created: CreatedMatch[]; candidates: number }
+  | { status: 'MATCHED'; created: CreatedMatch[]; candidates: number; notifications: PlannedNotification[] }
   | { status: 'SKIPPED'; reason: 'NOT_FOUND' | 'LISTING_INACTIVE'; created: [] };
 
 @Injectable()
 export class MatchService {
   private readonly logger = new Logger(MatchService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly dispatcher: NotificationDispatcher,
+  ) {}
 
   async process(data: MatchJobData): Promise<MatchOutcome> {
     const out = await this.prisma.$transaction(
@@ -55,6 +60,7 @@ export class MatchService {
         };
         const candidates = await findMatchingProfiles(tx, facts, listing.id);
         const created: CreatedMatch[] = [];
+        const planned: PlannedMatch[] = [];
         for (const c of candidates) {
           const reason = decideMatchReason(
             data.event,
@@ -68,14 +74,37 @@ export class MatchService {
             VALUES (${c.userId}, ${c.id}, ${listing.id}::int, ${effective.id}::int, ${reason}::"MatchReason", ${price}::bigint)
             ON CONFLICT ("searchProfileId", "listingId", "reason", "matchedPrice") DO NOTHING
             RETURNING "id"`;
-          if (rows[0]) created.push({ matchId: rows[0].id, userId: c.userId, searchProfileId: c.id, reason });
+          if (rows[0]) {
+            created.push({ matchId: rows[0].id, userId: c.userId, searchProfileId: c.id, reason });
+            planned.push({
+              matchId: rows[0].id,
+              userId: c.userId,
+              profile: { id: c.id, name: c.name, channels: c.channels },
+              reason,
+              previousPrice: reason === 'PRICE_DROP' ? c.lastMatchedPrice : null,
+            });
+          }
         }
-        return { status: 'MATCHED', created, candidates: candidates.length } as const;
+        const notifications = created.length
+          ? await planNotifications(tx, { listing, analysis: effective, matches: planned, now: new Date() })
+          : [];
+        return { status: 'MATCHED', created, candidates: candidates.length, notifications } as const;
       },
       { maxWait: 10_000, timeout: 30_000 },
     );
     if (out.status === 'MATCHED' && out.created.length > 0) {
       this.logger.log(`İlan ${data.listingId} (${data.event}): ${out.created.length} eşleşme`);
+    }
+    if (out.status === 'MATCHED') {
+      const pending = out.notifications.filter((n) => n.status === 'PENDING');
+      if (pending.length > 0) {
+        try {
+          await this.dispatcher.enqueue(pending);
+        } catch (err) {
+          // Satırlar commit edildi; NotificationSweepService queuedAt=null olanları yeniden ekler.
+          this.logger.warn(`Bildirimler kuyruğa alınamadı (süpürme telafi eder): ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
     }
     return out;
   }
