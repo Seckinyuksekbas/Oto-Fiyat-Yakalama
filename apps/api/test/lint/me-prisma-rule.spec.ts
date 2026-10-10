@@ -17,4 +17,19 @@ describe('me/ prisma lint rule', () => {
     const [result] = await eslint.lintText(source, { filePath: resolve(repoRoot, 'apps/api/src/modules/me/ok.repository.ts') });
     expect(result.messages.filter((m) => m.ruleId === 'no-restricted-syntax')).toHaveLength(0);
   });
+
+  it('forbids destructuring prisma and constructing PrismaClient in /me', async () => {
+    const eslint = new ESLint({ cwd: repoRoot });
+    const bad = [
+      `export class X { constructor(private readonly db: { prisma: unknown }) {} run() { const { prisma } = this.db; return prisma; } }
+`,
+      `import { PrismaClient } from '@oto/db';
+export const c = new PrismaClient();
+`,
+    ];
+    for (const src of bad) {
+      const [result] = await eslint.lintText(src, { filePath: resolve(repoRoot, 'apps/api/src/modules/me/bad2.service.ts') });
+      expect(result.messages.some((m) => m.ruleId === 'no-restricted-syntax')).toBe(true);
+    }
+  });
 });

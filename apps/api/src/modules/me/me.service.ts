@@ -7,6 +7,7 @@ import {
 } from '@oto/shared';
 import { AppError, Errors } from '../../common/errors/app-error';
 import type { AuthUser } from '../auth/auth-user';
+import { PasswordConfirmationService } from '../auth/password-confirmation.service';
 import { PasswordService } from '../auth/password.service';
 import { toPublicUser, type PublicUser } from '../auth/public-user';
 import { SessionService, type SessionView } from '../auth/session.service';
@@ -24,6 +25,7 @@ export class MeService {
   constructor(
     private readonly repo: MeRepository,
     private readonly passwords: PasswordService,
+    private readonly confirm: PasswordConfirmationService,
     private readonly sessions: SessionService,
     private readonly limits: LimitsService,
   ) {}
@@ -44,7 +46,7 @@ export class MeService {
   }
 
   async changePassword(user: AuthUser, input: ChangePasswordInput): Promise<void> {
-    await this.assertPassword(user.id, input.currentPassword);
+    await this.confirm.assert(user.id, input.currentPassword);
     await this.passwords.assertNotBreached(input.newPassword);
     await this.repo.updatePasswordHash(user.id, await this.passwords.hash(input.newPassword));
     await this.repo.invalidateResetTokens(user.id);
@@ -61,15 +63,10 @@ export class MeService {
   }
 
   async deleteAccount(userId: string, input: DeleteMeInput): Promise<void> {
-    await this.assertPassword(userId, input.password);
+    await this.confirm.assert(userId, input.password);
     if ((await this.repo.findRole(userId)) === 'SUPER_ADMIN' && !(await this.repo.hasOtherActiveSuperAdmin(userId))) {
       throw new AppError('INVALID_OPERATION', 409, 'Son süper admin hesabı silinemez');
     }
     await this.repo.anonymizeAndDelete(userId);
-  }
-
-  private async assertPassword(userId: string, password: string): Promise<void> {
-    const hash = await this.repo.findPasswordHash(userId);
-    if (!hash || !(await this.passwords.verify(hash, password))) throw Errors.invalidCredentials(400);
   }
 }

@@ -4,6 +4,7 @@ import { generateToken, hashToken } from '@oto/server-common';
 import { ENV } from '../../config/config.module';
 import type { Env } from '../../config/env';
 import { PrismaService } from '../../infra/prisma.service';
+import { RedisService } from '../../infra/redis.service';
 import { MailService } from '../mail/mail.service';
 import { verifyEmailMail } from '../mail/templates';
 import { buildLink } from './links';
@@ -16,6 +17,7 @@ export class EmailVerificationService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly mail: MailService,
+    private readonly redis: RedisService,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
@@ -34,6 +36,16 @@ export class EmailVerificationService {
     void this.mail
       .send({ to: user.email, ...verifyEmailMail(user.name, link) })
       .catch((err: unknown) => this.logger.warn(`Verification mail failed for user ${user.id}: ${String(err)}`));
+  }
+
+  /** Kullanıcının var olup olmadığını sızdırmaz; e-posta başına 60 sn'de bir gönderir. */
+  async resend(email: string): Promise<void> {
+    const key = `auth:resend:${email.toLowerCase()}`;
+    if ((await this.redis.set(key, '1', 'EX', 60, 'NX')) !== 'OK') return;
+    const user = await this.prisma.user.findUnique({ where: { email } });
+    if (!user || user.status !== 'ACTIVE' || user.emailVerifiedAt) return;
+    await this.prisma.emailVerificationToken.updateMany({ where: { userId: user.id, usedAt: null }, data: { usedAt: new Date() } });
+    await this.sendFor(user);
   }
 
   async verify(token: string): Promise<boolean> {

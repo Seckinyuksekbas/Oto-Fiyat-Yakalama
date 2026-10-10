@@ -5,6 +5,7 @@ import {
   forgotPasswordSchema,
   loginSchema,
   registerSchema,
+  resendVerificationSchema,
   resetPasswordSchema,
   verifyEmailSchema,
   type LoginInput,
@@ -94,6 +95,12 @@ export class AuthController {
     if (!(await this.verification.verify(body.token))) {
       throw new AppError(ErrorCode.TOKEN_INVALID, 400, 'Bağlantı geçersiz veya süresi dolmuş');
     }
+  }
+
+  @Post('resend-verification')
+  @HttpCode(204)
+  async resendVerification(@Body(new ZodPipe(resendVerificationSchema)) body: { email: string }) {
+    await this.verification.resend(body.email);
   }
 
   @Post('forgot-password')

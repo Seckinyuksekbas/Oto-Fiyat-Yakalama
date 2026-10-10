@@ -55,11 +55,6 @@ export class MeRepository {
     await this.prisma.passwordResetToken.updateMany({ where: { userId, usedAt: null }, data: { usedAt: new Date() } });
   }
 
-  async findPasswordHash(userId: string): Promise<string | null> {
-    const u = await this.prisma.user.findFirst({ where: { id: userId, status: { not: 'DELETED' } }, select: { passwordHash: true } });
-    return u?.passwordHash ?? null;
-  }
-
   async updatePasswordHash(userId: string, passwordHash: string): Promise<void> {
     await this.prisma.user.update({ where: { id: userId }, data: { passwordHash } });
   }
