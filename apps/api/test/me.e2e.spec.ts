@@ -2,7 +2,8 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { PrismaService } from '../src/infra/prisma.service';
-import { cookieFrom, createTestApp, newAgent, registerUser, resetState } from './helpers';
+import { MailService } from '../src/modules/mail/mail.service';
+import { cookieFrom, createTestApp, newAgent, registerUser, resetState, setRole, tokenFromMail } from './helpers';
 
 let app: NestExpressApplication;
 let prisma: PrismaService;
@@ -82,5 +83,51 @@ describe('/me', () => {
     const login = await request(app.getHttpServer()).post('/api/v1/auth/login').set(xhr).send({ email, password });
     expect(login.status).toBe(401);
     await registerUser(app, { email: 'bye@test.com' });
+  });
+  it('refuses to delete the last active SUPER_ADMIN, allows it when another exists', async () => {
+    const a = await registerUser(app);
+    await setRole(app, a.user.id, 'SUPER_ADMIN');
+    const refused = await a.agent.delete('/api/v1/me').send({ password: a.password });
+    expect(refused.status).toBe(409);
+    expect(refused.body.error.code).toBe('INVALID_OPERATION');
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: a.user.id } })).status).toBe('ACTIVE');
+    const b = await registerUser(app);
+    await setRole(app, b.user.id, 'SUPER_ADMIN');
+    expect((await a.agent.delete('/api/v1/me').send({ password: a.password })).status).toBe(204);
+  });
+
+  it('PATCH /me from a still-valid session of a deleted account is rejected', async () => {
+    const { agent, user, email, password } = await registerUser(app);
+    const other = await loginAgain(email, password);
+    expect((await agent.delete('/api/v1/me').send({ password })).status).toBe(204);
+    const res = await other.patch('/api/v1/me').send({ name: 'Hacked' });
+    expect(res.status).toBe(401);
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).name).toBe('Silinmiş kullanıcı');
+  });
+
+  it('account deletion removes sessions and one-time tokens', async () => {
+    const { agent, user, email, password } = await registerUser(app);
+    await prisma.passwordResetToken.create({ data: { userId: user.id, tokenHash: 'h1', expiresAt: new Date(Date.now() + 1e6) } });
+    await prisma.telegramLinkToken.create({ data: { userId: user.id, codeHash: 'h2', expiresAt: new Date(Date.now() + 1e6) } });
+    expect(await prisma.emailVerificationToken.count({ where: { userId: user.id } })).toBe(1);
+    await loginAgain(email, password);
+    expect((await agent.delete('/api/v1/me').send({ password })).status).toBe(204);
+    const where = { where: { userId: user.id } };
+    expect(await prisma.session.count(where)).toBe(0);
+    expect(await prisma.emailVerificationToken.count(where)).toBe(0);
+    expect(await prisma.passwordResetToken.count(where)).toBe(0);
+    expect(await prisma.telegramLinkToken.count(where)).toBe(0);
+  });
+
+  it('change-password invalidates outstanding reset tokens', async () => {
+    const { agent, password, email } = await registerUser(app);
+    const mail = app.get(MailService);
+    mail.outbox.length = 0;
+    await request(app.getHttpServer()).post('/api/v1/auth/forgot-password').set(xhr).send({ email });
+    const token = tokenFromMail(mail.outbox[0].text);
+    expect((await agent.post('/api/v1/me/change-password').send({ currentPassword: password, newPassword: 'another-strong-pw' })).status).toBe(204);
+    const res = await request(app.getHttpServer()).post('/api/v1/auth/reset-password').set(xhr).send({ token, newPassword: 'third-strong-pass' });
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('TOKEN_INVALID');
   });
 });

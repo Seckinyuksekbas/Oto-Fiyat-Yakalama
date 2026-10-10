@@ -8,6 +8,7 @@ import type { Env } from '../../config/env';
 import { PrismaService } from '../../infra/prisma.service';
 import { MailService } from '../mail/mail.service';
 import { resetPasswordMail } from '../mail/templates';
+import { buildLink } from './links';
 import { RESET_TTL_MS } from './auth.constants';
 import { PasswordService } from './password.service';
 import { SessionService } from './session.service';
@@ -33,7 +34,7 @@ export class PasswordResetService {
     await this.prisma.passwordResetToken.create({
       data: { userId: user.id, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + RESET_TTL_MS) },
     });
-    const link = `${this.env.PUBLIC_BASE_URL}/reset-password?token=${token}`;
+    const link = buildLink(this.env.PUBLIC_BASE_URL, '/reset-password', token);
     // Beklenmez: yanıt süresi kullanıcının var olup olmadığını sızdırmasın.
     void this.mail
       .send({ to: user.email, ...resetPasswordMail(user.name, link) })
@@ -50,7 +51,10 @@ export class PasswordResetService {
     });
     if (used.count !== 1) return false;
     const passwordHash = await this.passwords.hash(input.newPassword);
+    const now = new Date();
     await this.prisma.user.update({ where: { id: row.userId }, data: { passwordHash } });
+    await this.prisma.user.updateMany({ where: { id: row.userId, emailVerifiedAt: null }, data: { emailVerifiedAt: now } });
+    await this.prisma.passwordResetToken.updateMany({ where: { userId: row.userId, usedAt: null }, data: { usedAt: now } });
     await this.sessions.revokeAllForUser(row.userId);
     await this.audit.record({
       actorId: row.userId,

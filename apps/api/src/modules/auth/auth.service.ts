@@ -81,7 +81,6 @@ export class AuthService {
           action: 'auth.login_locked',
           targetType: 'User',
           targetId: user?.id ?? null,
-          after: { email: input.email },
           ip: meta.ip,
         });
       }

@@ -15,7 +15,7 @@ Ayrıntılı tasarım: `docs/superpowers/specs/2026-10-10-oto-firsat-platformu-d
 ## Kimlik doğrulama
 - Access: EdDSA JWT, 15 dk. Refresh: opak token, 30 gün, DB'de SHA-256; her kullanımda döner. Eski token 10 sn içinde gelirse `REFRESH_RACE` (aile korunur), sonra gelirse `REFRESH_REUSED` (aile iptal + güvenlik bildirimi + audit).
 - Giriş kilidi: IP+e-posta başına 15 dk'da 5 hata (Redis).
-- Askıya alma / şifre değişimi / sıfırlama oturumları iptal eder. Admin uç noktaları ayrıca DB'den canlı doğrular.
+- Askıya alma ve şifre sıfırlama tüm oturumları iptal eder; şifre değişimi (`/me/change-password`) geçerli oturum hariç DİĞER tüm oturumları iptal eder (mevcut oturum korunur). Şifre değişimi/sıfırlama, kullanılmamış diğer sıfırlama token'larını da geçersiz kılar. Admin uç noktaları ayrıca DB'den canlı doğrular.
 
 ## İzolasyon
 - `/me` altındaki veri erişimi yalnızca `*.repository.ts` üzerinden ve `userId` ile yapılır (ESLint kuralı).

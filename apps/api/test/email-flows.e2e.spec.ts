@@ -77,6 +77,20 @@ describe('password reset', () => {
     expect(reuse.body.error.code).toBe('TOKEN_INVALID');
   });
 
+  it('a reset invalidates other outstanding reset tokens and verifies the email', async () => {
+    const { user } = await registerUser(app, { email: 'two@test.com' });
+    mail.outbox.length = 0;
+    await http().post('/api/v1/auth/forgot-password').set(xhr).send({ email: 'two@test.com' });
+    await http().post('/api/v1/auth/forgot-password').set(xhr).send({ email: 'two@test.com' });
+    expect(mail.outbox).toHaveLength(2);
+    const [first, second] = mail.outbox.map((m) => tokenFromMail(m.text));
+    expect((await http().post('/api/v1/auth/reset-password').set(xhr).send({ token: second, newPassword: 'brand-new-password' })).status).toBe(204);
+    const res = await http().post('/api/v1/auth/reset-password').set(xhr).send({ token: first, newPassword: 'another-password-9' });
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('TOKEN_INVALID');
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).emailVerifiedAt).not.toBeNull();
+  });
+
   it('still answers 204 when the mail transport rejects', async () => {
     await registerUser(app, { email: 'down@test.com' });
     const transporter = (mail as unknown as { transporter: { sendMail: (...a: unknown[]) => Promise<unknown> } })

@@ -7,7 +7,7 @@ import {
   type PlanLimits,
   type UpdateMeInput,
 } from '@oto/shared';
-import { Errors } from '../../common/errors/app-error';
+import { AppError, Errors } from '../../common/errors/app-error';
 import type { AuthUser } from '../auth/auth-user';
 import { PasswordService } from '../auth/password.service';
 import { toPublicUser, type PublicUser } from '../auth/public-user';
@@ -52,13 +52,16 @@ export class MeService {
   }
 
   async updateName(userId: string, input: UpdateMeInput): Promise<{ user: PublicUser }> {
-    return { user: toPublicUser(await this.repo.updateName(userId, input.name)) };
+    const user = await this.repo.updateName(userId, input.name);
+    if (!user) throw Errors.unauthenticated();
+    return { user: toPublicUser(user) };
   }
 
   async changePassword(user: AuthUser, input: ChangePasswordInput): Promise<void> {
     await this.assertPassword(user.id, input.currentPassword);
     await this.passwords.assertNotBreached(input.newPassword);
     await this.repo.updatePasswordHash(user.id, await this.passwords.hash(input.newPassword));
+    await this.repo.invalidateResetTokens(user.id);
     await this.sessions.revokeAllForUser(user.id, { exceptFamilyId: user.sessionId });
   }
 
@@ -73,6 +76,9 @@ export class MeService {
 
   async deleteAccount(userId: string, input: DeleteMeInput): Promise<void> {
     await this.assertPassword(userId, input.password);
+    if ((await this.repo.findRole(userId)) === 'SUPER_ADMIN' && !(await this.repo.hasOtherActiveSuperAdmin(userId))) {
+      throw new AppError('INVALID_OPERATION', 409, 'Son süper admin hesabı silinemez');
+    }
     await this.repo.anonymizeAndDelete(userId);
   }
 

@@ -6,6 +6,7 @@ import type { Env } from '../../config/env';
 import { PrismaService } from '../../infra/prisma.service';
 import { MailService } from '../mail/mail.service';
 import { verifyEmailMail } from '../mail/templates';
+import { buildLink } from './links';
 import { VERIFY_TTL_MS } from './auth.constants';
 
 @Injectable()
@@ -29,7 +30,7 @@ export class EmailVerificationService {
       this.logger.warn(`Verification token create failed for user ${user.id}: ${String(err)}`);
       return;
     }
-    const link = `${this.env.PUBLIC_BASE_URL}/verify-email?token=${token}`;
+    const link = buildLink(this.env.PUBLIC_BASE_URL, '/verify-email', token);
     void this.mail
       .send({ to: user.email, ...verifyEmailMail(user.name, link) })
       .catch((err: unknown) => this.logger.warn(`Verification mail failed for user ${user.id}: ${String(err)}`));
