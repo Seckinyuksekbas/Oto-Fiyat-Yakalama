@@ -43,7 +43,7 @@ type ListingSide = Side<
 
 /** Spec §5.2 eşleştirme koşulu. TEK tanım: iki yön de bunu kullanır. */
 function matchPredicate(p: ProfileSide, l: ListingSide): Prisma.Sql {
-  return Prisma.sql`(
+  return Prisma.sql`((
         (${p.make} IS NULL OR fold_tr(${p.make}) = fold_tr(${l.make}))
     AND (${p.model} IS NULL OR fold_tr(${p.model}) = fold_tr(${l.model}))
     AND (${p.yearMin} IS NULL OR ${l.year} >= ${p.yearMin})
@@ -51,9 +51,9 @@ function matchPredicate(p: ProfileSide, l: ListingSide): Prisma.Sql {
     AND (${p.priceMin} IS NULL OR ${l.price} >= ${p.priceMin})
     AND (${p.priceMax} IS NULL OR ${l.price} <= ${p.priceMax})
     AND (${p.kmMax} IS NULL OR ${l.km} <= ${p.kmMax})
-    AND (cardinality(${p.fuels}) = 0 OR ${l.fuel} = ANY(${p.fuels}))
-    AND (cardinality(${p.transmissions}) = 0 OR ${l.transmission} = ANY(${p.transmissions}))
-    AND (cardinality(${p.cities}) = 0 OR fold_tr(${l.city}) IN (SELECT fold_tr(c) FROM unnest(${p.cities}) AS c))
+    AND (coalesce(cardinality(${p.fuels}), 0) = 0 OR ${l.fuel} = ANY(${p.fuels}))
+    AND (coalesce(cardinality(${p.transmissions}), 0) = 0 OR ${l.transmission} = ANY(${p.transmissions}))
+    AND (coalesce(cardinality(${p.cities}), 0) = 0 OR fold_tr(${l.city}) IN (SELECT fold_tr(c) FROM unnest(${p.cities}) AS c))
     AND (${p.excludeDamaged} = false OR ${l.damaged} = false)
     AND (
           ${p.minDiscountPct} = 0
@@ -61,7 +61,7 @@ function matchPredicate(p: ProfileSide, l: ListingSide): Prisma.Sql {
             AND ${l.discountPct} >= ${p.minDiscountPct}
             AND confidence_rank((${l.confidence})::text) >= confidence_rank((${p.minConfidence})::text) )
     )
-  )`;
+  ) IS TRUE)`;
 }
 
 const col = (alias: string, name: string) => Prisma.raw(`${alias}."${name}"`);
@@ -125,7 +125,7 @@ export function findMatchingProfiles(db: RawDb, facts: ListingFacts, listingId: 
     SELECT sp."id", sp."userId", sp."notifyOnPriceDrop", sp."priceDropPct", sp."notifyOnRelist",
       (SELECT m."matchedPrice" FROM "ListingMatch" m
         WHERE m."searchProfileId" = sp."id" AND m."listingId" = ${listingId}::int
-        ORDER BY m."createdAt" DESC, m."id" DESC LIMIT 1) AS "lastMatchedPrice"
+        ORDER BY m."id" DESC LIMIT 1) AS "lastMatchedPrice"
     FROM "SearchProfile" sp JOIN "User" u ON u."id" = sp."userId"
     WHERE sp."status" = 'ACTIVE' AND u."status" = 'ACTIVE'
       AND ${matchPredicate(profileColumns('sp'), listingParams(facts))}

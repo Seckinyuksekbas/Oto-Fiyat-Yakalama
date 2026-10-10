@@ -15,7 +15,7 @@
 | Konu | Karar | Gerekçe |
 |---|---|---|
 | Tek eşleştirme tanımı | `packages/db/src/matching.ts` → `matchPredicate(profileSide, listingSide)`; worker ve önizleme aynı üreticiyi kullanır; ayrı bir "parite" e2e testi iki yönün aynı sonucu verdiğini kanıtlar | Önizleme ile gerçek bildirim birbirinden sapmaz |
-| Metin karşılaştırma | make, model, şehir `fold_tr(x)` ile karşılaştırılır: `lower(translate(x,'İIıĞğÜüŞşÖöÇç','iiiggguussoocc'))` (immutable SQL fonksiyonu) | Postgres `lower()` locale'e bağlıdır; "İstanbul"/"istanbul"/"ISTANBUL" ve "Şahin"/"sahin" eşit sayılır |
+| Metin karşılaştırma | make, model, şehir `fold_tr(x)` ile karşılaştırılır: `lower(translate(x,'İIıĞğÜüŞşÖöÇç','iiigguussoocc'))` (immutable SQL fonksiyonu) | Postgres `lower()` locale'e bağlıdır; "İstanbul"/"istanbul"/"ISTANBUL" ve "Şahin"/"sahin" eşit sayılır |
 | `confidence_rank` | Immutable SQL fonksiyonu `confidence_rank(text)`: INSUFFICIENT 0, LOW 1, MEDIUM 2, HIGH 3 | Spec §5.2 |
 | `$damaged` | Analiz bayraklarından: `'DAMAGED' = ANY(analysis.flags)` | Motorun hasar tanımıyla aynı (Plan 03 kararı) |
 | Eşleştirme fiyatı | `analysis.listingPrice ?? listing.price` (analiz anındaki fiyat) | Olay hangi fiyattan doğduysa o fiyattan eşleşir |
@@ -561,7 +561,7 @@ $$;
 -- Türkçe harfleri ASCII'ye katlar, sonra küçültür: locale'den bağımsız karşılaştırma.
 CREATE OR REPLACE FUNCTION fold_tr(t text) RETURNS text
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
-  SELECT lower(translate(t, 'İIıĞğÜüŞşÖöÇç', 'iiiggguussoocc'))
+  SELECT lower(translate(t, 'İIıĞğÜüŞşÖöÇç', 'iiigguussoocc'))
 $$;
 ```
 

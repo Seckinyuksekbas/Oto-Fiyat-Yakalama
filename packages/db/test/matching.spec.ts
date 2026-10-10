@@ -125,7 +125,7 @@ describe('matching predicate', () => {
     const ok = await profile();
     const a = await prisma.listingAnalysis.findFirstOrThrow({ where: { listingId: l.id } });
     await prisma.listingMatch.create({ data: { userId: ok.userId, searchProfileId: ok.id, listingId: l.id, analysisId: a.id, reason: 'NEW', matchedPrice: 1_000_000n } });
-    await prisma.listingMatch.create({ data: { userId: ok.userId, searchProfileId: ok.id, listingId: l.id, analysisId: a.id, reason: 'PRICE_DROP', matchedPrice: 970_000n } });
+    await prisma.listingMatch.create({ data: { userId: ok.userId, searchProfileId: ok.id, listingId: l.id, analysisId: a.id, reason: 'PRICE_DROP', matchedPrice: 970_000n, createdAt: new Date(Date.now() - 86_400_000) } });
     const rows = await findMatchingProfiles(prisma, FACTS, l.id);
     expect(rows.map((r) => r.id)).toEqual([ok.id]);
     expect(rows[0].lastMatchedPrice).toBe(970_000n);
@@ -142,5 +142,34 @@ describe('matching predicate', () => {
     expect(rows.map((r) => r.id)).toEqual([fresh.id, old.id]);
     expect(typeof rows[0].price).toBe('bigint');
     expect(await countPreviewSince(prisma, FILTER, new Date(Date.now() - 7 * 86_400_000))).toBe(1);
+  });
+});
+
+describe('matching predicate (review additions)', () => {
+  it('fold_tr folds Turkish letters', async () => {
+    const [r] = await prisma.$queryRaw<{ f: string }[]>`SELECT fold_tr('İIıĞğÜüŞşÖöÇç') AS f`;
+    expect(r.f).toBe('iiigguussoocc');
+  });
+
+  it('Turkish city folding (Çanakkale, Gümüşhane, Muğla)', async () => {
+    await expectParity({ ...FACTS, city: 'Çanakkale' }, [{ cities: ['canakkale'] }, { cities: ['ÇANAKKALE'] }, { cities: ['Çanakkale'] }], [true, true, true]);
+    await expectParity({ ...FACTS, city: 'Gümüşhane' }, [{ cities: ['gumushane'] }, { cities: ['GÜMÜŞHANE'] }], [true, true]);
+    await expectParity({ ...FACTS, city: 'Muğla' }, [{ cities: ['MUGLA'] }, { cities: ['Mugla', 'Ankara'] }], [true, true]);
+  });
+
+  it('positive cases', async () => {
+    await expectParity(FACTS, [{ excludeDamaged: true }, { cities: ['Ankara', 'istanbul'] }], [true, true]);
+    await expectParity({ ...FACTS, confidence: 'INSUFFICIENT', discountPct: null }, [{ minDiscountPct: 0 }], [true]);
+    await expectParity({ ...FACTS, confidence: 'LOW', discountPct: 0.2 }, [{ minDiscountPct: 0.1, minConfidence: 'LOW' }], [true]);
+  });
+
+  it('profile created without arrays gets empty-array defaults and matches', async () => {
+    const l = await listingWithAnalysis(FACTS);
+    const u = await user();
+    const p = await prisma.searchProfile.create({ data: { userId: u.id, name: 'p', channels: ['IN_APP'] } });
+    const [raw] = await prisma.$queryRaw<{ fuels: string[]; transmissions: string[]; cities: string[] }[]>`SELECT "fuels"::text[] AS fuels, "transmissions"::text[] AS transmissions, "cities" FROM "SearchProfile" WHERE "id" = ${p.id}`;
+    expect(raw).toEqual({ fuels: [], transmissions: [], cities: [] });
+    const rows = await findMatchingProfiles(prisma, FACTS, l.id);
+    expect(rows.map((r) => r.id)).toEqual([p.id]);
   });
 });
