@@ -6,7 +6,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "build:packages": "pnpm -r --filter \"./packages/*\" build",
+    "build:packages": "pnpm -r --filter \"./packages/*\" --filter @oto/demo-site build",
     "build": "pnpm -r build",
     "lint": "eslint .",
     "typecheck": "pnpm build:packages && pnpm -r typecheck",
