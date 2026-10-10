@@ -62,3 +62,7 @@ export function tokenFromMail(text: string): string {
 export async function setRole(app: NestExpressApplication, userId: string, role: Role): Promise<void> {
   await app.get(PrismaService).user.update({ where: { id: userId }, data: { role } });
 }
+
+export async function verifyEmail(app: NestExpressApplication, userId: string): Promise<void> {
+  await app.get(PrismaService).user.update({ where: { id: userId }, data: { emailVerifiedAt: new Date() } });
+}

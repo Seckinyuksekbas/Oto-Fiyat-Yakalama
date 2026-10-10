@@ -1,6 +1,5 @@
 import { Injectable } from '@nestjs/common';
 import {
-  planLimitsSchema,
   startOfIstanbulDay,
   type ChangePasswordInput,
   type DeleteMeInput,
@@ -12,6 +11,7 @@ import type { AuthUser } from '../auth/auth-user';
 import { PasswordService } from '../auth/password.service';
 import { toPublicUser, type PublicUser } from '../auth/public-user';
 import { SessionService, type SessionView } from '../auth/session.service';
+import { LimitsService } from './limits.service';
 import { MeRepository } from './me.repository';
 
 export interface MeProfile {
@@ -26,6 +26,7 @@ export class MeService {
     private readonly repo: MeRepository,
     private readonly passwords: PasswordService,
     private readonly sessions: SessionService,
+    private readonly limits: LimitsService,
   ) {}
 
   async getProfile(userId: string): Promise<MeProfile> {
@@ -42,7 +43,7 @@ export class MeService {
         ? {
             planCode: sub.plan.code,
             planName: sub.plan.name,
-            limits: planLimitsSchema.parse(sub.plan.limits),
+            limits: (await this.limits.forUser(userId)).limits,
             status: sub.status,
             endsAt: sub.endsAt,
           }

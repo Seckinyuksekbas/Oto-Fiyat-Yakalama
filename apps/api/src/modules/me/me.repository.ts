@@ -19,6 +19,10 @@ export class MeRepository {
     });
   }
 
+  findPlanByCode(code: string): Promise<SubscriptionPlan | null> {
+    return this.prisma.subscriptionPlan.findUnique({ where: { code } });
+  }
+
   countSearchProfiles(userId: string) {
     return this.prisma.searchProfile.count({ where: { userId } });
   }
