@@ -11,6 +11,12 @@ const base = {
 describe('worker env', () => {
   it('applies defaults', () => {
     expect(parseEnv(base)).toMatchObject({ ROLE: 'worker', SCHEDULER_TICK_MS: 15_000, SCRAPE_CONCURRENCY: 2, BOT_CONTACT_URL: 'http://localhost:3000/bot' });
+    expect(parseEnv(base).ANALYZE_CONCURRENCY).toBe(4);
+  });
+
+  it('bounds ANALYZE_CONCURRENCY', () => {
+    expect(() => parseEnv({ ...base, ANALYZE_CONCURRENCY: '0' })).toThrow(/ANALYZE_CONCURRENCY/);
+    expect(parseEnv({ ...base, ANALYZE_CONCURRENCY: '8' }).ANALYZE_CONCURRENCY).toBe(8);
   });
 
   it('rejects an unknown role and missing variables', () => {
