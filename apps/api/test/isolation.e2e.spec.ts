@@ -24,11 +24,21 @@ const CASES: Record<string, Case> = {
     expect(JSON.stringify(res.body)).not.toContain(A.email);
   },
   'PATCH /me': async ({ A, B }) => {
-    await B.agent.patch('/api/v1/me').send({ name: 'B değişti' });
-    expect((await A.agent.get('/api/v1/me')).body.user.name).not.toBe('B değişti');
+    const before = (await A.agent.get('/api/v1/me')).body.user.name;
+    const patch = await B.agent.patch('/api/v1/me').send({ name: 'B değişti' });
+    expect(patch.status).toBe(200);
+    expect((await B.agent.get('/api/v1/me')).body.user.name).toBe('B değişti');
+    expect((await A.agent.get('/api/v1/me')).body.user.name).toBe(before);
   },
   'POST /me/change-password': async ({ A, B }) => {
-    await B.agent.post('/api/v1/me/change-password').send({ currentPassword: B.password, newPassword: 'b-new-password-1' });
+    const change = await B.agent
+      .post('/api/v1/me/change-password')
+      .send({ currentPassword: B.password, newPassword: 'b-new-password-1' });
+    expect(change.status).toBe(204);
+    const old = await newAgent(app).post('/api/v1/auth/login').send({ email: B.email, password: B.password });
+    expect(old.status).toBe(401);
+    const fresh = await newAgent(app).post('/api/v1/auth/login').send({ email: B.email, password: 'b-new-password-1' });
+    expect(fresh.status).toBe(200);
     await aStillLogsIn(A);
   },
   'GET /me/sessions': async ({ A, B }) => {

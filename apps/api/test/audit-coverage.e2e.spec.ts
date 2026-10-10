@@ -15,16 +15,21 @@ afterAll(async () => {
 
 describe('admin route policy', () => {
   it('every /admin route requires a role', () => {
-    const missing = listRoutes(app)
-      .filter((r) => r.path.startsWith('/admin'))
-      .filter((r) => !(Reflect.getMetadata(ROLES, r.handler) ?? Reflect.getMetadata(ROLES, r.controller)))
+    const admin = listRoutes(app).filter((r) => r.path.startsWith('/admin'));
+    expect(admin.length).toBeGreaterThan(0);
+    const missing = admin
+      .filter((r) => {
+        const roles = Reflect.getMetadata(ROLES, r.handler) ?? Reflect.getMetadata(ROLES, r.controller);
+        return !(Array.isArray(roles) && roles.length > 0);
+      })
       .map((r) => `${r.method} ${r.path}`);
     expect(missing).toEqual([]);
   });
 
   it('every mutating /admin route is @Audited', () => {
-    const missing = listRoutes(app)
-      .filter((r) => r.path.startsWith('/admin') && r.method !== 'GET')
+    const mutating = listRoutes(app).filter((r) => r.path.startsWith('/admin') && r.method !== 'GET');
+    expect(mutating.length).toBeGreaterThan(0);
+    const missing = mutating
       .filter((r) => !Reflect.getMetadata(AUDIT_ACTION, r.handler))
       .map((r) => `${r.method} ${r.path}`);
     expect(missing).toEqual([]);
