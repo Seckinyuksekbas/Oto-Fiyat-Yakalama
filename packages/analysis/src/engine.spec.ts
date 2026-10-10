@@ -180,7 +180,7 @@ describe('analyze — confidence and flags (Review Focus #3)', () => {
     const r = analyze(target({ price: 600_000n }), prices(Array.from({ length: 10 }, (_, i) => 1_195_000 + i * 1000), { trim: '320i' }));
     expect(r.flags).toContain('SUSPICIOUS_LOW');
     expect(r.confidence).toBe('LOW');
-    expect(r.opportunityScore).toBe(70 + 6);
+    expect(r.opportunityScore).toBe(50); // 70 + 6 = 76, capped at 50 for SUSPICIOUS_LOW
   });
 });
 
@@ -199,8 +199,101 @@ describe('analyze — explanation', () => {
   });
 
   it('never uses the target itself as a comparable', () => {
-    const self = comp({ id: 1, price: 1n });
+    const self = comp({ id: 1, trim: '320i', price: 1_200_000n });
     const r = analyze(target(), [self, ...prices(Array.from({ length: 5 }, () => 1_200_000), { trim: '320i' })]);
     expect(r.comparableIds).not.toContain(1);
+    expect(r.explanation.pool.afterDedup).toBe(5);
+  });
+});
+
+describe('analyze — fix round 1', () => {
+  const good = (n: number, over: Partial<Comparable> = {}) => prices(Array.from({ length: n }, (_, i) => 1_200_000 + i * 1000), over);
+
+  it('expands the level when the pool is too small after outlier removal', () => {
+    const l0 = [...good(4, { trim: '320i' }), comp({ trim: '320i', price: 12_000_000n })];
+    const l1 = good(10, { trim: '318i' });
+    const r = analyze(target(), [...l0, ...l1]);
+    expect(r.expansionLevel).toBe(1);
+    expect(r.confidence).not.toBe('INSUFFICIENT');
+    expect(r.explanation.insufficientReason).toBe('NONE');
+  });
+
+  it('is INSUFFICIENT / AFTER_OUTLIERS when no level qualifies after IQR', () => {
+    const r = analyze(target(), [...good(4, { trim: '320i' }), comp({ trim: '320i', price: 12_000_000n })]);
+    expect(r.confidence).toBe('INSUFFICIENT');
+    expect(r.explanation.insufficientReason).toBe('AFTER_OUTLIERS');
+    expect(r.comparableCount).toBe(4);
+  });
+
+  it('reports NO_LEVEL when there are simply too few comparables', () => {
+    expect(analyze(target(), good(3)).explanation.insufficientReason).toBe('NO_LEVEL');
+  });
+
+  it('prefers a wider clean level over a narrow level that needs damaged comparables', () => {
+    const l0 = [...good(4, { trim: '320i' }), ...prices([1_100_000, 1_110_000], { trim: '320i', damaged: true })];
+    const l1 = good(10, { trim: '318i' });
+    const r = analyze(target(), [...l0, ...l1]);
+    expect(r.expansionLevel).toBe(1);
+    const dmgIds = l0.filter((c) => c.damaged).map((c) => c.id);
+    expect(r.comparableIds.some((id) => dmgIds.includes(id))).toBe(false);
+  });
+
+  it('caps the score at 50 for INSUFFICIENT and SUSPICIOUS_LOW', () => {
+    const a = analyze(target({ price: 900_000n, hadPriceDrop: true }), prices([1_200_000, 1_200_000, 1_200_000].map((p, i) => p + i)));
+    expect(a.confidence).toBe('INSUFFICIENT');
+    expect(a.opportunityScore).toBeLessThanOrEqual(50);
+    const b = analyze(target({ price: 600_000n }), good(10, { trim: '320i' }));
+    expect(b.opportunityScore).toBe(50);
+  });
+
+  it('an invalid target price is INSUFFICIENT with score 0', () => {
+    const r = analyze(target({ price: 0n }), good(10, { trim: '320i' }));
+    expect(r).toMatchObject({ confidence: 'INSUFFICIENT', discountPct: null, priceDiff: null, opportunityScore: 0 });
+    expect(r.explanation.insufficientReason).toBe('INVALID_TARGET');
+  });
+
+  it('ignores zero-price comparables and counts them', () => {
+    const r = analyze(target(), [...good(6, { trim: '320i' }), ...prices([0, 0], { trim: '320i' })]);
+    expect(r.explanation.pool.invalidPrice).toBe(2);
+    expect(r.explanation.pool.afterDedup).toBe(6);
+    expect(r.explanation.pool.candidates).toBe(8);
+  });
+
+  it('does not drop near-identical values when the IQR is ~0', () => {
+    const r = analyze(target(), prices([1_200_000, 1_200_000, 1_200_000, 1_200_000, 1_200_000, 1_210_000], { trim: '320i' }));
+    expect(r.explanation.pool.outlierIds).toEqual([]);
+    expect(r.comparableCount).toBe(6);
+  });
+
+  it('clamps downward too (newer comparables)', () => {
+    const pool = prices(Array.from({ length: 5 }, () => 1_000_000), { year: 2022 });
+    const r = analyze(target(), pool);
+    expect(r.estimatedPrice).toBe(816_298n); // 1_000_000 / 1.07^3 = 816_297.9 (> 0.8 floor, no clamp)
+    const r2 = analyze(target(), pool, { ...DEFAULT_SETTINGS, maxAdjPct: 0.1 });
+    expect(r2.estimatedPrice).toBe(900_000n);
+    expect(r2.explanation.comparables.every((c) => c.clamped)).toBe(true);
+  });
+
+  it('combines dispersion and damaged downgrades', () => {
+    const r = analyze(target({ damaged: true }), prices([800_000, 900_000, 1_000_000, 1_100_000, 1_300_000, 1_400_000, 1_500_000, 1_600_000, 1_200_000, 1_250_000], { trim: '320i' }));
+    expect(r.confidence).toBe('LOW');
+    expect(r.flags).toEqual(expect.arrayContaining(['HIGH_DISPERSION', 'DAMAGED']));
+    expect(r.explanation.confidenceSteps).toEqual(['level-cap:HIGH', 'dispersion:-1', 'damaged:-1']);
+  });
+
+  it('explains every comparable and each confidence rule', () => {
+    const typo = comp({ price: 12_000_000n });
+    const r = analyze(target(), [...good(10), typo]);
+    expect(r.explanation.comparables).toHaveLength(r.explanation.pool.used + r.explanation.pool.outlierIds.length);
+    expect(r.explanation.comparables.find((c) => c.id === typo.id)?.outlier).toBe(true);
+    expect(r.explanation.target).toEqual({ price: 960_000, year: 2019, km: 85_000, trim: '320i', damaged: false });
+    const ref = analyze(target(), prices([1_110_000, 1_120_000, 1_130_000, 1_140_000, 1_150_000, 1_170_000, 1_190_000, 1_210_000, 1_230_000, 1_250_000, 1_260_000, 1_270_000, 1_280_000, 1_290_000]));
+    expect(ref.explanation.confidenceSteps).toEqual(['level-cap:HIGH']);
+  });
+
+  it('copies settings instead of aliasing them', () => {
+    const r = analyze(target(), good(6, { trim: '320i' }));
+    expect(r.explanation.settings).not.toBe(DEFAULT_SETTINGS);
+    expect(r.explanation.settings).toEqual(DEFAULT_SETTINGS);
   });
 });

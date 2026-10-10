@@ -30,8 +30,22 @@ export interface AnalysisExplanation {
   engineVersion: string;
   level: number;
   insufficient: boolean;
+  insufficientReason: 'NONE' | 'NO_LEVEL' | 'AFTER_OUTLIERS' | 'INVALID_TARGET';
+  target: { price: number; year: number; km: number; trim: string | null; damaged: boolean };
+  comparables: Array<{
+    id: number;
+    price: number;
+    year: number;
+    km: number;
+    damaged: boolean;
+    adjusted: number;
+    clamped: boolean;
+    outlier: boolean;
+  }>;
+  confidenceSteps: string[];
   pool: {
     candidates: number;
+    invalidPrice: number;
     afterDedup: number;
     inLevel: number;
     damagedExcluded: number;
