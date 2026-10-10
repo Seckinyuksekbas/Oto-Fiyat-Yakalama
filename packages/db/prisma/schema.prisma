@@ -385,6 +385,7 @@ model Listing {
   @@index([make, model, year])
   @@index([status, firstSeenAt])
   @@index([make, model, fuel, transmission, year, km])
+  @@index([sourceId, status, year, km])
 }
 
 model ListingPriceHistory {

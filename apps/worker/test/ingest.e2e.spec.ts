@@ -115,6 +115,40 @@ describe('IngestService.ingest', () => {
     expect(await ingest.markRemoved(other.id, t(5))).toBe(1);
     expect(await prisma.listing.count({ where: { status: 'ACTIVE' } })).toBe(1);
   });
+
+  describe('relist with a new externalId', () => {
+    it('reuses a recently removed twin (same title, km, year) as RELIST', async () => {
+      const seen = new Date();
+      const first = await ingest.ingest(sourceId, listing({ externalId: 'OLD-1', title: 'Temiz 320i', km: 85_000, year: 2019 }), seen);
+      await prisma.listing.update({ where: { id: first.listingId }, data: { status: 'REMOVED', removedAt: new Date(seen.getTime() - 2 * 86_400_000) } });
+      const again = await ingest.ingest(sourceId, listing({ externalId: 'NEW-9', title: 'Temiz 320i', km: 85_000, year: 2019, price: 900_000n }), seen);
+      expect(again).toEqual({ outcome: 'RELISTED', listingId: first.listingId });
+      const row = await prisma.listing.findUniqueOrThrow({ where: { id: first.listingId } });
+      expect(row).toMatchObject({ externalId: 'NEW-9', status: 'ACTIVE' });
+      expect(row.relistedAt).not.toBeNull();
+      expect(await prisma.listing.count()).toBe(1);
+    });
+
+    it('does not reuse twins removed more than 7 days ago or with different km', async () => {
+      const seen = new Date();
+      const old = await ingest.ingest(sourceId, listing({ externalId: 'OLD-2', title: 'X', km: 1000, year: 2019 }), seen);
+      await prisma.listing.update({ where: { id: old.listingId }, data: { status: 'REMOVED', removedAt: new Date(seen.getTime() - 8 * 86_400_000) } });
+      expect((await ingest.ingest(sourceId, listing({ externalId: 'NEW-2', title: 'X', km: 1000, year: 2019 }), seen)).outcome).toBe('NEW');
+      const other = await ingest.ingest(sourceId, listing({ externalId: 'OLD-3', title: 'Y', km: 1000, year: 2019 }), seen);
+      await prisma.listing.update({ where: { id: other.listingId }, data: { status: 'REMOVED', removedAt: seen } });
+      expect((await ingest.ingest(sourceId, listing({ externalId: 'NEW-3', title: 'Y', km: 1001, year: 2019 }), seen)).outcome).toBe('NEW');
+    });
+
+    it('terminates and yields one row when the same new externalId is ingested concurrently', async () => {
+      const seen = new Date();
+      const first = await ingest.ingest(sourceId, listing({ externalId: 'OLD-4', title: 'Z', km: 5000, year: 2020 }), seen);
+      await prisma.listing.update({ where: { id: first.listingId }, data: { status: 'REMOVED', removedAt: seen } });
+      const l = listing({ externalId: 'NEW-4', title: 'Z', km: 5000, year: 2020 });
+      const rs = await Promise.all([ingest.ingest(sourceId, l, seen), ingest.ingest(sourceId, l, seen), ingest.ingest(sourceId, l, seen)]);
+      expect(rs.every((r) => r.listingId === first.listingId)).toBe(true);
+      expect(await prisma.listing.count()).toBe(1);
+    });
+  });
 });
 
 describe('IngestService.recordProblems', () => {
