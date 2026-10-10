@@ -54,9 +54,19 @@ describe('AnalyzeWorkerHost', () => {
     expect(await ref.get(QueueRegistry).match.getJob(`match-${a.id}`)).toBeTruthy();
   });
 
-  it('rejects malformed job data without crashing the worker', async () => {
+  it('fails malformed job data on the first attempt without crashing the worker', async () => {
     ref.get(AnalyzeWorkerHost).start();
-    const job = await ref.get(QueueRegistry).analyze.add('analyze', { listingId: -1, reason: 'NEW' } as never, { jobId: 'bad-1', attempts: 1 });
-    await waitFor(async () => ((await job.getState()) === 'failed' ? true : null));
+    const queue = ref.get(QueueRegistry).analyze;
+    const bad = await queue.add('analyze', { listingId: -1, reason: 'NEW' } as never, { jobId: 'bad-1', ...RETRYING_JOB_OPTS });
+    await waitFor(async () => ((await bad.getState()) === 'failed' ? true : null));
+    const failed = await queue.getJob('bad-1');
+    expect(failed?.failedReason).toContain('Geçersiz analiz işi');
+    expect(failed?.attemptsMade).toBe(1);
+
+    // Worker hâlâ sağlam: geçerli iş tamamlanır.
+    const sourceId = (await createSource(ref, 'http://demo.invalid')).id;
+    const t = await createListing(ref, sourceId, { price: 900_000n });
+    const good = await queue.add('analyze', { listingId: t.id, reason: 'NEW' }, { jobId: `analyze-${t.id}-NEW-after-bad`, ...RETRYING_JOB_OPTS, removeOnComplete: false });
+    await waitFor(async () => ((await good.getState()) === 'completed' ? true : null));
   });
 });

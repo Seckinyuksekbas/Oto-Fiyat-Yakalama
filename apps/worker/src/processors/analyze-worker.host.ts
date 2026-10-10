@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger, Optional, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { analyzeJobSchema, QueueName, type AnalyzeJobData } from '@oto/shared';
-import { Worker } from 'bullmq';
+import { UnrecoverableError, Worker } from 'bullmq';
 import { AnalysisService } from '../analysis/analysis.service';
 import { ENV } from '../config/config.module';
 import type { Env } from '../config/env';
@@ -28,8 +28,10 @@ export class AnalyzeWorkerHost implements OnModuleInit, OnModuleDestroy {
     this.worker = new Worker<AnalyzeJobData>(
       QueueName.ANALYZE,
       async (job) => {
-        const data = analyzeJobSchema.parse(job.data);
-        await this.analysis.process(data.listingId);
+        const parsed = analyzeJobSchema.safeParse(job.data);
+        // Bozuk payload kalıcı hatadır; yeniden denemek anlamsız.
+        if (!parsed.success) throw new UnrecoverableError(`Geçersiz analiz işi: ${parsed.error.message}`);
+        await this.analysis.process(parsed.data.listingId);
       },
       { connection: bullConnection(this.env.REDIS_URL), concurrency: this.env.ANALYZE_CONCURRENCY },
     );
