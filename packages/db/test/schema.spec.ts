@@ -3,7 +3,7 @@ import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testconta
 import { PrismaClient } from '@prisma/client';
 import argon2 from 'argon2';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { seedPlans, seedSuperAdmin } from '../src/seed-data';
+import { seedMakeModelAliases, seedPlans, seedSuperAdmin } from '../src/seed-data';
 
 let pg: StartedPostgreSqlContainer;
 let prisma: PrismaClient;
@@ -66,5 +66,11 @@ describe('schema', () => {
     expect(await argon2.verify(second.passwordHash, 'first-password-1')).toBe(true);
     const subs = await prisma.userSubscription.count({ where: { userId: first.id } });
     expect(subs).toBe(1);
+  });
+
+  it('seedMakeModelAliases is idempotent', async () => {
+    await seedMakeModelAliases(prisma);
+    await seedMakeModelAliases(prisma);
+    expect(await prisma.makeModelAlias.count()).toBeGreaterThanOrEqual(12);
   });
 });

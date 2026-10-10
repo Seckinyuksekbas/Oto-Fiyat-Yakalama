@@ -1,10 +1,11 @@
 import { PrismaClient } from '@prisma/client';
-import { seedPlans, seedSuperAdmin } from '../src/seed-data';
+import { seedMakeModelAliases, seedPlans, seedSuperAdmin } from '../src/seed-data';
 
 async function main(): Promise<void> {
   const prisma = new PrismaClient();
   try {
     await seedPlans(prisma);
+    await seedMakeModelAliases(prisma);
     const email = process.env.SEED_ADMIN_EMAIL;
     const password = process.env.SEED_ADMIN_PASSWORD;
     if (email && password) {

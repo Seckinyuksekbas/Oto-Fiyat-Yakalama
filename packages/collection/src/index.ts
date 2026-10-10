@@ -4,3 +4,6 @@ export * from './errors';
 export * from './rate-limiter';
 export * from './robots';
 export * from './http-client';
+export * from './adapter';
+export * from './registry';
+export * from './adapters/demo-site.adapter';
