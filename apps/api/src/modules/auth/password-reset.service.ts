@@ -34,11 +34,10 @@ export class PasswordResetService {
       data: { userId: user.id, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + RESET_TTL_MS) },
     });
     const link = `${this.env.PUBLIC_BASE_URL}/reset-password?token=${token}`;
-    try {
-      await this.mail.send({ to: user.email, ...resetPasswordMail(user.name, link) });
-    } catch (err) {
-      this.logger.warn({ err, userId: user.id }, 'Reset mail failed');
-    }
+    // Beklenmez: yanıt süresi kullanıcının var olup olmadığını sızdırmasın.
+    void this.mail
+      .send({ to: user.email, ...resetPasswordMail(user.name, link) })
+      .catch((err: unknown) => this.logger.warn(`Reset mail failed for user ${user.id}: ${String(err)}`));
   }
 
   async reset(input: ResetPasswordInput, meta: ClientMeta): Promise<boolean> {

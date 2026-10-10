@@ -1,6 +1,6 @@
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PrismaService } from '../src/infra/prisma.service';
 import { MailService } from '../src/modules/mail/mail.service';
 import { createTestApp, registerUser, resetState, tokenFromMail } from './helpers';
@@ -75,6 +75,36 @@ describe('password reset', () => {
     const reuse = await http().post('/api/v1/auth/reset-password').set(xhr).send({ token, newPassword: 'another-password-9' });
     expect(reuse.status).toBe(400);
     expect(reuse.body.error.code).toBe('TOKEN_INVALID');
+  });
+
+  it('still answers 204 when the mail transport rejects', async () => {
+    await registerUser(app, { email: 'down@test.com' });
+    const transporter = (mail as unknown as { transporter: { sendMail: (...a: unknown[]) => Promise<unknown> } })
+      .transporter;
+    const spy = vi.spyOn(transporter, 'sendMail').mockRejectedValueOnce(new Error('smtp down'));
+    try {
+      const res = await http().post('/api/v1/auth/forgot-password').set(xhr).send({ email: 'down@test.com' });
+      expect(res.status).toBe(204);
+      expect(spy).toHaveBeenCalledTimes(1);
+      await new Promise((r) => setTimeout(r, 50));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('accepts a reset token only once under concurrency', async () => {
+    await registerUser(app, { email: 'race@test.com' });
+    mail.outbox.length = 0;
+    await http().post('/api/v1/auth/forgot-password').set(xhr).send({ email: 'race@test.com' });
+    const token = tokenFromMail(mail.outbox[0].text);
+    const [a, b] = await Promise.all([
+      http().post('/api/v1/auth/reset-password').set(xhr).send({ token, newPassword: 'brand-new-password-1' }),
+      http().post('/api/v1/auth/reset-password').set(xhr).send({ token, newPassword: 'brand-new-password-2' }),
+    ]);
+    const statuses = [a.status, b.status].sort();
+    expect(statuses).toEqual([204, 400]);
+    const loser = a.status === 400 ? a : b;
+    expect(loser.body.error.code).toBe('TOKEN_INVALID');
   });
 
   it('rejects an expired reset token', async () => {

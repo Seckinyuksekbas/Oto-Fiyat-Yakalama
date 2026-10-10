@@ -23,7 +23,7 @@ export class MailService {
   }
 
   async send(mail: OutgoingMail): Promise<void> {
-    await this.transporter.sendMail({ from: this.env.SMTP_FROM, ...mail });
     if (this.env.MAIL_TRANSPORT === 'json') this.outbox.push(mail);
+    await this.transporter.sendMail({ from: this.env.SMTP_FROM, ...mail });
   }
 }

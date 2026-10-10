@@ -21,15 +21,18 @@ export class EmailVerificationService {
   /** E-posta gönderilemezse kayıt başarısız olmaz; hata loglanır. */
   async sendFor(user: User): Promise<void> {
     const token = generateToken();
-    await this.prisma.emailVerificationToken.create({
-      data: { userId: user.id, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + VERIFY_TTL_MS) },
-    });
-    const link = `${this.env.PUBLIC_BASE_URL}/verify-email?token=${token}`;
     try {
-      await this.mail.send({ to: user.email, ...verifyEmailMail(user.name, link) });
+      await this.prisma.emailVerificationToken.create({
+        data: { userId: user.id, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + VERIFY_TTL_MS) },
+      });
     } catch (err) {
-      this.logger.warn({ err, userId: user.id }, 'Verification mail failed');
+      this.logger.warn(`Verification token create failed for user ${user.id}: ${String(err)}`);
+      return;
     }
+    const link = `${this.env.PUBLIC_BASE_URL}/verify-email?token=${token}`;
+    void this.mail
+      .send({ to: user.email, ...verifyEmailMail(user.name, link) })
+      .catch((err: unknown) => this.logger.warn(`Verification mail failed for user ${user.id}: ${String(err)}`));
   }
 
   async verify(token: string): Promise<boolean> {
