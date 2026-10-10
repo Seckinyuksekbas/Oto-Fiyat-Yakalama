@@ -1,10 +1,13 @@
 import { Module } from '@nestjs/common';
 import type { TestingModule } from '@nestjs/testing';
 import { seedDemoSource } from '@oto/db';
+import { CATALOG, fairPrice } from '@oto/demo-site';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { AnalysisModule } from '../src/analysis/analysis.module';
 import { CollectionModule } from '../src/collection/collection.module';
 import { analyzeJobId } from '../src/collection/ingest.service';
 import { PrismaService } from '../src/infra/prisma.service';
+import { ANALYZE_WORKER_AUTOSTART, AnalyzeWorkerHost } from '../src/processors/analyze-worker.host';
 import { SCRAPE_WORKER_AUTOSTART, ScrapeWorkerHost } from '../src/processors/scrape-worker.host';
 import { QueueRegistry } from '../src/queues/queue-registry';
 import { SchedulerModule } from '../src/scheduler/scheduler.module';
@@ -12,9 +15,14 @@ import { SchedulerService } from '../src/scheduler/scheduler.service';
 import { createAdmin, createContext, resetState, startDemo } from './helpers';
 
 @Module({
-  imports: [CollectionModule],
-  providers: [ScrapeWorkerHost, { provide: SCRAPE_WORKER_AUTOSTART, useValue: false }],
-  exports: [ScrapeWorkerHost],
+  imports: [CollectionModule, AnalysisModule],
+  providers: [
+    ScrapeWorkerHost,
+    { provide: SCRAPE_WORKER_AUTOSTART, useValue: false },
+    AnalyzeWorkerHost,
+    { provide: ANALYZE_WORKER_AUTOSTART, useValue: false },
+  ],
+  exports: [ScrapeWorkerHost, AnalyzeWorkerHost],
 })
 class ProcessorTestModule {}
 
@@ -31,12 +39,15 @@ beforeAll(async () => {
   ref.get(ScrapeWorkerHost).start();
 });
 afterAll(async () => {
+  await ref.get(AnalyzeWorkerHost).onModuleDestroy();
   await ref.get(ScrapeWorkerHost).onModuleDestroy();
   await demo.close();
   await ref.close();
 });
 beforeEach(async () => {
   await resetState(ref);
+  demo.site.store.reset(7, 60);
+  demo.site.setMode('normal');
 });
 
 async function cycle(at: Date): Promise<void> {
@@ -95,5 +106,36 @@ describe('collection pipeline (scheduler → queue → worker → DB → analyze
     expect(await scheduler.tick(at(10))).toBe(0);
     expect(await prisma.listing.count({ where: { status: 'ACTIVE' } })).toBe(61);
     demo.site.setMode('normal');
+  });
+
+  // Analiz worker'ı yalnızca bu testte çalışır: ilk senaryo analyze kuyruğundaki işleri sayıp inceler.
+  it('analyzes scraped listings and emits a NEW match event for an injected deal', async () => {
+    ref.get(AnalyzeWorkerHost).start();
+    await createAdmin(ref);
+    const source = await seedDemoSource(prisma, demo.baseUrl);
+    await prisma.dataSource.update({ where: { id: source.id }, data: { minRequestGapMs: 0, intervalSec: 60 } });
+    const year = new Date().getFullYear();
+    const bmw = CATALOG.find((c) => c.make === 'BMW')!;
+    const fair = fairPrice(bmw, year - 2, 40_000, year);
+    // Fırsat ilanı ÖNCE eklenir: liste en yeniden eskiye sıralı olduğundan emsaller ondan önce ingest edilir
+    // ve fırsatın analizi tam emsal havuzunu görür.
+    const deal = demo.site.store.inject({ make: 'BMW', model: '3 Serisi', trim: '320i', year: year - 2, km: 40_000, fuel: 'Benzin', transmission: 'Otomatik', discount: 0.25 });
+    for (let i = 0; i < 9; i++) {
+      demo.site.store.inject({ make: 'BMW', model: '3 Serisi', trim: '318i', year: year - 2, km: 40_000 + i * 500, fuel: 'Benzin', transmission: 'Otomatik', price: Math.round((fair * (0.97 + i * 0.0075)) / 1000) * 1000 });
+    }
+    await cycle(new Date());
+    const row = await prisma.listing.findUniqueOrThrow({ where: { sourceId_externalId: { sourceId: source.id, externalId: deal.id } } });
+    const deadline = Date.now() + 30_000;
+    let analysisId: number | null = null;
+    while (Date.now() < deadline && !analysisId) {
+      analysisId = (await prisma.listing.findUniqueOrThrow({ where: { id: row.id } })).latestAnalysisId;
+      if (!analysisId) await new Promise((r) => setTimeout(r, 200));
+    }
+    const a = await prisma.listingAnalysis.findUniqueOrThrow({ where: { id: analysisId! } });
+    expect(['HIGH', 'MEDIUM']).toContain(a.confidence);
+    expect(Number(a.discountPct)).toBeGreaterThan(0.18);
+    expect(Number(a.discountPct)).toBeLessThan(0.32);
+    expect(a.opportunityScore).toBeGreaterThanOrEqual(60);
+    expect(await ref.get(QueueRegistry).match.getJob(`match-${a.id}`)).toBeTruthy();
   });
 });
