@@ -114,6 +114,16 @@ export class IngestService {
     });
   }
 
+  /** Görülen ama geçersiz/ayrıştırılamayan ilanların kaldırılmış sayılmaması için lastSeenAt günceller. */
+  async touchSeen(sourceId: number, externalIds: string[], seenAt: Date): Promise<number> {
+    if (externalIds.length === 0) return 0;
+    const { count } = await this.prisma.listing.updateMany({
+      where: { sourceId, status: 'ACTIVE', externalId: { in: externalIds } },
+      data: { lastSeenAt: seenAt },
+    });
+    return count;
+  }
+
   /** Belirtilen andan beri görülmeyen aktif ilanları REMOVED yapar; yalnızca tam ve sağlıklı taramadan sonra çağrılmalıdır. */
   async markRemoved(sourceId: number, notSeenSince: Date): Promise<number> {
     const { count } = await this.prisma.listing.updateMany({

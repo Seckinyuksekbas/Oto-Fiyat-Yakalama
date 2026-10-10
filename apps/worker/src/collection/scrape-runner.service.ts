@@ -20,6 +20,12 @@ export interface RunSummary {
   failed: number;
 }
 
+class InfraError extends Error {
+  constructor(override readonly cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+  }
+}
+
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 @Injectable()
@@ -63,19 +69,39 @@ export class ScrapeRunner {
     }
 
     const startedAt = new Date();
-    await this.prisma.collectionJob.update({ where: { id: job.id }, data: { status: 'RUNNING', startedAt } });
+    const claimed = await this.prisma.collectionJob.updateMany({ where: { id: job.id, status: 'QUEUED' }, data: { status: 'RUNNING', startedAt } });
+    if (claimed.count !== 1) return null;
 
-    const http = new PoliteHttpClient({
-      sourceId: source.id,
-      minRequestGapMs: source.minRequestGapMs,
-      userAgent: this.userAgent,
-      redis: this.redis,
-      proxyUrl: source.proxyConfig?.isEnabled ? this.encryptor.decrypt(source.proxyConfig.urlEncrypted) : null,
-      isBlockedPage: adapter.isBlockedPage ? (html) => adapter.isBlockedPage!(html) : undefined,
-    });
-    const resolve = await this.aliases.resolver();
+    let http: PoliteHttpClient | null = null;
+    let resolve: Awaited<ReturnType<AliasService['resolver']>>;
+    try {
+      http = new PoliteHttpClient({
+        sourceId: source.id,
+        minRequestGapMs: source.minRequestGapMs,
+        userAgent: this.userAgent,
+        redis: this.redis,
+        proxyUrl: source.proxyConfig?.isEnabled ? this.encryptor.decrypt(source.proxyConfig.urlEncrypted) : null,
+        isBlockedPage: adapter.isBlockedPage ? (html) => adapter.isBlockedPage!(html) : undefined,
+      });
+      resolve = await this.aliases.resolver();
+    } catch (err) {
+      await http?.close().catch(() => undefined);
+      const reason = `Kurulum hatası: ${message(err)}`.slice(0, 500);
+      this.logger.error(`Kaynak ${source.code} için ${reason}`);
+      await this.prisma.collectionJob.update({ where: { id: job.id }, data: { status: 'FAILED', finishedAt: new Date(), errorSummary: reason } });
+      return { status: 'FAILED', pages: 0, cards: 0, created: 0, updated: 0, removed: 0, failed: 0 };
+    }
+
     const c = { pages: 0, cards: 0, created: 0, updated: 0, removed: 0, failed: 0, complete: false };
     let fatal: unknown = null;
+    let infra: unknown = null;
+    const guard = async <T>(fn: () => Promise<T>): Promise<T> => {
+      try {
+        return await fn();
+      } catch (err) {
+        throw new InfraError(err);
+      }
+    };
 
     try {
       for await (const page of adapter.listPages({ http, config: source.config })) {
@@ -91,53 +117,77 @@ export class ScrapeRunner {
             problems.push(...normalized.problems);
             continue;
           }
-          const { outcome } = await this.ingest.ingest(source.id, normalized.listing, startedAt);
+          const { outcome } = await guard(() => this.ingest.ingest(source.id, normalized.listing, startedAt));
           if (outcome === 'NEW') c.created += 1;
           else if (outcome !== 'UNCHANGED') c.updated += 1;
         }
-        await this.ingest.recordProblems(source.id, problems);
+        await guard(() => this.ingest.recordProblems(source.id, problems));
+        const seenInvalid = [...new Set(problems.map((p) => p.externalId).filter((id): id is string => !!id))];
+        await guard(() => this.ingest.touchSeen(source.id, seenInvalid, startedAt));
         if (page.isLast) c.complete = true;
       }
     } catch (err) {
-      fatal = err;
+      if (err instanceof InfraError) infra = err.cause;
+      else fatal = err;
     } finally {
       await http.close();
     }
 
-    const issueRate = c.cards === 0 ? (c.pages > 0 ? 1 : 0) : c.failed / c.cards;
-    let status: JobStatus;
-    if (fatal) {
-      const fe = fatal instanceof FetchError ? fatal : null;
-      await this.prisma.scrapeError.create({
-        data: { jobId: job.id, sourceId: source.id, kind: fe?.kind ?? 'PARSE', url: fe?.url ?? null, message: message(fatal).slice(0, 1000), transient: fe?.transient ?? false },
-      });
-      await this.health.recordFailure(source.id, fatal instanceof Error ? fatal : new Error(message(fatal)));
-      status = c.pages > 0 && fe?.kind !== 'BLOCKED' ? 'PARTIAL' : 'FAILED';
-      this.logger.warn(`Kaynak ${source.code} taraması başarısız: ${message(fatal)}`);
-    } else {
-      const fullCrawl = (source.config as { fullCrawl?: boolean } | null)?.fullCrawl !== false;
-      if (fullCrawl && c.complete && c.cards > 0 && issueRate <= PARSE_ISSUE_THRESHOLD) {
-        c.removed = await this.ingest.markRemoved(source.id, startedAt);
-      }
-      await this.health.recordSuccess(source.id, issueRate);
-      status = c.failed > 0 ? 'PARTIAL' : 'SUCCEEDED';
+    if (infra) {
+      const reason = `Altyapı hatası: ${message(infra)}`.slice(0, 500);
+      this.logger.error(`Kaynak ${source.code} taraması altyapı hatasıyla durdu: ${message(infra)}`);
+      await this.prisma.collectionJob
+        .update({ where: { id: job.id }, data: { status: 'FAILED', finishedAt: new Date(), pagesFetched: c.pages, listingsSeen: c.cards, listingsNew: c.created, listingsUpdated: c.updated, errorsCount: c.failed, errorSummary: reason } })
+        .catch((e: unknown) => this.logger.error(`İş durumu güncellenemedi: ${message(e)}`));
+      throw infra;
     }
 
-    await this.prisma.collectionJob.update({
-      where: { id: job.id },
-      data: {
-        status,
-        finishedAt: new Date(),
-        pagesFetched: c.pages,
-        listingsSeen: c.cards,
-        listingsNew: c.created,
-        listingsUpdated: c.updated,
-        listingsRemoved: c.removed,
-        errorsCount: c.failed + (fatal ? 1 : 0),
-        avgResponseMs: http.stats.requests > 0 ? Math.round(http.stats.totalMs / http.stats.requests) : null,
-        errorSummary: fatal ? message(fatal).slice(0, 500) : c.failed > 0 ? `${c.failed} ilan ayrıştırılamadı veya doğrulanamadı` : null,
-      },
-    });
+    const issueRate = c.cards === 0 ? (c.pages > 0 ? 1 : 0) : c.failed / c.cards;
+    let status: JobStatus;
+    let errorSummary: string | null;
+    try {
+      if (fatal) {
+        const fe = fatal instanceof FetchError ? fatal : null;
+        await this.prisma.scrapeError.create({
+          data: { jobId: job.id, sourceId: source.id, kind: fe?.kind ?? 'PARSE', url: fe?.url ?? null, message: message(fatal).slice(0, 1000), transient: fe?.transient ?? false },
+        });
+        await this.health.recordFailure(source.id, fatal instanceof Error ? fatal : new Error(message(fatal)));
+        status = c.pages > 0 && fe?.kind !== 'BLOCKED' ? 'PARTIAL' : 'FAILED';
+        errorSummary = message(fatal).slice(0, 500);
+        this.logger.warn(`Kaynak ${source.code} taraması başarısız: ${message(fatal)}`);
+      } else {
+        const fullCrawl = (source.config as { fullCrawl?: boolean } | null)?.fullCrawl !== false;
+        if (fullCrawl && c.complete && c.cards > 0 && issueRate <= PARSE_ISSUE_THRESHOLD) {
+          c.removed = await this.ingest.markRemoved(source.id, startedAt);
+        }
+        await this.health.recordSuccess(source.id, issueRate);
+        const empty = c.pages > 0 && c.cards === 0;
+        status = c.failed > 0 || empty ? 'PARTIAL' : 'SUCCEEDED';
+        errorSummary = empty ? 'Sayfada ilan kartı bulunamadı' : c.failed > 0 ? `${c.failed} ilan ayrıştırılamadı veya doğrulanamadı` : null;
+      }
+
+      await this.prisma.collectionJob.update({
+        where: { id: job.id },
+        data: {
+          status,
+          finishedAt: new Date(),
+          pagesFetched: c.pages,
+          listingsSeen: c.cards,
+          listingsNew: c.created,
+          listingsUpdated: c.updated,
+          listingsRemoved: c.removed,
+          errorsCount: c.failed + (fatal ? 1 : 0),
+          avgResponseMs: http.stats.requests > 0 ? Math.round(http.stats.totalMs / http.stats.requests) : null,
+          errorSummary,
+        },
+      });
+    } catch (err) {
+      this.logger.error(`Kaynak ${source.code} sonuç kaydı başarısız: ${message(err)}`);
+      await this.prisma.collectionJob
+        .update({ where: { id: job.id }, data: { status: 'FAILED', finishedAt: new Date(), errorSummary: `Altyapı hatası: ${message(err)}`.slice(0, 500) } })
+        .catch((e: unknown) => this.logger.error(`İş durumu güncellenemedi: ${message(e)}`));
+      throw err;
+    }
     return { status, pages: c.pages, cards: c.cards, created: c.created, updated: c.updated, removed: c.removed, failed: c.failed };
   }
 }

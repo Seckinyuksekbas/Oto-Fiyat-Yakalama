@@ -1,6 +1,7 @@
 import type { TestingModule } from '@nestjs/testing';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CollectionModule } from '../src/collection/collection.module';
+import { IngestService } from '../src/collection/ingest.service';
 import { ScrapeRunner } from '../src/collection/scrape-runner.service';
 import { PrismaService } from '../src/infra/prisma.service';
 import { createAdmin, createContext, createQueuedJob, createSource, resetState, startDemo } from './helpers';
@@ -121,5 +122,66 @@ describe('ScrapeRunner', () => {
     const source = await createSource(ref, demo.baseUrl, { health: 'DEGRADED', consecutiveFailures: 4 });
     await runOnce(source.id);
     expect(await prisma.dataSource.findUniqueOrThrow({ where: { id: source.id } })).toMatchObject({ health: 'HEALTHY', consecutiveFailures: 0 });
+  });
+});
+
+describe('ScrapeRunner robustness', () => {
+  it('fails the job cleanly when setup throws, without blaming the source', async () => {
+    const proxy = await prisma.proxyConfig.create({ data: { name: 'bad', urlEncrypted: 'v1:bad', isEnabled: true } });
+    const source = await createSource(ref, demo.baseUrl, { proxyConfigId: proxy.id });
+    const job = await runOnce(source.id);
+    expect(job.status).toBe('FAILED');
+    expect(job.finishedAt).not.toBeNull();
+    expect(job.errorSummary).toContain('Kurulum hatası');
+    expect(await prisma.dataSource.findUniqueOrThrow({ where: { id: source.id } })).toMatchObject({ health: 'HEALTHY', consecutiveFailures: 0 });
+    expect(await prisma.scrapeError.count()).toBe(0);
+  });
+
+  it('does not remove seen-but-invalid listings', async () => {
+    const source = await createSource(ref, demo.baseUrl);
+    await runOnce(source.id);
+    const [victim] = demo.site.store.active();
+    demo.site.store.patch(victim.id, { price: 10_000 });
+    const job = await runOnce(source.id);
+    expect(job).toMatchObject({ status: 'PARTIAL', errorsCount: 1, listingsRemoved: 0 });
+    const listing = await prisma.listing.findUniqueOrThrow({ where: { sourceId_externalId: { sourceId: source.id, externalId: victim.id } } });
+    expect(listing.status).toBe('ACTIVE');
+    expect(await prisma.listingIssue.count({ where: { sourceId: source.id, externalId: victim.id } })).toBeGreaterThan(0);
+  });
+
+  it('treats infrastructure errors as job failures, not source failures', async () => {
+    const source = await createSource(ref, demo.baseUrl);
+    const spy = vi.spyOn(ref.get(IngestService), 'ingest').mockRejectedValueOnce(new Error('db down'));
+    try {
+      const queued = await createQueuedJob(ref, source.id);
+      await expect(runner.run(queued.id)).rejects.toThrow('db down');
+      const job = await prisma.collectionJob.findUniqueOrThrow({ where: { id: queued.id } });
+      expect(job.status).toBe('FAILED');
+      expect(job.errorSummary).toContain('Altyapı hatası');
+      expect(await prisma.dataSource.findUniqueOrThrow({ where: { id: source.id } })).toMatchObject({ health: 'HEALTHY', consecutiveFailures: 0 });
+      expect(await prisma.scrapeError.count()).toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('zero cards is not a success', async () => {
+    const source = await createSource(ref, demo.baseUrl);
+    await runOnce(source.id);
+    demo.site.store.reset(7, 0);
+    const job = await runOnce(source.id);
+    expect(job).toMatchObject({ status: 'PARTIAL', listingsRemoved: 0, errorSummary: 'Sayfada ilan kartı bulunamadı' });
+    expect(await prisma.listing.count({ where: { sourceId: source.id, status: 'ACTIVE' } })).toBe(45);
+    expect((await prisma.dataSource.findUniqueOrThrow({ where: { id: source.id } })).health).toBe('DEGRADED');
+  });
+
+  it('goes DEGRADED then DOWN with one alert each', async () => {
+    await createAdmin(ref);
+    const source = await createSource(ref, 'http://127.0.0.1:1');
+    for (let i = 0; i < 6; i++) await runOnce(source.id);
+    expect(await prisma.dataSource.findUniqueOrThrow({ where: { id: source.id } })).toMatchObject({ health: 'DOWN', consecutiveFailures: 6 });
+    const keys = (await prisma.notification.findMany({ where: { kind: 'SYSTEM_ALERT' } })).map((n) => (n.payload as { key: string }).key).sort();
+    expect(keys).toEqual([`source:${source.id}:degraded`, `source:${source.id}:down`]);
+    expect(await prisma.systemLog.count({ where: { level: 'ERROR' } })).toBe(1);
   });
 });
