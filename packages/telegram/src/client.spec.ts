@@ -4,10 +4,12 @@ import { FakeTelegramApi } from './fake-bot-api';
 
 let fake: FakeTelegramApi;
 let client: TelegramClient;
+let baseUrl = ''
 
 beforeAll(async () => {
   fake = new FakeTelegramApi();
   const { apiBase, token } = await fake.start();
+  baseUrl = apiBase;
   client = new TelegramClient({ token, apiBase, timeoutMs: 2000 });
 });
 afterAll(async () => fake.close());
@@ -28,5 +30,20 @@ describe('TelegramClient', () => {
     fake.queueUpdates([{ update_id: 5, message: { chat: { id: 9 }, text: '/start abc' } }]);
     expect((await client.getUpdates(0, 0)).map((u) => u.update_id)).toEqual([5]);
     expect(await client.getUpdates(6, 0)).toEqual([]);
+  });
+
+  it('sanitizes network errors (no token, no url)', async () => {
+    const bad = new TelegramClient({ token: fake.token, apiBase: 'http://[bad', timeoutMs: 500 });
+    const err = (await bad.sendMessage(1, 'x').catch((e: unknown) => e)) as Error;
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).not.toContain(fake.token);
+    expect(err.message).not.toContain('http://[bad');
+  });
+
+  it('fake api: malformed JSON gives 400 and reset clears state', async () => {
+    const res = await fetch(`${baseUrl}/bot${fake.token}/sendMessage`, { method: 'POST', body: '{' });
+    expect(res.status).toBe(400);
+    fake.reset();
+    expect(fake.requests).toEqual([]);
   });
 });

@@ -18,6 +18,12 @@ export class FakeTelegramApi {
     this.scripted.set(method, q);
   }
 
+  reset(): void {
+    this.requests.length = 0;
+    this.scripted.clear();
+    this.updates = [];
+  }
+
   queueUpdates(u: TelegramUpdate[]): void {
     this.updates.push(...u);
   }
@@ -34,7 +40,12 @@ export class FakeTelegramApi {
         };
         if (!m || m[1] !== this.token) return send(401, { ok: false, error_code: 401, description: 'Unauthorized' });
         const method = m[2] as string;
-        const body = raw ? JSON.parse(raw) : {};
+        let body;
+        try {
+          body = raw ? JSON.parse(raw) : {};
+        } catch {
+          return send(400, { ok: false, error_code: 400, description: 'Bad Request: malformed JSON' });
+        }
         this.requests.push({ method, body });
         const next = this.scripted.get(method)?.shift();
         if (next) return send(next.status, next.body);

@@ -28,4 +28,11 @@ describe('classifyTelegramError', () => {
     expect(isPhotoFallbackError(new TelegramApiError('sendPhoto', 400, 400, 'Bad Request: failed to get HTTP URL content', null))).toBe(true);
     expect(isPhotoFallbackError(api(400, 'Bad Request: chat not found'))).toBe(false);
   });
+
+  it('429 without retry_after defaults to 5s; invalid JSON 200 is retryable; caption too long falls back', () => {
+    expect(classifyTelegramError(api(429, 'x', null))).toMatchObject({ retryAfterMs: 5000 });
+    expect(classifyTelegramError(api(429, 'x', 0))).toMatchObject({ retryAfterMs: 5000 });
+    expect(classifyTelegramError(api(200, 'Geçersiz JSON yanıtı')).kind).toBe('RETRYABLE');
+    expect(isPhotoFallbackError(new TelegramApiError('sendPhoto', 400, 400, 'Bad Request: message caption is too long', null))).toBe(true);
+  });
 });

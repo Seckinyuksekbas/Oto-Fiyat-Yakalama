@@ -16,13 +16,37 @@ export function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0']);
+function isPrivateIPv4(h: string): boolean {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+  if (!m) return false;
+  const a = Number(m[1]);
+  const b = Number(m[2]);
+  return (
+    a === 0 || a === 10 || a === 127 || a >= 224 ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168)
+  );
+}
+
+function isPrivateIPv6(h: string): boolean {
+  if (h === '::' || h === '::1' || h.startsWith('::ffff:')) return true;
+  const first = parseInt(h.split(':')[0] || '0', 16);
+  return (first >= 0xfc00 && first <= 0xfdff) || (first >= 0xfe80 && first <= 0xfebf);
+}
 
 /** Telegram URL butonları yalnızca herkese açık http(s) adresleri kabul eder. */
 export function isPublicHttpUrl(u: string): boolean {
   try {
     const url = new URL(u);
-    return (url.protocol === 'https:' || url.protocol === 'http:') && !LOCAL_HOSTS.has(url.hostname);
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return false;
+    let host = url.hostname.toLowerCase();
+    if (host.startsWith('[') && host.endsWith(']')) return !isPrivateIPv6(host.slice(1, -1));
+    host = host.replace(/\.+$/, '');
+    if (!host) return false;
+    if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal')) return false;
+    return !isPrivateIPv4(host);
   } catch {
     return false;
   }

@@ -41,17 +41,33 @@ export class TelegramClient {
   /** Hata mesajları URL'yi (dolayısıyla token'ı) içermez. */
   async call<T>(method: string, body: Record<string, unknown>, signal?: AbortSignal, timeoutMs?: number): Promise<T> {
     const timeout = AbortSignal.timeout(timeoutMs ?? this.timeoutMs);
-    const res = await fetch(`${this.apiBase}/bot${this.opts.token}/${method}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-    });
+    const url = `${this.apiBase}/bot${this.opts.token}/${method}`;
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+      });
+    } catch (err) {
+      throw this.sanitize(err, url);
+    }
     const json = (await res.json().catch(() => ({ ok: false, description: 'Geçersiz JSON yanıtı' }))) as ApiEnvelope<T>;
     if (!res.ok || !json.ok) {
       throw new TelegramApiError(method, res.status, json.error_code ?? res.status, json.description ?? 'Bilinmeyen hata', json.parameters?.retry_after ?? null);
     }
     return json.result as T;
+  }
+
+  /** Token ve tam URL içermeyen, adı korunan hata üretir (cause taşınmaz). */
+  private sanitize(err: unknown, url: string): Error {
+    const raw = err instanceof Error ? err.message : String(err);
+    let msg = raw.split(url).join('<url>');
+    if (this.opts.token) msg = msg.split(this.opts.token).join('***');
+    const out = new Error(msg);
+    out.name = err instanceof Error ? err.name : 'Error';
+    return out;
   }
 
   sendMessage(chatId: number | string, text: string, replyMarkup?: InlineKeyboard) {

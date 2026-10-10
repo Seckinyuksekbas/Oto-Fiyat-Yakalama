@@ -77,4 +77,32 @@ describe('renderMatchMessage', () => {
     expect(renderMatchMessage({ ...base, listing: { ...base.listing, make: 'A<B' } }, opts).text).toContain('A&lt;B');
     expect(renderMatchMessage(base, opts).text).not.toContain('Temiz');
   });
+
+  it('escapes fallback fuel/transmission values', () => {
+    const t = renderMatchMessage({ ...base, listing: { ...base.listing, fuel: 'A<B', transmission: 'X&Y' } }, opts).text;
+    expect(t).toContain('A&lt;B');
+    expect(t).toContain('X&amp;Y');
+  });
+
+  it('sub-1% discount is not a deal', () => {
+    const m = renderMatchMessage({ ...base, analysis: { ...base.analysis, discountPct: 0.004 } }, opts);
+    expect(m.text.split('\n')[0]).toContain('Yeni ilan');
+  });
+
+  it('keeps caption within 1024 chars when a photo is present', () => {
+    const m = renderMatchMessage({ ...base, listing: { ...base.listing, trim: '<'.repeat(2000), imageUrl: 'https://img.example/7.jpg' } }, opts);
+    expect(m.text.length).toBeLessThanOrEqual(1024);
+    expect(m.text).toContain('…');
+    expect(m.text).toContain('Fiyat analizi tahminidir');
+  });
+});
+
+describe('isPublicHttpUrl private ranges', () => {
+  it.each([
+    'http://127.5.5.5/x', 'http://0.1.2.3/x', 'http://10.1.2.3/x', 'http://172.16.0.1/x', 'http://172.31.255.1/x',
+    'http://192.168.1.1/x', 'http://169.254.169.254/x', 'http://[::1]/x', 'http://[::ffff:127.0.0.1]/x',
+    'http://[fc00::1]/x', 'http://[fd12::1]/x', 'http://[fe80::1]/x', 'http://localhost./x', 'http://a.localhost/x',
+    'http://printer.local/x', 'http://svc.internal/x', 'http://LOCALHOST/x', 'data:text/html,x', 'javascript:alert(1)',
+  ])('rejects %s', (u) => expect(isPublicHttpUrl(u)).toBe(false));
+  it.each(['https://ornek.com/x', 'http://172.32.0.1/x', 'http://8.8.8.8/x'])('accepts %s', (u) => expect(isPublicHttpUrl(u)).toBe(true));
 });
