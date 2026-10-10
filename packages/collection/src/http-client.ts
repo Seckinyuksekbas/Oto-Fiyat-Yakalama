@@ -28,7 +28,8 @@ export interface PoliteHttpOptions {
   sleep?: (ms: number) => Promise<void>;
 }
 
-const GENERIC_BLOCK_MARKERS = /captcha|cf-chl-|challenge-platform|attention required/i;
+const GENERIC_BLOCK_MARKERS =
+  /class=["'][^"']*b(g-recaptcha|h-captcha|cf-turnstile)b|cf-chl-|challenge-platform|<title>[^<]*(attention required|just a moment)/i;
 const MAX_RETRY_AFTER_MS = 60_000;
 
 export const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -75,7 +76,7 @@ export class PoliteHttpClient implements HttpFetcher {
     }
     const res = await this.fetchWithRetry(url);
     if (res.status === 403) throw new BlockedError(`Kaynak erişimi reddetti (HTTP 403): ${url}`, url);
-    if (res.status === 200 && (GENERIC_BLOCK_MARKERS.test(res.body) || this.opts.isBlockedPage?.(res.body))) {
+    if (res.status === 200 && this.isBlocked(res.body)) {
       throw new BlockedError(`Bot doğrulama sayfası algılandı: ${url}`, url);
     }
     return res;
@@ -83,6 +84,10 @@ export class PoliteHttpClient implements HttpFetcher {
 
   async close(): Promise<void> {
     await this.dispatcher.close();
+  }
+
+  private isBlocked(body: string): boolean {
+    return GENERIC_BLOCK_MARKERS.test(body) || (this.opts.isBlockedPage?.(body) ?? false);
   }
 
   private async fetchWithRetry(url: string): Promise<HttpResult> {
@@ -98,6 +103,7 @@ export class PoliteHttpClient implements HttpFetcher {
         continue;
       }
       if (res.status === 429 || res.status >= 500) {
+        if (this.isBlocked(res.body)) throw new BlockedError(`Bot doğrulama sayfası algılandı (HTTP ${res.status}): ${url}`, url);
         if (last) throw new FetchError(res.status === 429 ? 'HTTP_4XX' : 'HTTP_5XX', `HTTP ${res.status}: ${url}`, url, true);
         await this.sleep(retryAfterMs(res.headers['retry-after']) ?? backoff(attempt));
         continue;

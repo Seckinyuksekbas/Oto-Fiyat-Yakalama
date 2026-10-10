@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { startRedis } from '@oto/testing';
 import Redis from 'ioredis';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { BlockedError, FetchError, PoliteHttpClient, retryAfterMs, type PoliteHttpOptions } from './index';
 
 type Handler = (req: IncomingMessage, res: ServerResponse) => void;
@@ -42,9 +42,13 @@ beforeEach(async () => {
 });
 
 const sleeps: number[] = [];
+const created: PoliteHttpClient[] = [];
+afterEach(async () => {
+  await Promise.all(created.splice(0).map((c) => c.close().catch(() => undefined)));
+});
 function client(over: Partial<PoliteHttpOptions> = {}) {
   sleeps.length = 0;
-  return new PoliteHttpClient({
+  const c = new PoliteHttpClient({
     sourceId: sourceSeq,
     minRequestGapMs: 0,
     userAgent: 'OtoFirsatBot/1.0 (+http://localhost/bot)',
@@ -52,6 +56,8 @@ function client(over: Partial<PoliteHttpOptions> = {}) {
     sleep: async (ms) => void sleeps.push(ms),
     ...over,
   });
+  created.push(c);
+  return c;
 }
 const html = (body: string): Handler => (_q, s) => s.writeHead(200, { 'content-type': 'text/html' }).end(body);
 const pageHits = () => hits.filter((h) => h.path !== '/robots.txt');
@@ -121,6 +127,7 @@ describe('PoliteHttpClient', () => {
     routes.set('/captcha', html('<div class="g-recaptcha"></div>'));
     routes.set('/custom', html('<body data-demo-blocked></body>'));
     await expect(client().getText(`${base}/captcha`)).rejects.toBeInstanceOf(BlockedError);
+    expect(pageHits()).toHaveLength(1);
     const c = client({ isBlockedPage: (h) => h.includes('data-demo-blocked') });
     await expect(c.getText(`${base}/custom`)).rejects.toBeInstanceOf(BlockedError);
   });
@@ -158,6 +165,50 @@ describe('PoliteHttpClient', () => {
     await Promise.all([a.getText(`${base}/g`), b.getText(`${base}/g`), a.getText(`${base}/g`), b.getText(`${base}/g`)]);
     const times = pageHits().map((h) => h.at).sort((x, y) => x - y);
     for (let i = 1; i < times.length; i++) expect(times[i] - times[i - 1]).toBeGreaterThanOrEqual(230);
+  });
+
+  it('blocks a challenge page served with a 5xx status without retrying', async () => {
+    routes.set('/c503', (_q, s) => s.writeHead(503).end('<div class="g-recaptcha"></div>'));
+    await expect(client().getText(`${base}/c503`)).rejects.toBeInstanceOf(BlockedError);
+    expect(pageHits()).toHaveLength(1);
+  });
+
+  it('does not treat the plain word captcha as a block', async () => {
+    routes.set('/plain', html('<p>Bu ilanda captcha yok</p>'));
+    expect((await client().getText(`${base}/plain`)).status).toBe(200);
+  });
+
+  it('blocks a "Just a moment" interstitial', async () => {
+    routes.set('/jam', html('<html><title>Just a moment...</title></html>'));
+    await expect(client().getText(`${base}/jam`)).rejects.toBeInstanceOf(BlockedError);
+  });
+
+  it('treats a 429 robots.txt as transient and does not cache it', async () => {
+    routes.set('/robots.txt', (_q, s) => s.writeHead(429).end());
+    const c = client();
+    await expect(c.getText(`${base}/p`)).rejects.toMatchObject({ kind: 'HTTP_4XX', transient: true });
+    await expect(c.getText(`${base}/p`)).rejects.toMatchObject({ kind: 'HTTP_4XX', transient: true });
+    expect(hits.filter((h) => h.path === '/robots.txt')).toHaveLength(2);
+  });
+
+  it('treats a 403 robots.txt as blocked', async () => {
+    routes.set('/robots.txt', (_q, s) => s.writeHead(403).end());
+    await expect(client().getText(`${base}/p`)).rejects.toBeInstanceOf(BlockedError);
+  });
+
+  it('obeys a group addressed to our own bot name', async () => {
+    routes.set('/robots.txt', (_q, s) =>
+      s.writeHead(200).end('User-agent: OtoFirsatBot\nDisallow: /bot-only\n\nUser-agent: *\nDisallow:\n'),
+    );
+    routes.set('/bot-only', html('x'));
+    await expect(client().getText(`${base}/bot-only`)).rejects.toBeInstanceOf(BlockedError);
+    expect(pageHits()).toHaveLength(0);
+  });
+
+  it('gives up on persistent 429 with a transient HTTP_4XX after 3 attempts', async () => {
+    routes.set('/rl', (_q, s) => s.writeHead(429).end());
+    await expect(client().getText(`${base}/rl`)).rejects.toMatchObject({ kind: 'HTTP_4XX', transient: true });
+    expect(pageHits()).toHaveLength(3);
   });
 
   it('tracks request stats', async () => {
