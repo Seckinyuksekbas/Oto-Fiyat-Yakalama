@@ -134,7 +134,7 @@ export const listMatchesQuerySchema = z
     reason: z.enum(MATCH_REASONS).optional(),
     minScore: z.coerce.number().int().min(0).max(100).optional(),
     confidence: z.enum(CONFIDENCES).optional(),
-    cursor: z.coerce.number().int().positive().optional(),
+    cursor: z.coerce.number().int().positive().max(2_147_483_647).optional(),
     limit: z.coerce.number().int().min(1).max(100).default(20),
   })
   .strict();

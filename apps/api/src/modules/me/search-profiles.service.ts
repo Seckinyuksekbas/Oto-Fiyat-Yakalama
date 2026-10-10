@@ -107,7 +107,8 @@ export class SearchProfilesService {
   }
 
   private assertChannels(channels: NormalizedProfile['channels'], lim: UserLimits): void {
-    const missing = channels.find((c) => !lim.limits.channels.includes(c));
+    // IN_APP her zaman izinlidir (plan kanal listesinden bağımsız)
+    const missing = channels.find((c) => c !== 'IN_APP' && !lim.limits.channels.includes(c));
     if (missing) throw new AppError(ErrorCode.LIMIT_REACHED, 403, 'Planınız bu bildirim kanalını içermiyor', { channel: missing });
   }
 

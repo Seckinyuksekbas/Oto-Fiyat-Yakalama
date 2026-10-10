@@ -116,6 +116,8 @@ describe('search profile schemas', () => {
     expect(listMatchesQuerySchema.parse({}).limit).toBe(20);
     expect(listMatchesQuerySchema.safeParse({ limit: '101' }).success).toBe(false);
     expect(listMatchesQuerySchema.safeParse({ sort: 'score' }).success).toBe(false);
+    expect(listMatchesQuerySchema.safeParse({ cursor: '2147483647' }).success).toBe(true);
+    expect(listMatchesQuerySchema.safeParse({ cursor: '3000000000' }).success).toBe(false);
   });
 
   it('confidenceAtLeast', () => {

@@ -82,9 +82,15 @@ Filtreye uyan, ACTIVE ve analizi olan ilanlardan en yeni 20'sini döner. `estima
 
 Yalnızca kullanıcının kendi eşleşmeleri; en yeni önce (id azalan), cursor = son id, `{ items, nextCursor }`. `confidence` filtresi "en az bu güven" demektir; `minScore` de desteklenir. Skor sıralaması yok (Plan 06 ihtiyaç duyarsa).
 
+## Gözlemler (canlı duman testi)
+
+- `minDiscountPct = 0` ise `minConfidence` yok sayılır (spec §5.2): eşik 0 iken yalnızca güven dışı koşullar uygulanır. Arayüz bu durumda güven alanını gizlemeli/devre dışı bırakmalıdır.
+- Yeni oluşturulan bir profil yalnızca oluşturulduktan SONRA analiz olayı tetiklenen ilanlar için bildirilir; zaten eşleşen mevcut ilanlar bildirilmez, önizleme (ve Plan 06 fırsatlar ekranı) üzerinden görünür.
+- `IN_APP` kanalı plan kanal listesinden bağımsız her zaman izinlidir.
+
 ## Yeni externalId ile yeniden yayın
 
-`IngestService.findRelistTwin`: kaynakta bilinmeyen bir externalId geldiğinde, aynı kaynakta son 7 günde `REMOVED` olmuş, başlık + km + yıl aynı olan bir ilan varsa onun externalId'si yenisiyle değiştirilir ve RELIST yolu izlenir (spec §5.1). Eşzamanlı aynı externalId için tek ilan oluşur. **Sınır:** sezgi, başlığı/km/yılı birebir aynı iki gerçekten farklı aracı (biri 7 günden kısa süre önce kaldırılmışsa) birleştirebilir; spec gereği kabul edilmiştir.
+`IngestService.findRelistTwin`: kaynakta bilinmeyen bir externalId geldiğinde, aynı kaynakta son 7 günde `REMOVED` olmuş, başlık + km + yıl aynı olan bir ilan varsa onun externalId'si yenisiyle değiştirilir (compare-and-set: ikiz hâlâ `REMOVED` ve externalId değişmemişse) ve RELIST yolu izlenir (spec §5.1). Eşzamanlı aynı externalId için tek ilan oluşur. **Sınır:** sezgi, başlığı/km/yılı birebir aynı iki gerçekten farklı aracı (biri 7 günden kısa süre önce kaldırılmışsa) birleştirebilir; spec gereği kabul edilmiştir.
 
 ## Çalıştırma
 

@@ -83,9 +83,11 @@ const CASES: Record<string, Case> = {
   },
   'GET /me/matches': async ({ A, B }) => {
     const { id } = (await A.agent.post('/api/v1/me/search-profiles').send({ name: 'A' })).body;
-    await seedMatch(app, A.user.id, id);
-    expect((await A.agent.get('/api/v1/me/matches')).body.items).toHaveLength(1);
-    expect((await B.agent.get('/api/v1/me/matches')).body.items).toEqual([]);
+    const { id: bId } = (await B.agent.post('/api/v1/me/search-profiles').send({ name: 'B' })).body;
+    const aMatch = await seedMatch(app, A.user.id, id);
+    const bMatch = await seedMatch(app, B.user.id, bId);
+    expect((await A.agent.get('/api/v1/me/matches')).body.items.map((m: { id: number }) => m.id)).toEqual([aMatch]);
+    expect((await B.agent.get('/api/v1/me/matches')).body.items.map((m: { id: number }) => m.id)).toEqual([bMatch]);
     expect((await B.agent.get(`/api/v1/me/matches?profileId=${id}`)).body.items).toEqual([]);
   },
   'PATCH /me/search-profiles/:id': async ({ A, B }) => {

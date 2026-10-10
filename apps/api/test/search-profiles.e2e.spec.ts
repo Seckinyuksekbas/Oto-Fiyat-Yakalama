@@ -67,6 +67,14 @@ describe('/me/search-profiles', () => {
     expect(res.body.error).toMatchObject({ code: 'LIMIT_REACHED', details: { channel: 'TELEGRAM' } });
   });
 
+  it('IN_APP is always allowed even when the plan channel list omits it', async () => {
+    const A = await registerUser(app);
+    await app.get(PrismaService).userSubscription.updateMany({ where: { userId: A.user.id }, data: { limitOverrides: { channels: ['TELEGRAM'] } } });
+    const res = await A.agent.post(URL).send({ name: 'x', channels: ['TELEGRAM'] });
+    expect(res.status).toBe(201);
+    expect(res.body.channels).toEqual(['IN_APP', 'TELEGRAM']);
+  });
+
   it('patch only checks newly added channels against the plan', async () => {
     const A = await registerUser(app);
     await verifyEmail(app, A.user.id);

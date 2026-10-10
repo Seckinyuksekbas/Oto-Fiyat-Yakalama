@@ -48,6 +48,17 @@ describe('GET /me/matches', () => {
     expect(page1.body.items.map((m: { id: number }) => m.id)).toEqual([m3, m2]);
     const page2 = await A.agent.get(`/api/v1/me/matches?limit=2&cursor=${page1.body.nextCursor}`);
     expect(page2.body.items.map((m: { id: number }) => m.id)).toEqual([m1]);
+    expect(page2.body.nextCursor).toBeNull();
+
+    // cursor + filtre birlikte: p1 eşleşmeleri (m2, m1), limit=1
+    const f1 = await A.agent.get(`/api/v1/me/matches?profileId=${p1}&limit=1`);
+    expect(f1.body.items.map((m: { id: number }) => m.id)).toEqual([m2]);
+    const f2 = await A.agent.get(`/api/v1/me/matches?profileId=${p1}&limit=1&cursor=${f1.body.nextCursor}`);
+    expect(f2.body.items.map((m: { id: number }) => m.id)).toEqual([m1]);
+    expect(f2.body.nextCursor).toBeNull();
+    const tooBig = await A.agent.get('/api/v1/me/matches?cursor=3000000000');
+    expect(tooBig.status).toBe(400);
+    expect(tooBig.body.error.code).toBe('VALIDATION_FAILED');
 
     expect((await A.agent.get(`/api/v1/me/matches?profileId=${p1}`)).body.items).toHaveLength(2);
     expect((await A.agent.get('/api/v1/me/matches?reason=PRICE_DROP')).body.items.map((m: { id: number }) => m.id)).toEqual([m2]);

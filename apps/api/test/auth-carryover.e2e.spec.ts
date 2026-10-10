@@ -6,7 +6,18 @@ import { MailService } from '../src/modules/mail/mail.service';
 import { createTestApp, newAgent, registerUser, resetState, tokenFromMail } from './helpers';
 
 let app: NestExpressApplication;
-const flush = () => new Promise((r) => setTimeout(r, 150));
+/** Pozitif durumlar: outbox beklenen sayıya ulaşana kadar (en çok ~5 sn) yoklanır. */
+async function waitForMail(outbox: unknown[], count: number, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (outbox.length < count && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+  expect(outbox.length).toBeGreaterThanOrEqual(count);
+}
+/**
+ * Negatif durumlar (mail GELMEMELİ): arka plan görevi için deterministik tamamlanma sinyali yok;
+ * bu yüzden sınırlı 1 sn beklenir. Beklemenin kısa kalması yalnızca testi gevşetir (sahte kırmızı üretmez);
+ * aynı yolun pozitif karşılığı waitForMail ile ayrıca doğrulanır.
+ */
+const settle = () => new Promise((r) => setTimeout(r, 1000));
 
 beforeAll(async () => {
   app = await createTestApp();
@@ -17,15 +28,16 @@ beforeEach(async () => resetState(app));
 describe('POST /auth/resend-verification', () => {
   it('always 204; sends once per cooldown only to unverified active users; old token invalidated', async () => {
     const A = await registerUser(app);
-    await flush();
     const outbox = app.get(MailService).outbox;
+    await waitForMail(outbox, 1);
     const firstToken = tokenFromMail(outbox[0].text);
     outbox.length = 0;
 
     expect((await newAgent(app).post('/api/v1/auth/resend-verification').send({ email: A.email })).status).toBe(204);
     expect((await newAgent(app).post('/api/v1/auth/resend-verification').send({ email: A.email })).status).toBe(204);
     expect((await newAgent(app).post('/api/v1/auth/resend-verification').send({ email: 'nobody@test.com' })).status).toBe(204);
-    await flush();
+    await waitForMail(outbox, 1);
+    await settle(); // 2./3. istek fazladan mail üretmemeli
     expect(outbox).toHaveLength(1);
 
     expect((await newAgent(app).post('/api/v1/auth/verify-email').send({ token: firstToken })).status).toBe(400);
@@ -36,7 +48,7 @@ describe('POST /auth/resend-verification', () => {
     outbox.length = 0;
     await app.get(RedisService).del(`auth:resend:${A.email.toLowerCase()}`);
     expect((await newAgent(app).post('/api/v1/auth/resend-verification').send({ email: A.email })).status).toBe(204);
-    await flush();
+    await settle();
     expect(outbox).toHaveLength(0);
   });
 });
@@ -77,17 +89,17 @@ describe('password confirmation limiter', () => {
 describe('resend-verification edge cases', () => {
   it('no mail for suspended users; mixed-case email shares the cooldown', async () => {
     const A = await registerUser(app);
-    await flush();
     const outbox = app.get(MailService).outbox;
+    await waitForMail(outbox, 1);
     outbox.length = 0;
     await app.get(PrismaService).user.update({ where: { id: A.user.id }, data: { status: 'SUSPENDED' } });
     expect((await newAgent(app).post('/api/v1/auth/resend-verification').send({ email: A.email })).status).toBe(204);
-    await flush();
+    await settle();
     expect(outbox).toHaveLength(0);
 
     await app.get(PrismaService).user.update({ where: { id: A.user.id }, data: { status: 'ACTIVE' } });
     expect((await newAgent(app).post('/api/v1/auth/resend-verification').send({ email: A.email.toUpperCase() })).status).toBe(204);
-    await flush();
+    await settle();
     expect(outbox).toHaveLength(0); // same cooldown key consumed by the first request
   });
 });

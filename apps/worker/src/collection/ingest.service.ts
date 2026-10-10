@@ -60,7 +60,11 @@ export class IngestService {
       const twin = await this.findRelistTwin(sourceId, l, seenAt);
       if (twin) {
         try {
-          await this.prisma.listing.update({ where: { id: twin.id }, data: { externalId: l.externalId } });
+          // Compare-and-set: ikiz hâlâ REMOVED ve externalId değişmemişse sahiplen (eşzamanlı ingest'e karşı)
+          await this.prisma.listing.updateMany({
+            where: { id: twin.id, status: 'REMOVED', externalId: twin.externalId },
+            data: { externalId: l.externalId },
+          });
         } catch (err) {
           if (!isUniqueViolation(err)) throw err;
         }
@@ -125,7 +129,7 @@ export class IngestService {
         removedAt: { gte: new Date(seenAt.getTime() - RELIST_TWIN_WINDOW_MS) },
       },
       orderBy: { removedAt: 'desc' },
-      select: { id: true },
+      select: { id: true, externalId: true },
     });
   }
 
