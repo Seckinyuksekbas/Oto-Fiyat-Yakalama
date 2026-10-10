@@ -29,7 +29,7 @@ export interface PoliteHttpOptions {
 }
 
 const GENERIC_BLOCK_MARKERS =
-  /class=["'][^"']*b(g-recaptcha|h-captcha|cf-turnstile)b|cf-chl-|challenge-platform|<title>[^<]*(attention required|just a moment)/i;
+  /class=["'][^"']*\b(g-recaptcha|h-captcha|cf-turnstile)\b|cf-chl-|challenge-platform|<title>[^<]*(attention required|just a moment)/i;
 const MAX_RETRY_AFTER_MS = 60_000;
 
 export const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
