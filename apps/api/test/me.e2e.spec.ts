@@ -2,7 +2,7 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { PrismaService } from '../src/infra/prisma.service';
-import { createTestApp, newAgent, registerUser, resetState } from './helpers';
+import { cookieFrom, createTestApp, newAgent, registerUser, resetState } from './helpers';
 
 let app: NestExpressApplication;
 let prisma: PrismaService;
@@ -63,9 +63,18 @@ describe('/me', () => {
 
   it('DELETE /me requires the password, anonymizes and frees the email', async () => {
     const { agent, user, email, password } = await registerUser(app, { email: 'bye@test.com' });
+    const other = await loginAgain(email, password);
     expect((await agent.delete('/api/v1/me').send({ password: 'not-it-at-all' })).status).toBe(400);
     const res = await agent.delete('/api/v1/me').send({ password });
     expect(res.status).toBe(204);
+    expect(cookieFrom(res, 'access_token')).toBeUndefined();
+    const setCookie = res.headers['set-cookie'] as unknown as string[];
+    const cleared = setCookie.find((c) => c.startsWith('access_token='));
+    expect(cleared).toBeDefined();
+    expect(cleared).toMatch(/^access_token=;/);
+    expect(cleared).toMatch(/Expires=Thu, 01 Jan 1970/);
+    expect((await agent.post('/api/v1/auth/refresh')).status).toBe(401);
+    expect((await other.post('/api/v1/auth/refresh')).status).toBe(401);
     const row = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
     expect(row.status).toBe('DELETED');
     expect(row.email).toBe(`deleted+${user.id}@invalid.local`);
