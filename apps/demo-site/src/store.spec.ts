@@ -49,4 +49,46 @@ describe('DemoStore', () => {
     expect(summary.added).toHaveLength(5);
     expect(s.active().length).toBe(before + 5 - summary.removed.length + summary.relisted.length);
   });
+
+  it('tick() is deterministic for the same seed', () => {
+    const a = make(100);
+    const b = make(100);
+    const sa = [a.tick(), a.tick(), a.tick()];
+    const sb = [b.tick(), b.tick(), b.tick()];
+    expect(sa).toEqual(sb);
+  });
+
+  it('eventually relists a removed listing through tick()', () => {
+    const s = make(100);
+    const id = s.active()[0].id;
+    s.patch(id, { status: 'REMOVED' });
+    let relisted = false;
+    for (let i = 0; i < 100 && !relisted; i++) relisted = s.tick().relisted.includes(id);
+    expect(relisted).toBe(true);
+    expect(s.get(id)?.status).toBe('ACTIVE');
+    expect(s.active().some((l) => l.id === id)).toBe(true);
+  });
+
+  it('price drops lower the price to a multiple of 1000', () => {
+    const s = make(300);
+    let drops = 0;
+    for (let i = 0; i < 20; i++) {
+      const before = new Map(s.active().map((l) => [l.id, l.price]));
+      const summary = s.tick();
+      for (const id of summary.priceDropped) {
+        drops++;
+        const now = s.get(id)!.price;
+        expect(now).toBeLessThan(before.get(id)!);
+        expect(now % 1000).toBe(0);
+      }
+    }
+    expect(drops).toBeGreaterThan(0);
+  });
+
+  it('never prices below the 50_000 TL floor, even with an extreme discount', () => {
+    const s = make();
+    const l = s.inject({ discount: 5 });
+    expect(l.price).toBeGreaterThanOrEqual(50_000);
+    expect(l.price % 1000).toBe(0);
+  });
 });

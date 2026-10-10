@@ -1,5 +1,5 @@
 import { CATALOG } from './catalog';
-import { fairPrice, generateListing, mulberry32, roundPrice, type DemoListing, type Rng } from './generator';
+import { clampDiscount, fairPrice, generateListing, MIN_PRICE, mulberry32, roundPrice, type DemoListing, type Rng } from './generator';
 
 export interface StoreOptions {
   seed: number;
@@ -55,12 +55,15 @@ export class DemoStore {
   }
 
   inject(input: InjectInput): DemoListing {
-    const { discount, ...overrides } = input;
+    const { discount: rawDiscount, ...overrides } = input;
+    const discount = rawDiscount === undefined ? undefined : clampDiscount(rawDiscount);
     const listing = this.add(this.now(), discount);
     Object.assign(listing, overrides);
     if (discount !== undefined && overrides.price === undefined) {
       const model = CATALOG.find((c) => c.make === listing.make && c.model === listing.model);
-      if (model) listing.price = roundPrice(fairPrice(model, listing.year, listing.km, this.currentYear) * (1 - discount));
+      if (model) {
+        listing.price = Math.max(MIN_PRICE, roundPrice(fairPrice(model, listing.year, listing.km, this.currentYear) * (1 - discount)));
+      }
     }
     return listing;
   }
@@ -84,8 +87,11 @@ export class DemoStore {
         l.status = 'REMOVED';
         summary.removed.push(l.id);
       } else if (r < 0.03) {
-        l.price = roundPrice(l.price * (0.9 + this.rng() * 0.07));
-        summary.priceDropped.push(l.id);
+        const next = Math.max(MIN_PRICE, roundPrice(l.price * (0.9 + this.rng() * 0.07)));
+        if (next < l.price) {
+          l.price = next;
+          summary.priceDropped.push(l.id);
+        }
       }
     }
     for (const l of removedBefore) {

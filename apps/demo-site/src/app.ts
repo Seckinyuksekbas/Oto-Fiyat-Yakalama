@@ -5,6 +5,39 @@ import { DemoStore, type StoreOptions } from './store';
 export type DemoMode = 'normal' | 'broken' | 'captcha' | 'forbidden';
 const MODES: DemoMode[] = ['normal', 'broken', 'captcha', 'forbidden'];
 
+const INJECT_TEXT = ['make', 'model', 'trim', 'fuel', 'transmission', 'city', 'color', 'bodyType'];
+const INJECT_INT = ['year', 'km', 'price'];
+const INJECT_PARTS = ['paintedParts', 'changedParts'];
+const isInt = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v);
+const isStrArr = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string');
+const isPlainObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/** /__inject gövdesini beyaz listeye göre doğrular; geçersizse hata metnini döndürür. */
+export function validateInject(body: unknown): string | null {
+  if (!isPlainObject(body)) return 'body must be a JSON object';
+  for (const [key, value] of Object.entries(body)) {
+    const ok =
+      (INJECT_TEXT.includes(key) && typeof value === 'string') ||
+      (INJECT_INT.includes(key) && isInt(value)) ||
+      (key === 'tramerAmount' && (value === null || isInt(value))) ||
+      (INJECT_PARTS.includes(key) && isStrArr(value)) ||
+      (key === 'discount' && typeof value === 'number' && Number.isFinite(value));
+    if (!ok) return `invalid field: ${key}`;
+  }
+  return null;
+}
+
+/** /__patch gövdesini doğrular: yalnızca price (tamsayı >= 0) ve status. */
+export function validatePatch(body: unknown): string | null {
+  if (!isPlainObject(body)) return 'body must be a JSON object';
+  for (const [key, value] of Object.entries(body)) {
+    if (key === 'price' && isInt(value) && value >= 0) continue;
+    if (key === 'status' && (value === 'ACTIVE' || value === 'REMOVED')) continue;
+    return `invalid field: ${key}`;
+  }
+  return null;
+}
+
 export interface DemoSite {
   app: Express;
   store: DemoStore;
@@ -39,9 +72,17 @@ export function createDemoSite(opts: StoreOptions & { pageSize?: number }): Demo
   });
 
   app.post('/__tick', (_req, res) => void res.json(store.tick()));
-  app.post('/__inject', (req, res) => void res.status(201).json(store.inject(req.body ?? {})));
+  app.post('/__inject', (req, res) => {
+    const body = req.body ?? {};
+    const error = validateInject(body);
+    if (error) return void res.status(400).json({ error });
+    res.status(201).json(store.inject(body));
+  });
   app.post('/__patch/:id', (req, res) => {
-    const listing = store.patch(req.params.id, req.body ?? {});
+    const body = req.body ?? {};
+    const error = validatePatch(body);
+    if (error) return void res.status(400).json({ error });
+    const listing = store.patch(req.params.id, body);
     if (!listing) return void res.status(404).json({ error: 'not found' });
     res.json(listing);
   });

@@ -45,13 +45,19 @@ export function fairPrice(m: CatalogModel, year: number, km: number, currentYear
 
 export const roundPrice = (n: number) => Math.round(n / 1000) * 1000;
 
+/** Hiçbir ilan fiyatı bu değerin altına düşmez (TL). */
+export const MIN_PRICE = 50_000;
+
+/** İndirim oranını [0, 0.9] aralığına sıkıştırır. */
+export const clampDiscount = (d: number) => Math.min(0.9, Math.max(0, d));
+
 export function generateListing(rng: Rng, id: string, createdAt: number, currentYear: number, discount?: number): DemoListing {
   const m = pick(rng, CATALOG);
   const year = currentYear - Math.floor(rng() * 12);
   const age = currentYear - year;
   const km = age === 0 ? Math.round(rng() * 5000) : Math.round(age * 15_000 * (0.6 + rng() * 0.8));
   const fair = fairPrice(m, year, km, currentYear);
-  const factor = discount !== undefined ? 1 - discount : 0.92 + rng() * 0.16;
+  const factor = discount !== undefined ? 1 - clampDiscount(discount) : 0.92 + rng() * 0.16;
   const damaged = rng() < 0.2;
   return {
     id,
@@ -60,7 +66,7 @@ export function generateListing(rng: Rng, id: string, createdAt: number, current
     trim: pick(rng, m.trims),
     year,
     km,
-    price: roundPrice(fair * factor),
+    price: Math.max(MIN_PRICE, roundPrice(fair * factor)),
     fuel: pick(rng, m.fuels),
     transmission: pick(rng, TRANSMISSIONS),
     city: pick(rng, CITIES),
