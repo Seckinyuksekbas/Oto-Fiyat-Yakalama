@@ -14,4 +14,21 @@ export default tseslint.config(
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
     },
   },
+  {
+    files: ['apps/api/src/modules/me/**/*.ts'],
+    ignores: ['apps/api/src/modules/me/**/*.repository.ts'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: "MemberExpression[property.name='prisma']",
+          message: '/me modüllerinde veri erişimi yalnızca userId ile kapsamlanmış *.repository.ts üzerinden yapılır.',
+        },
+        {
+          selector: "Identifier[name='PrismaService']",
+          message: '/me modüllerinde PrismaService yerine *.repository.ts kullanın.',
+        },
+      ],
+    },
+  },
 );
