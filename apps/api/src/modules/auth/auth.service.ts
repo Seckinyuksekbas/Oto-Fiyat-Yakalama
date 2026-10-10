@@ -5,6 +5,7 @@ import { AuditService } from '../../common/audit/audit.service';
 import type { ClientMeta } from '../../common/client-meta';
 import { AppError, Errors } from '../../common/errors/app-error';
 import { PrismaService } from '../../infra/prisma.service';
+import { EmailVerificationService } from './email-verification.service';
 import { LOCK_THRESHOLD, LoginAttemptService } from './login-attempt.service';
 import { PasswordService } from './password.service';
 import { toPublicUser, type PublicUser } from './public-user';
@@ -34,6 +35,7 @@ export class AuthService {
     private readonly sessions: SessionService,
     private readonly attempts: LoginAttemptService,
     private readonly audit: AuditService,
+    private readonly verification: EmailVerificationService,
   ) {}
 
   async register(input: RegisterInput, meta: ClientMeta): Promise<AuthResult> {
@@ -57,6 +59,7 @@ export class AuthService {
       if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') throw emailTaken();
       throw err;
     }
+    await this.verification.sendFor(user);
     return this.startSession(user, meta);
   }
 

@@ -16,6 +16,7 @@ import { InfraModule } from './infra/infra.module';
 import { RedisService } from './infra/redis.service';
 import { AuthModule } from './modules/auth/auth.module';
 import { HealthModule } from './modules/health/health.module';
+import { MailModule } from './modules/mail/mail.module';
 import { MeModule } from './modules/me/me.module';
 
 @Module({
@@ -25,6 +26,7 @@ import { MeModule } from './modules/me/me.module';
     InfraModule,
     CryptoModule,
     AuditModule,
+    MailModule,
     ThrottlerModule.forRootAsync({
       inject: [RedisService],
       useFactory: (redis: RedisService) => ({

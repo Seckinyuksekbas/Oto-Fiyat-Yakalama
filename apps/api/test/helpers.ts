@@ -7,6 +7,7 @@ import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/bootstrap';
 import { PrismaService } from '../src/infra/prisma.service';
 import { RedisService } from '../src/infra/redis.service';
+import { MailService } from '../src/modules/mail/mail.service';
 
 export async function createTestApp(): Promise<NestExpressApplication> {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
@@ -25,6 +26,7 @@ export async function resetState(app: NestExpressApplication): Promise<void> {
   );
   await app.get(RedisService).flushdb();
   await seedPlans(prisma);
+  app.get(MailService).outbox.length = 0;
 }
 
 export function newAgent(app: NestExpressApplication): TestAgent {
@@ -52,4 +54,10 @@ export function cookieFrom(res: request.Response, name: string): string | undefi
   const hit = raw?.find((c) => c.startsWith(`${name}=`));
   const value = hit?.split(';')[0].slice(name.length + 1);
   return value ? value : undefined;
+}
+
+export function tokenFromMail(text: string): string {
+  const m = text.match(/token=([A-Za-z0-9_-]+)/);
+  if (!m) throw new Error(`no token in mail: ${text}`);
+  return m[1];
 }
