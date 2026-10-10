@@ -36,15 +36,25 @@ export class SchedulerLoop implements OnApplicationBootstrap, OnModuleDestroy {
     if (this.ticking) return;
     this.ticking = true;
     try {
-      const n = await this.scheduler.tick();
-      if (n > 0) this.logger.log(`${n} tarama işi kuyruğa eklendi`);
-      await this.sweep.maybeRunNightly();
-      const requeued = await this.sweep.requeuePendingMatches();
-      if (requeued > 0) this.logger.warn(`${requeued} eşleştirme olayı yeniden kuyruğa alındı`);
-    } catch (err) {
-      this.logger.error(`Scheduler tick başarısız: ${err instanceof Error ? err.message : String(err)}`);
+      await this.step('Scheduler tick', async () => {
+        const n = await this.scheduler.tick();
+        if (n > 0) this.logger.log(`${n} tarama işi kuyruğa eklendi`);
+      });
+      await this.step('Gece yeniden analizi', () => this.sweep.maybeRunNightly());
+      await this.step('Eşleştirme yeniden gönderimi', async () => {
+        const requeued = await this.sweep.requeuePendingMatches();
+        if (requeued > 0) this.logger.warn(`${requeued} eşleştirme olayı yeniden kuyruğa alındı`);
+      });
     } finally {
       this.ticking = false;
+    }
+  }
+
+  private async step(name: string, fn: () => Promise<unknown>): Promise<void> {
+    try {
+      await fn();
+    } catch (err) {
+      this.logger.error(`${name} başarısız: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { startOfIstanbulDay } from '@oto/shared';
+import { ISTANBUL_OFFSET_MS, startOfIstanbulDay } from '@oto/shared';
 import { MatchDispatcher } from '../analysis/match-dispatcher.service';
 import { PrismaService } from '../infra/prisma.service';
 import { RedisService } from '../infra/redis.service';
@@ -8,7 +8,6 @@ import { QueueRegistry } from '../queues/queue-registry';
 
 export const NIGHTLY_HOUR_ISTANBUL = 3;
 export const MATCH_REQUEUE_AFTER_MS = 60_000;
-const ISTANBUL_OFFSET_MS = 3 * 60 * 60 * 1000;
 const PAGE = 500;
 
 export function istanbulDayKey(d: Date): string {
@@ -17,7 +16,7 @@ export function istanbulDayKey(d: Date): string {
 }
 
 export function istanbulHour(d: Date): number {
-  return (d.getUTCHours() + 3) % 24;
+  return new Date(d.getTime() + ISTANBUL_OFFSET_MS).getUTCHours();
 }
 
 @Injectable()
@@ -35,9 +34,16 @@ export class AnalysisSweepService {
   async maybeRunNightly(now: Date = new Date()): Promise<number> {
     if (istanbulHour(now) < NIGHTLY_HOUR_ISTANBUL) return 0;
     const dayKey = istanbulDayKey(now);
-    const claimed = await this.redis.set(`analysis:nightly:${dayKey}`, '1', 'EX', 2 * 24 * 60 * 60, 'NX');
+    const key = `analysis:nightly:${dayKey}`;
+    const claimed = await this.redis.set(key, '1', 'EX', 2 * 24 * 60 * 60, 'NX');
     if (claimed !== 'OK') return 0;
-    const n = await this.enqueueRefreshAll(dayKey);
+    let n: number;
+    try {
+      n = await this.enqueueRefreshAll(dayKey);
+    } catch (err) {
+      await this.redis.del(key); // iş id'leri güne özgü olduğundan yeniden deneme güvenlidir
+      throw err;
+    }
     this.logger.log(`Gece yeniden analizi: ${n} ilan kuyruğa eklendi (${dayKey})`);
     return n;
   }
