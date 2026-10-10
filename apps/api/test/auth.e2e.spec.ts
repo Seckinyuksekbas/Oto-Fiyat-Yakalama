@@ -2,6 +2,7 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { PrismaService } from '../src/infra/prisma.service';
+import { RedisService } from '../src/infra/redis.service';
 import { cookieFrom, createTestApp, newAgent, registerUser, resetState } from './helpers';
 
 let app: NestExpressApplication;
@@ -105,6 +106,31 @@ describe('login', () => {
     }
     expect(statuses.slice(0, 10).every((s) => s === 401)).toBe(true);
     expect(statuses[10]).toBe(429);
+  });
+});
+
+describe('rate limit & lockout hardening', () => {
+  it('keys /auth by IP even when callers hold valid access tokens (no per-account bypass)', async () => {
+    const a = await registerUser(app, { email: 'rlauth-a@test.com' });
+    const b = await registerUser(app, { email: 'rlauth-b@test.com' });
+    const statuses: number[] = [];
+    for (let i = 0; i < 11; i++) {
+      const agent = i % 2 === 0 ? a.agent : b.agent; // two accounts, same IP
+      const res = await agent.post('/api/v1/auth/login').send({ email: `rla${i}@test.com`, password: 'whatever-123' });
+      statuses.push(res.status);
+    }
+    expect(statuses.slice(0, 10).every((s) => s === 401)).toBe(true);
+    expect(statuses[10]).toBe(429); // 11th login from this IP
+  });
+
+  it('gives the failure counter a positive TTL of at most 15 minutes', async () => {
+    await http().post('/api/v1/auth/login').set(xhr).send({ email: 'ttl@test.com', password: 'wrong-wrong-1' });
+    const redis = app.get(RedisService);
+    const keys = await redis.keys('auth:fail:*');
+    expect(keys).toHaveLength(1);
+    const ttl = await redis.ttl(keys[0]);
+    expect(ttl).toBeGreaterThan(0);
+    expect(ttl).toBeLessThanOrEqual(900);
   });
 });
 

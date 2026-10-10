@@ -24,9 +24,11 @@ export class LoginAttemptService {
   /** Pencere ilk hatada başlar; yeni hatalar süreyi uzatmaz. */
   async recordFailure(k: AttemptKey): Promise<number> {
     const key = this.key(k);
-    const count = await this.redis.incr(key);
-    if (count === 1) await this.redis.expire(key, WINDOW_SEC);
-    return count;
+    // INCR + EXPIRE NX in one MULTI: atomic, so a crash can never leave a TTL-less counter.
+    const results = await this.redis.multi().incr(key).expire(key, WINDOW_SEC, 'NX').exec();
+    const [err, count] = results?.[0] ?? [new Error('redis multi failed'), 0];
+    if (err) throw err;
+    return Number(count);
   }
 
   async clear(k: AttemptKey): Promise<void> {

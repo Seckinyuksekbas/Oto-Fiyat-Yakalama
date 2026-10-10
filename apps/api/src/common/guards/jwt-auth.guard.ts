@@ -14,14 +14,15 @@ export class JwtAuthGuard implements CanActivate {
   ) {}
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
+    // Public routes never need req.user; skipping the token keeps throttling keyed by IP there.
+    if (this.reflector.getAllAndOverride<boolean>(IS_PUBLIC, [ctx.getHandler(), ctx.getClass()])) return true;
     const req = ctx.switchToHttp().getRequest<Request>();
     const token: unknown = req.cookies?.[ACCESS_COOKIE];
     if (typeof token === 'string' && token.length > 0) {
       const claims = await this.tokens.verifyAccess(token);
       if (claims) req.user = { id: claims.userId, role: claims.role, sessionId: claims.sessionId };
     }
-    const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC, [ctx.getHandler(), ctx.getClass()]);
-    if (!isPublic && !req.user) throw Errors.unauthenticated();
+    if (!req.user) throw Errors.unauthenticated();
     return true;
   }
 }
