@@ -1,0 +1,12 @@
+import { randomBytes } from 'node:crypto';
+import { inject } from 'vitest';
+
+Object.assign(process.env, {
+  NODE_ENV: 'test',
+  LOG_LEVEL: 'silent',
+  ROLE: 'worker',
+  DATABASE_URL: inject('databaseUrl'),
+  REDIS_URL: inject('redisUrl'),
+  DATA_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
+  BOT_CONTACT_URL: 'http://localhost:3000/bot',
+});
