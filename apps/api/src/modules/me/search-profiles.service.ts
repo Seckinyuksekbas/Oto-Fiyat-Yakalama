@@ -44,7 +44,7 @@ export class SearchProfilesService {
   async create(userId: string, input: CreateSearchProfileInput): Promise<SearchProfileView> {
     const lim = await this.limits.forUser(userId);
     const p = withProfileDefaults(input);
-    this.assertChannels(p, lim);
+    this.assertChannels(p.channels, lim);
     const created = await this.repo.createWithinLimit(userId, p, lim.maxSearchProfiles);
     if (!created) throw this.limitError(lim);
     return toSearchProfileView(created);
@@ -58,7 +58,8 @@ export class SearchProfilesService {
       throw Errors.validation(merged.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })));
     }
     const p = withProfileDefaults(merged.data);
-    this.assertChannels(p, await this.limits.forUser(userId));
+    // Yalnızca yeni eklenen kanallar plana karşı denetlenir (plan düşse de mevcut kanal yeniden adlandırmayı engellemez)
+    this.assertChannels(p.channels.filter((c) => !existing.channels.includes(c)), await this.limits.forUser(userId));
     const updated = await this.repo.update(userId, id, p);
     if (!updated) throw Errors.notFound();
     return toSearchProfileView(updated);
@@ -82,8 +83,8 @@ export class SearchProfilesService {
     if (!(await this.repo.delete(userId, id))) throw Errors.notFound();
   }
 
-  private assertChannels(p: NormalizedProfile, lim: UserLimits): void {
-    const missing = p.channels.find((c) => !lim.limits.channels.includes(c));
+  private assertChannels(channels: readonly string[], lim: UserLimits): void {
+    const missing = channels.find((c) => !lim.limits.channels.includes(c));
     if (missing) throw new AppError(ErrorCode.LIMIT_REACHED, 403, 'Planınız bu bildirim kanalını içermiyor', { channel: missing });
   }
 

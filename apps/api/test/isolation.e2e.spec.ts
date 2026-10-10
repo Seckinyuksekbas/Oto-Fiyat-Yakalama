@@ -56,17 +56,24 @@ const CASES: Record<string, Case> = {
     await aStillLogsIn(A);
   },
   'GET /me/search-profiles': async ({ A, B }) => {
-    await A.agent.post('/api/v1/me/search-profiles').send({ name: 'A profili' });
+    const created = await A.agent.post('/api/v1/me/search-profiles').send({ name: 'A profili' });
+    expect(created.status).toBe(201);
     const res = await B.agent.get('/api/v1/me/search-profiles');
     expect(res.body.items).toEqual([]);
+    expect((await A.agent.get('/api/v1/me/search-profiles')).body.items.map((p: { id: string }) => p.id)).toEqual([created.body.id]);
   },
   'POST /me/search-profiles': async ({ A, B }) => {
-    await B.agent.post('/api/v1/me/search-profiles').send({ name: 'B profili' });
+    const created = await B.agent.post('/api/v1/me/search-profiles').send({ name: 'B profili' });
+    expect(created.status).toBe(201);
     expect((await A.agent.get('/api/v1/me/search-profiles')).body.items).toEqual([]);
+    expect((await B.agent.get('/api/v1/me/search-profiles')).body.items.map((p: { id: string }) => p.id)).toEqual([created.body.id]);
   },
   'GET /me/search-profiles/:id': async ({ A, B }) => {
-    const { id } = (await A.agent.post('/api/v1/me/search-profiles').send({ name: 'A' })).body;
+    const created = await A.agent.post('/api/v1/me/search-profiles').send({ name: 'A' });
+    expect(created.status).toBe(201);
+    const { id } = created.body;
     expect((await B.agent.get(`/api/v1/me/search-profiles/${id}`)).status).toBe(404);
+    expect((await A.agent.get(`/api/v1/me/search-profiles/${id}`)).status).toBe(200);
   },
   'PATCH /me/search-profiles/:id': async ({ A, B }) => {
     const { id } = (await A.agent.post('/api/v1/me/search-profiles').send({ name: 'A' })).body;

@@ -3,7 +3,6 @@ import {
   startOfIstanbulDay,
   type ChangePasswordInput,
   type DeleteMeInput,
-  type PlanLimits,
   type UpdateMeInput,
 } from '@oto/shared';
 import { AppError, Errors } from '../../common/errors/app-error';
@@ -11,12 +10,12 @@ import type { AuthUser } from '../auth/auth-user';
 import { PasswordService } from '../auth/password.service';
 import { toPublicUser, type PublicUser } from '../auth/public-user';
 import { SessionService, type SessionView } from '../auth/session.service';
-import { LimitsService } from './limits.service';
+import { LimitsService, type UserSubscriptionInfo } from './limits.service';
 import { MeRepository } from './me.repository';
 
 export interface MeProfile {
   user: PublicUser;
-  subscription: { planCode: string; planName: string; limits: PlanLimits; status: string; endsAt: Date | null } | null;
+  subscription: UserSubscriptionInfo;
   usage: { searchProfiles: number; notificationsToday: number };
 }
 
@@ -30,26 +29,12 @@ export class MeService {
   ) {}
 
   async getProfile(userId: string): Promise<MeProfile> {
-    const user = await this.repo.findUser(userId);
-    if (!user) throw Errors.unauthenticated();
-    const [sub, searchProfiles, notificationsToday] = await Promise.all([
-      this.repo.findActiveSubscription(userId),
+    const [lim, searchProfiles, notificationsToday] = await Promise.all([
+      this.limits.forUser(userId),
       this.repo.countSearchProfiles(userId),
       this.repo.countExternalNotificationsSince(userId, startOfIstanbulDay(new Date())),
     ]);
-    return {
-      user: toPublicUser(user),
-      subscription: sub
-        ? {
-            planCode: sub.plan.code,
-            planName: sub.plan.name,
-            limits: (await this.limits.forUser(userId)).limits,
-            status: sub.status,
-            endsAt: sub.endsAt,
-          }
-        : null,
-      usage: { searchProfiles, notificationsToday },
-    };
+    return { user: toPublicUser(lim.user), subscription: lim.subscription, usage: { searchProfiles, notificationsToday } };
   }
 
   async updateName(userId: string, input: UpdateMeInput): Promise<{ user: PublicUser }> {

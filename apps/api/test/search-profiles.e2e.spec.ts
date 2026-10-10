@@ -67,6 +67,19 @@ describe('/me/search-profiles', () => {
     expect(res.body.error).toMatchObject({ code: 'LIMIT_REACHED', details: { channel: 'TELEGRAM' } });
   });
 
+  it('patch only checks newly added channels against the plan', async () => {
+    const A = await registerUser(app);
+    await verifyEmail(app, A.user.id);
+    const prisma = app.get(PrismaService);
+    const { id } = (await A.agent.post(URL).send({ name: 'x', channels: ['TELEGRAM'] })).body;
+    await prisma.userSubscription.updateMany({ where: { userId: A.user.id }, data: { limitOverrides: { channels: ['IN_APP'] } } });
+    const rename = await A.agent.patch(`${URL}/${id}`).send({ name: 'yeni ad' });
+    expect(rename.status).toBe(200);
+    expect(rename.body.channels).toEqual(['IN_APP', 'TELEGRAM']);
+    const { id: id2 } = (await A.agent.post(URL).send({ name: 'y' })).body;
+    expect((await A.agent.patch(`${URL}/${id2}`).send({ channels: ['TELEGRAM'] })).status).toBe(403);
+  });
+
   it('patch merges, re-validates cross fields and keeps IN_APP', async () => {
     const A = await registerUser(app);
     const { id } = (await A.agent.post(URL).send({ name: 'x', yearMin: 2018 })).body;
