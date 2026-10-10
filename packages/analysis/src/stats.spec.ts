@@ -20,6 +20,14 @@ describe('quantile / median', () => {
   it('throws on empty input', () => {
     expect(() => quantile([], 0.5)).toThrow();
   });
+
+  it('throws when p is outside [0, 1] or not finite', () => {
+    const s = [1, 2, 3];
+    expect(() => quantile(s, -0.1)).toThrow('quantile: p 0..1 aralığında olmalı');
+    expect(() => quantile(s, 1.1)).toThrow('quantile: p 0..1 aralığında olmalı');
+    expect(() => quantile(s, Number.NaN)).toThrow('quantile: p 0..1 aralığında olmalı');
+    expect(() => quantile(s, Number.POSITIVE_INFINITY)).toThrow('quantile: p 0..1 aralığında olmalı');
+  });
 });
 
 describe('theilSenSlope', () => {
@@ -37,6 +45,24 @@ describe('theilSenSlope', () => {
   it('samples large inputs deterministically', () => {
     const pts = Array.from({ length: 1000 }, (_, i) => ({ x: i, y: 1000 - 2 * i }));
     expect(theilSenSlope(pts)).toBe(-2);
+    expect(theilSenSlope(pts)).toBe(theilSenSlope(pts));
+  });
+
+  it('uses only the sampled stride points for large inputs', () => {
+    const pts = Array.from({ length: 1000 }, (_, i) => ({ x: i, y: 1000 - 2 * i }));
+    const sampled = new Set(Array.from({ length: 300 }, (_, k) => Math.floor((k * 1000) / 300)));
+    for (let i = 0; i < pts.length; i++) {
+      if (!sampled.has(i)) pts[i] = { x: i, y: 10_000_000 };
+    }
+    expect(theilSenSlope(pts)).toBe(-2);
+  });
+
+  it('is affected by outliers when no sampling happens (300 points)', () => {
+    const pts = Array.from({ length: 300 }, (_, i) => ({ x: i, y: 1000 - 2 * i }));
+    for (let i = 0; i < pts.length; i++) {
+      if (i % 10 < 7) pts[i] = { x: i, y: 10_000_000 };
+    }
+    expect(theilSenSlope(pts)).not.toBe(-2);
   });
 });
 
