@@ -19,12 +19,15 @@ export class PasswordConfirmationService {
 
   async assert(userId: string, password: string): Promise<void> {
     const key = `auth:confirm-fail:${userId}`;
-    if (Number((await this.redis.get(key)) ?? 0) >= MAX_FAILURES) {
+    // Deneme hakkı doğrulamadan ÖNCE atomik olarak ayrılır; eşzamanlı istekler sınırı aşamaz.
+    const res = await this.redis.multi().incr(key).expire(key, WINDOW_SEC, 'NX').exec();
+    const n = Number(res?.[0]?.[1] ?? 0);
+    if ((await this.redis.ttl(key)) === -1) await this.redis.expire(key, WINDOW_SEC);
+    if (n > MAX_FAILURES) {
       throw new AppError(ErrorCode.RATE_LIMITED, 429, 'Çok fazla hatalı deneme. Lütfen 15 dakika sonra tekrar deneyin');
     }
     const u = await this.prisma.user.findFirst({ where: { id: userId, status: { not: 'DELETED' } }, select: { passwordHash: true } });
     if (!u?.passwordHash || !(await this.passwords.verify(u.passwordHash, password))) {
-      await this.redis.multi().incr(key).expire(key, WINDOW_SEC, 'NX').exec();
       throw Errors.invalidCredentials(400);
     }
     await this.redis.del(key);

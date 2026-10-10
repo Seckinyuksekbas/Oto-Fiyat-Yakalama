@@ -6,7 +6,7 @@ import { MailService } from '../src/modules/mail/mail.service';
 import { createTestApp, newAgent, registerUser, resetState, tokenFromMail } from './helpers';
 
 let app: NestExpressApplication;
-const flush = () => new Promise((r) => setTimeout(r, 50));
+const flush = () => new Promise((r) => setTimeout(r, 150));
 
 beforeAll(async () => {
   app = await createTestApp();
@@ -52,5 +52,42 @@ describe('password confirmation limiter', () => {
     expect(locked.status).toBe(429);
     expect(locked.body.error.code).toBe('RATE_LIMITED');
     expect((await A.agent.delete('/api/v1/me').send({ password: A.password })).status).toBe(429);
+  });
+
+  const bad = (A: Awaited<ReturnType<typeof registerUser>>, pw = 'wrong-password-x') =>
+    A.agent.post('/api/v1/me/change-password').send({ currentPassword: pw, newPassword: 'another-strong-pass' });
+
+  it('a success resets the counter', async () => {
+    const A = await registerUser(app);
+    for (let i = 0; i < 4; i++) expect((await bad(A)).status).toBe(400);
+    expect((await A.agent.post('/api/v1/me/change-password').send({ currentPassword: A.password, newPassword: 'another-strong-pass' })).status).toBe(204);
+    for (let i = 0; i < 4; i++) expect((await bad(A, 'wrong-password-y')).status).toBe(400);
+  });
+
+  it('cap holds under parallel attempts', async () => {
+    const A = await registerUser(app);
+    const rs = await Promise.all(Array.from({ length: 8 }, () => bad(A)));
+    const statuses = rs.map((r) => r.status);
+    expect(statuses.filter((s) => s === 400).length).toBeLessThanOrEqual(5);
+    expect(statuses.filter((s) => s === 429).length).toBeGreaterThanOrEqual(3);
+    expect((await A.agent.post('/api/v1/me/change-password').send({ currentPassword: A.password, newPassword: 'another-strong-pass' })).status).toBe(429);
+  });
+});
+
+describe('resend-verification edge cases', () => {
+  it('no mail for suspended users; mixed-case email shares the cooldown', async () => {
+    const A = await registerUser(app);
+    await flush();
+    const outbox = app.get(MailService).outbox;
+    outbox.length = 0;
+    await app.get(PrismaService).user.update({ where: { id: A.user.id }, data: { status: 'SUSPENDED' } });
+    expect((await newAgent(app).post('/api/v1/auth/resend-verification').send({ email: A.email })).status).toBe(204);
+    await flush();
+    expect(outbox).toHaveLength(0);
+
+    await app.get(PrismaService).user.update({ where: { id: A.user.id }, data: { status: 'ACTIVE' } });
+    expect((await newAgent(app).post('/api/v1/auth/resend-verification').send({ email: A.email.toUpperCase() })).status).toBe(204);
+    await flush();
+    expect(outbox).toHaveLength(0); // same cooldown key consumed by the first request
   });
 });
