@@ -4,12 +4,14 @@ import { CollectionModule } from './collection/collection.module';
 import { HeartbeatService } from './common/heartbeat.service';
 import { CoreModule } from './core.module';
 import { MatchingModule } from './matching/matching.module';
+import { NotificationsModule } from './notifications/notifications.module';
 import { AnalyzeWorkerHost } from './processors/analyze-worker.host';
 import { MatchWorkerHost } from './processors/match-worker.host';
+import { NotifyWorkerHost } from './processors/notify-worker.host';
 import { ScrapeWorkerHost } from './processors/scrape-worker.host';
 
 @Module({
-  imports: [CoreModule, CollectionModule, AnalysisModule, MatchingModule],
-  providers: [HeartbeatService, ScrapeWorkerHost, AnalyzeWorkerHost, MatchWorkerHost],
+  imports: [CoreModule, CollectionModule, AnalysisModule, MatchingModule, NotificationsModule],
+  providers: [HeartbeatService, ScrapeWorkerHost, AnalyzeWorkerHost, MatchWorkerHost, NotifyWorkerHost],
 })
 export class WorkerAppModule {}

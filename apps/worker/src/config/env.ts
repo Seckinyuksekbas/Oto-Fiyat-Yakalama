@@ -16,6 +16,10 @@ export const envSchema = z
     SCRAPE_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(2),
     ANALYZE_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
     MATCH_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
+    NOTIFY_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(8),
+    TELEGRAM_BOT_TOKEN: z.string().min(1).optional(),
+    TELEGRAM_API_BASE: z.string().url().default('https://api.telegram.org'),
+    PUBLIC_BASE_URL: z.string().url().default('http://localhost:3000'),
   })
   .superRefine((env, ctx) => {
     if (env.NODE_ENV !== 'production') return;

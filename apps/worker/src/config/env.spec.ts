@@ -26,6 +26,15 @@ describe('worker env', () => {
     expect(parseEnv({ ...base, MATCH_CONCURRENCY: '8' }).MATCH_CONCURRENCY).toBe(8);
   });
 
+  it('bounds NOTIFY_CONCURRENCY and defaults telegram settings', () => {
+    expect(parseEnv(base).NOTIFY_CONCURRENCY).toBe(8);
+    expect(() => parseEnv({ ...base, NOTIFY_CONCURRENCY: '0' })).toThrow(/NOTIFY_CONCURRENCY/);
+    expect(() => parseEnv({ ...base, NOTIFY_CONCURRENCY: '33' })).toThrow(/NOTIFY_CONCURRENCY/);
+    expect(parseEnv(base).TELEGRAM_BOT_TOKEN).toBeUndefined();
+    expect(parseEnv(base).TELEGRAM_API_BASE).toBe('https://api.telegram.org');
+    expect(parseEnv(base).PUBLIC_BASE_URL).toBe('http://localhost:3000');
+  });
+
   it('rejects an unknown role and missing variables', () => {
     expect(() => parseEnv({ ...base, ROLE: 'boss' })).toThrow(/ROLE/);
     expect(() => parseEnv({})).toThrow(/DATABASE_URL/);

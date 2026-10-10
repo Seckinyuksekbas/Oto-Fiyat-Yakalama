@@ -20,6 +20,7 @@
     "@oto/db": "workspace:*",
     "@oto/server-common": "workspace:*",
     "@oto/shared": "workspace:*",
+    "@oto/telegram": "workspace:*",
     "bullmq": "^5.34.0",
     "ioredis": "^5.4.2",
     "nestjs-pino": "^4.3.0",
