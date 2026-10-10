@@ -1,0 +1,566 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [citext]
+}
+
+enum Role {
+  USER
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELED
+  EXPIRED
+}
+
+enum ChannelType {
+  IN_APP
+  TELEGRAM
+  EMAIL
+}
+
+enum SourceKind {
+  HTTP
+  BROWSER
+  API
+  FEED
+}
+
+enum PermissionType {
+  LICENSED_API
+  PARTNER_FEED
+  TOS_PERMITTED
+  TEST
+}
+
+enum SourceHealth {
+  HEALTHY
+  DEGRADED
+  DOWN
+  PAUSED
+}
+
+enum JobTrigger {
+  SCHEDULED
+  MANUAL
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  PARTIAL
+}
+
+enum ScrapeErrorKind {
+  NETWORK
+  TIMEOUT
+  HTTP_4XX
+  HTTP_5XX
+  BLOCKED
+  PARSE
+  VALIDATION
+}
+
+enum Fuel {
+  GASOLINE
+  DIESEL
+  LPG
+  HYBRID
+  ELECTRIC
+  OTHER
+}
+
+enum Transmission {
+  MANUAL
+  AUTOMATIC
+  SEMI_AUTOMATIC
+}
+
+enum ListingStatus {
+  ACTIVE
+  REMOVED
+}
+
+enum Confidence {
+  HIGH
+  MEDIUM
+  LOW
+  INSUFFICIENT
+}
+
+enum AnalysisFlag {
+  DAMAGED
+  SUSPICIOUS_LOW
+  HIGH_DISPERSION
+}
+
+enum ProfileStatus {
+  ACTIVE
+  PAUSED
+}
+
+enum MatchReason {
+  NEW
+  PRICE_DROP
+  RELIST
+}
+
+enum NotificationKind {
+  MATCH
+  SYSTEM_ALERT
+  SECURITY
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  SKIPPED_LIMIT
+}
+
+enum LogLevel {
+  WARN
+  ERROR
+}
+
+// ---------- Kimlik ve abonelik ----------
+
+model User {
+  id                      String                   @id @default(cuid())
+  email                   String                   @unique @db.Citext
+  passwordHash            String
+  name                    String
+  role                    Role                     @default(USER)
+  status                  UserStatus               @default(ACTIVE)
+  emailVerifiedAt         DateTime?
+  kvkkAcceptedAt          DateTime?
+  lastLoginAt             DateTime?
+  createdAt               DateTime                 @default(now())
+  updatedAt               DateTime                 @updatedAt
+  sessions                Session[]
+  emailVerificationTokens EmailVerificationToken[]
+  passwordResetTokens     PasswordResetToken[]
+  subscriptions           UserSubscription[]
+  channels                NotificationChannel[]
+  telegramLinkTokens      TelegramLinkToken[]
+  searchProfiles          SearchProfile[]
+  matches                 ListingMatch[]
+  notifications           Notification[]
+  favorites               Favorite[]
+  auditLogs               AuditLog[]               @relation("AuditActor")
+
+  @@index([status, role])
+}
+
+model Session {
+  id               String    @id @default(cuid())
+  userId           String
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  familyId         String
+  refreshTokenHash String    @unique
+  userAgent        String?
+  ip               String?
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  rotatedAt        DateTime?
+  createdAt        DateTime  @default(now())
+
+  @@index([userId])
+  @@index([familyId])
+}
+
+model EmailVerificationToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+}
+
+model SubscriptionPlan {
+  id            String             @id @default(cuid())
+  code          String             @unique
+  name          String
+  priceMonthly  Int                @default(0)
+  isActive      Boolean            @default(true)
+  limits        Json
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  subscriptions UserSubscription[]
+}
+
+model UserSubscription {
+  id             String             @id @default(cuid())
+  userId         String
+  user           User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  planId         String
+  plan           SubscriptionPlan   @relation(fields: [planId], references: [id])
+  status         SubscriptionStatus @default(ACTIVE)
+  startsAt       DateTime           @default(now())
+  endsAt         DateTime?
+  limitOverrides Json?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  @@index([userId, status])
+}
+
+// ---------- Bildirim kanalları ----------
+
+model NotificationChannel {
+  id         String      @id @default(cuid())
+  userId     String
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type       ChannelType
+  config     String? // AES-256-GCM "v1:iv:tag:ct"
+  isVerified Boolean     @default(false)
+  isEnabled  Boolean     @default(true)
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  @@unique([userId, type])
+}
+
+model TelegramLinkToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash  String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+}
+
+// ---------- Kaynak ve toplama ----------
+
+model DataSource {
+  id                   Int             @id @default(autoincrement())
+  code                 String          @unique
+  name                 String
+  adapterKey           String
+  kind                 SourceKind
+  permissionType       PermissionType
+  permissionNote       String?
+  permissionVerifiedAt DateTime?
+  isActive             Boolean         @default(false)
+  intervalSec          Int             @default(300)
+  maxConcurrency       Int             @default(1)
+  minRequestGapMs      Int             @default(2000)
+  config               Json            @default("{}")
+  proxyConfigId        Int?
+  proxyConfig          ProxyConfig?    @relation(fields: [proxyConfigId], references: [id], onDelete: SetNull)
+  health               SourceHealth    @default(HEALTHY)
+  lastSuccessAt        DateTime?
+  lastErrorAt          DateTime?
+  consecutiveFailures  Int             @default(0)
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+  listings             Listing[]
+  jobs                 CollectionJob[]
+  errors               ScrapeError[]
+  issues               ListingIssue[]
+}
+
+model ProxyConfig {
+  id            Int          @id @default(autoincrement())
+  name          String
+  urlEncrypted  String
+  isEnabled     Boolean      @default(true)
+  lastCheckAt   DateTime?
+  lastLatencyMs Int?
+  lastError     String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  sources       DataSource[]
+}
+
+model CollectionJob {
+  id              Int           @id @default(autoincrement())
+  sourceId        Int
+  source          DataSource    @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  trigger         JobTrigger
+  dryRun          Boolean       @default(false)
+  status          JobStatus     @default(QUEUED)
+  startedAt       DateTime?
+  finishedAt      DateTime?
+  pagesFetched    Int           @default(0)
+  listingsSeen    Int           @default(0)
+  listingsNew     Int           @default(0)
+  listingsUpdated Int           @default(0)
+  errorsCount     Int           @default(0)
+  avgResponseMs   Int?
+  errorSummary    String?
+  createdAt       DateTime      @default(now())
+  errors          ScrapeError[]
+
+  @@index([sourceId, createdAt])
+  @@index([status])
+}
+
+model ScrapeError {
+  id        Int             @id @default(autoincrement())
+  jobId     Int?
+  job       CollectionJob?  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  sourceId  Int
+  source    DataSource      @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  kind      ScrapeErrorKind
+  url       String?
+  message   String
+  transient Boolean
+  createdAt DateTime        @default(now())
+
+  @@index([sourceId, createdAt])
+}
+
+// ---------- İlan ----------
+
+model Listing {
+  id               Int                   @id @default(autoincrement())
+  sourceId         Int
+  source           DataSource            @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  externalId       String
+  url              String
+  title            String
+  imageUrl         String?
+  make             String
+  model            String
+  trim             String?
+  year             Int
+  km               Int
+  fuel             Fuel
+  transmission     Transmission
+  bodyType         String?
+  color            String?
+  city             String?
+  sellerType       String?
+  damageInfo       Json?
+  price            BigInt
+  currency         String                @default("TRY")
+  contentHash      String
+  status           ListingStatus         @default(ACTIVE)
+  firstSeenAt      DateTime              @default(now())
+  lastSeenAt       DateTime              @default(now())
+  removedAt        DateTime?
+  relistedAt       DateTime?
+  latestAnalysisId Int?                  @unique
+  latestAnalysis   ListingAnalysis?      @relation("LatestAnalysis", fields: [latestAnalysisId], references: [id], onDelete: SetNull)
+  analyses         ListingAnalysis[]     @relation("ListingAnalyses")
+  priceHistory     ListingPriceHistory[]
+  issues           ListingIssue[]
+  matches          ListingMatch[]
+  favorites        Favorite[]
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+
+  @@unique([sourceId, externalId])
+  @@index([make, model, year])
+  @@index([status, firstSeenAt])
+  @@index([make, model, fuel, transmission, year, km])
+}
+
+model ListingPriceHistory {
+  id         Int      @id @default(autoincrement())
+  listingId  Int
+  listing    Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  price      BigInt
+  km         Int
+  observedAt DateTime @default(now())
+
+  @@index([listingId, observedAt])
+}
+
+model ListingIssue {
+  id         Int        @id @default(autoincrement())
+  sourceId   Int
+  source     DataSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  listingId  Int?
+  listing    Listing?   @relation(fields: [listingId], references: [id], onDelete: SetNull)
+  externalId String?
+  field      String
+  problem    String
+  rawSnippet String?
+  createdAt  DateTime   @default(now())
+
+  @@index([sourceId, createdAt])
+}
+
+model ListingAnalysis {
+  id               Int            @id @default(autoincrement())
+  listingId        Int
+  listing          Listing        @relation("ListingAnalyses", fields: [listingId], references: [id], onDelete: Cascade)
+  latestFor        Listing?       @relation("LatestAnalysis")
+  engineVersion    String
+  estimatedPrice   BigInt?
+  priceDiff        BigInt?
+  discountPct      Decimal?       @db.Decimal(6, 4)
+  opportunityScore Int
+  comparableCount  Int
+  confidence       Confidence
+  expansionLevel   Int?
+  flags            AnalysisFlag[]
+  explanation      Json
+  comparableIds    Int[]
+  createdAt        DateTime       @default(now())
+  matches          ListingMatch[]
+
+  @@index([listingId, createdAt])
+  @@index([confidence, opportunityScore])
+}
+
+// ---------- Kullanıcı tarafı ----------
+
+model SearchProfile {
+  id                String         @id @default(cuid())
+  userId            String
+  user              User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name              String
+  status            ProfileStatus  @default(ACTIVE)
+  make              String?
+  model             String?
+  yearMin           Int?
+  yearMax           Int?
+  priceMin          BigInt?
+  priceMax          BigInt?
+  kmMax             Int?
+  fuels             Fuel[]
+  transmissions     Transmission[]
+  cities            String[]
+  minDiscountPct    Decimal        @default(0) @db.Decimal(5, 4)
+  minConfidence     Confidence     @default(MEDIUM)
+  excludeDamaged    Boolean        @default(false)
+  notifyOnPriceDrop Boolean        @default(true)
+  priceDropPct      Decimal        @default(0.05) @db.Decimal(5, 4)
+  notifyOnRelist    Boolean        @default(false)
+  channels          ChannelType[]
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  matches           ListingMatch[]
+
+  @@index([status, make, model])
+  @@index([userId])
+}
+
+model ListingMatch {
+  id              Int             @id @default(autoincrement())
+  userId          String
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  searchProfileId String
+  searchProfile   SearchProfile   @relation(fields: [searchProfileId], references: [id], onDelete: Cascade)
+  listingId       Int
+  listing         Listing         @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  analysisId      Int
+  analysis        ListingAnalysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  reason          MatchReason
+  matchedPrice    BigInt
+  createdAt       DateTime        @default(now())
+  notifications   Notification[]
+
+  @@unique([searchProfileId, listingId, reason, matchedPrice])
+  @@index([userId, createdAt])
+}
+
+model Notification {
+  id        Int                @id @default(autoincrement())
+  userId    String
+  user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  matchId   Int?
+  match     ListingMatch?      @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  kind      NotificationKind   @default(MATCH)
+  channel   ChannelType
+  status    NotificationStatus @default(PENDING)
+  attempts  Int                @default(0)
+  lastError String?
+  payload   Json
+  sentAt    DateTime?
+  readAt    DateTime?
+  latencyMs Int?
+  createdAt DateTime           @default(now())
+
+  @@unique([matchId, channel])
+  @@index([userId, createdAt])
+  @@index([status, channel])
+}
+
+model Favorite {
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  listingId Int
+  listing   Listing  @relation(fields: [listingId], references: [id], onDelete: Cascade)
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@id([userId, listingId])
+}
+
+// ---------- Sistem ----------
+
+model AuditLog {
+  id         Int      @id @default(autoincrement())
+  actorId    String?
+  actor      User?    @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  action     String
+  targetType String?
+  targetId   String?
+  before     Json?
+  after      Json?
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([actorId, createdAt])
+  @@index([action])
+}
+
+model SystemLog {
+  id        Int      @id @default(autoincrement())
+  level     LogLevel
+  component String
+  message   String
+  context   Json?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([level, createdAt])
+}
+
+model SystemSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+model MakeModelAlias {
+  id      Int     @id @default(autoincrement())
+  rawText String  @unique
+  make    String
+  model   String
+  trim    String?
+}

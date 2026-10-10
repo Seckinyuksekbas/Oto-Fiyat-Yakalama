@@ -1,0 +1,50 @@
+{
+  "name": "@oto/api",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "build": "nest build",
+    "dev": "nest start --watch",
+    "start": "node dist/main.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:e2e": "vitest run -c vitest.e2e.config.ts"
+  },
+  "dependencies": {
+    "@nest-lab/throttler-storage-redis": "^1.1.0",
+    "@nestjs/common": "^11.0.5",
+    "@nestjs/core": "^11.0.5",
+    "@nestjs/platform-express": "^11.0.5",
+    "@nestjs/throttler": "^6.4.0",
+    "@oto/db": "workspace:*",
+    "@oto/shared": "workspace:*",
+    "argon2": "^0.41.1",
+    "cookie-parser": "^1.4.7",
+    "express": "^5.0.1",
+    "helmet": "^8.0.0",
+    "ioredis": "^5.4.2",
+    "jose": "^5.9.6",
+    "nestjs-pino": "^4.3.0",
+    "nodemailer": "^6.10.0",
+    "pino": "^9.6.0",
+    "pino-http": "^10.4.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^11.0.2",
+    "@nestjs/testing": "^11.0.5",
+    "@swc/core": "^1.10.7",
+    "@testcontainers/postgresql": "^10.18.0",
+    "@testcontainers/redis": "^10.18.0",
+    "@types/cookie-parser": "^1.4.8",
+    "@types/express": "^5.0.0",
+    "@types/nodemailer": "^6.4.17",
+    "@types/supertest": "^6.0.2",
+    "pino-pretty": "^13.0.0",
+    "supertest": "^7.0.0",
+    "unplugin-swc": "^1.5.1",
+    "vitest": "^3.0.5"
+  }
+}

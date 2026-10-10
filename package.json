@@ -1,0 +1,31 @@
+{
+  "name": "oto-fiyat-yakalama",
+  "private": true,
+  "packageManager": "pnpm@10.30.3",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build:packages": "pnpm -r --filter \"./packages/*\" build",
+    "build": "pnpm -r build",
+    "lint": "eslint .",
+    "typecheck": "pnpm build:packages && pnpm -r typecheck",
+    "test": "pnpm build:packages && pnpm -r test",
+    "test:e2e": "pnpm build:packages && pnpm -r test:e2e",
+    "db:up": "docker compose -f docker-compose.dev.yml up -d",
+    "db:down": "docker compose -f docker-compose.dev.yml down",
+    "db:migrate": "pnpm --filter @oto/db migrate:deploy",
+    "db:seed": "pnpm --filter @oto/db seed",
+    "keys:gen": "node scripts/gen-keys.mjs",
+    "dev:api": "pnpm --filter @oto/api dev"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@types/node": "^22.20.5",
+    "eslint": "^9.17.0",
+    "globals": "^15.14.0",
+    "prettier": "^3.4.2",
+    "typescript": "^5.6.3",
+    "typescript-eslint": "^8.18.0"
+  }
+}

@@ -1,0 +1,34 @@
+import js from '@eslint/js';
+import globals from 'globals';
+import tseslint from 'typescript-eslint';
+
+export default tseslint.config(
+  {
+    ignores: ['**/dist/**', '**/node_modules/**', '**/.next/**', '**/coverage/**', 'packages/db/prisma/migrations/**'],
+  },
+  js.configs.recommended,
+  ...tseslint.configs.recommended,
+  {
+    languageOptions: { globals: { ...globals.node } },
+    rules: {
+      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+    },
+  },
+  {
+    files: ['apps/api/src/modules/me/**/*.ts'],
+    ignores: ['apps/api/src/modules/me/**/*.repository.ts'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: "MemberExpression[property.name='prisma']",
+          message: '/me modüllerinde veri erişimi yalnızca userId ile kapsamlanmış *.repository.ts üzerinden yapılır.',
+        },
+        {
+          selector: "Identifier[name='PrismaService']",
+          message: '/me modüllerinde PrismaService yerine *.repository.ts kullanın.',
+        },
+      ],
+    },
+  },
+);
