@@ -8,6 +8,7 @@ const HTTP_CODE: Record<number, ErrorCode> = {
   401: ErrorCode.UNAUTHENTICATED,
   403: ErrorCode.FORBIDDEN,
   404: ErrorCode.NOT_FOUND,
+  409: ErrorCode.INVALID_OPERATION,
   429: ErrorCode.RATE_LIMITED,
 };
 
@@ -31,7 +32,8 @@ export class AllExceptionsFilter implements ExceptionFilter {
     if (exception instanceof HttpException) {
       const status = exception.getStatus();
       const code = HTTP_CODE[status] ?? (status >= 500 ? ErrorCode.INTERNAL : ErrorCode.VALIDATION_FAILED);
-      const message = status === 404 ? 'Kayıt bulunamadı' : exception.message;
+      const message =
+        status >= 500 ? 'Beklenmeyen bir hata oluştu' : status === 404 ? 'Kayıt bulunamadı' : exception.message;
       return { status, body: { error: { code, message } } };
     }
     this.logger.error({ err: exception, requestId }, 'Unhandled exception');

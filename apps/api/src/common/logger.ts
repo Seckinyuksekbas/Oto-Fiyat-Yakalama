@@ -2,20 +2,25 @@ import { randomUUID } from 'node:crypto';
 import type { Params } from 'nestjs-pino';
 import type { Env } from '../config/env';
 
+const SENSITIVE_KEYS = [
+  'password',
+  'newPassword',
+  'currentPassword',
+  'token',
+  'refreshToken',
+  'accessToken',
+  'chatId',
+  'config',
+  'proxyUrl',
+  'urlEncrypted',
+];
+
+// pino wildcards match exactly one level, so cover top-level, 1 and 2 levels deep.
 export const REDACT_PATHS = [
   'req.headers.authorization',
   'req.headers.cookie',
   'res.headers["set-cookie"]',
-  '*.password',
-  '*.newPassword',
-  '*.currentPassword',
-  '*.token',
-  '*.refreshToken',
-  '*.accessToken',
-  '*.chatId',
-  '*.config',
-  '*.proxyUrl',
-  '*.urlEncrypted',
+  ...SENSITIVE_KEYS.flatMap((k) => [k, `*.${k}`, `*.*.${k}`]),
 ];
 
 export function loggerOptions(env: Env): Params {

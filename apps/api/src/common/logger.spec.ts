@@ -15,4 +15,12 @@ describe('log redaction', () => {
     expect(out).not.toMatch(/hunter2|access_token=x|Bearer y|"abc"|"42"/);
     expect(out).toContain('[redacted]');
   });
+
+  it('masks top-level and two-level-deep secrets', () => {
+    let out = '';
+    const sink = new Writable({ write(chunk, _enc, cb) { out += chunk.toString(); cb(); } });
+    const log = pino({ redact: { paths: REDACT_PATHS, censor: '[redacted]' } }, sink);
+    log.info({ password: 'topsecret1', data: { user: { newPassword: 'deepsecret2', refreshToken: 'rt-3' } } });
+    expect(out).not.toMatch(/topsecret1|deepsecret2|rt-3/);
+  });
 });
