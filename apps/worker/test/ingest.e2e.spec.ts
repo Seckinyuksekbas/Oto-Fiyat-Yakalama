@@ -50,6 +50,9 @@ describe('IngestService.ingest', () => {
     const job = await ref.get(QueueRegistry).analyze.getJob(analyzeJobId(r.listingId, 'NEW', l.contentHash));
     expect(job?.data).toEqual({ listingId: r.listingId, reason: 'NEW' });
     expect(job?.opts.removeOnComplete).toBe(true);
+    expect(job?.opts.removeOnFail).toEqual({ age: 24 * 60 * 60 });
+    expect(job?.opts.attempts).toBe(5);
+    expect(job?.opts.backoff).toEqual({ type: 'exponential', delay: 10_000 });
   });
 
   it('handles concurrent ingests of the same new listing without duplicates', async () => {

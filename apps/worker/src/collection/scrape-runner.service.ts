@@ -1,7 +1,8 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { FetchError, getAdapter, normalizeListing, PoliteHttpClient, type ListingProblem, type SourceAdapter } from '@oto/collection';
-import type { JobStatus } from '@oto/db';
+import { FetchError, getAdapter, LayoutError, normalizeListing, PoliteHttpClient, type ListingProblem, type SourceAdapter } from '@oto/collection';
+import type { JobStatus, Prisma } from '@oto/db';
 import { Encryptor } from '@oto/server-common';
+import { AlertService } from '../common/alert.service';
 import { ENV } from '../config/config.module';
 import type { Env } from '../config/env';
 import { PrismaService } from '../infra/prisma.service';
@@ -26,6 +27,10 @@ class InfraError extends Error {
   }
 }
 
+/** Tek taramada kaybolan ilan sayısı bu eşiği (en az MIN, ya da aktiflerin ORAN'ı) aşarsa toplu kaldırma atlanır. */
+export const MASS_REMOVAL_MIN = 20;
+export const MASS_REMOVAL_RATIO = 0.3;
+
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 @Injectable()
@@ -40,9 +45,16 @@ export class ScrapeRunner {
     private readonly aliases: AliasService,
     private readonly ingest: IngestService,
     private readonly health: SourceHealthService,
+    private readonly alerts: AlertService,
     @Inject(ENV) env: Env,
   ) {
     this.userAgent = `OtoFirsatBot/1.0 (+${env.BOT_CONTACT_URL})`;
+  }
+
+  /** İşi yalnızca hâlâ RUNNING ise kapatır; stale-reaper zaten kapattıysa üzerine yazmaz. */
+  private async closeJob(id: number, data: Prisma.CollectionJobUpdateManyMutationInput): Promise<void> {
+    const { count } = await this.prisma.collectionJob.updateMany({ where: { id, status: 'RUNNING' }, data });
+    if (count === 0) this.logger.warn(`İş zaten kapatılmış (stale?): ${id}`);
   }
 
   /** Bir CollectionJob'u uçtan uca yürütür. Yalnızca QUEUED işleri çalıştırır (yeniden teslimde güvenli). */
@@ -58,6 +70,7 @@ export class ScrapeRunner {
       await this.prisma.collectionJob.update({ where: { id: job.id }, data: { status: 'FAILED', finishedAt: new Date(), errorSummary: reason } });
       return null;
     };
+    if (job.dryRun) return refuse('Dry-run henüz desteklenmiyor (Plan 07)');
     if (!source.isActive || !source.permissionVerifiedAt || source.health === 'PAUSED') {
       return refuse('Kaynak pasif, izinsiz veya duraklatılmış');
     }
@@ -88,7 +101,7 @@ export class ScrapeRunner {
       await http?.close().catch(() => undefined);
       const reason = `Kurulum hatası: ${message(err)}`.slice(0, 500);
       this.logger.error(`Kaynak ${source.code} için ${reason}`);
-      await this.prisma.collectionJob.update({ where: { id: job.id }, data: { status: 'FAILED', finishedAt: new Date(), errorSummary: reason } });
+      await this.closeJob(job.id, { status: 'FAILED', finishedAt: new Date(), errorSummary: reason });
       return { status: 'FAILED', pages: 0, cards: 0, created: 0, updated: 0, removed: 0, failed: 0 };
     }
 
@@ -136,8 +149,7 @@ export class ScrapeRunner {
     if (infra) {
       const reason = `Altyapı hatası: ${message(infra)}`.slice(0, 500);
       this.logger.error(`Kaynak ${source.code} taraması altyapı hatasıyla durdu: ${message(infra)}`);
-      await this.prisma.collectionJob
-        .update({ where: { id: job.id }, data: { status: 'FAILED', finishedAt: new Date(), pagesFetched: c.pages, listingsSeen: c.cards, listingsNew: c.created, listingsUpdated: c.updated, errorsCount: c.failed, errorSummary: reason } })
+      await this.closeJob(job.id, { status: 'FAILED', finishedAt: new Date(), pagesFetched: c.pages, listingsSeen: c.cards, listingsNew: c.created, listingsUpdated: c.updated, errorsCount: c.failed, errorSummary: reason })
         .catch((e: unknown) => this.logger.error(`İş durumu güncellenemedi: ${message(e)}`));
       throw infra;
     }
@@ -151,24 +163,41 @@ export class ScrapeRunner {
         await this.prisma.scrapeError.create({
           data: { jobId: job.id, sourceId: source.id, kind: fe?.kind ?? 'PARSE', url: fe?.url ?? null, message: message(fatal).slice(0, 1000), transient: fe?.transient ?? false },
         });
-        await this.health.recordFailure(source.id, fatal instanceof Error ? fatal : new Error(message(fatal)));
+        if (fatal instanceof LayoutError) await this.health.recordLayoutBreak(source.id, fatal);
+        else await this.health.recordFailure(source.id, fatal instanceof Error ? fatal : new Error(message(fatal)));
         status = c.pages > 0 && fe?.kind !== 'BLOCKED' ? 'PARTIAL' : 'FAILED';
         errorSummary = message(fatal).slice(0, 500);
         this.logger.warn(`Kaynak ${source.code} taraması başarısız: ${message(fatal)}`);
       } else {
         const fullCrawl = (source.config as { fullCrawl?: boolean } | null)?.fullCrawl !== false;
+        const notes: string[] = [];
         if (fullCrawl && c.complete && c.cards > 0 && issueRate <= PARSE_ISSUE_THRESHOLD) {
-          c.removed = await this.ingest.markRemoved(source.id, startedAt);
+          const candidates = await this.ingest.countRemovalCandidates(source.id, startedAt);
+          const active = await this.ingest.countActive(source.id);
+          if (candidates > Math.max(MASS_REMOVAL_MIN, Math.ceil(MASS_REMOVAL_RATIO * active))) {
+            const note = `${candidates} ilan tek taramada kayboldu; toplu kaldırma güvenlik nedeniyle atlandı.`;
+            notes.push(note);
+            await this.alerts.raise({
+              key: `source:${source.id}:mass-removal`,
+              level: 'WARN',
+              component: 'collection',
+              message: `${source.name}: ${note}`,
+              context: { sourceId: source.id, candidates, active },
+            });
+          } else if (candidates > 0) {
+            c.removed = await this.ingest.markRemoved(source.id, startedAt);
+          }
         }
+        if (!c.complete && c.pages > 0) notes.push('Tarama sayfa sınırında durdu; kaldırma tespiti atlandı');
         await this.health.recordSuccess(source.id, issueRate);
         const empty = c.pages > 0 && c.cards === 0;
         status = c.failed > 0 || empty ? 'PARTIAL' : 'SUCCEEDED';
-        errorSummary = empty ? 'Sayfada ilan kartı bulunamadı' : c.failed > 0 ? `${c.failed} ilan ayrıştırılamadı veya doğrulanamadı` : null;
+        if (empty) notes.unshift('Sayfada ilan kartı bulunamadı');
+        else if (c.failed > 0) notes.unshift(`${c.failed} ilan ayrıştırılamadı veya doğrulanamadı`);
+        errorSummary = notes.length > 0 ? notes.join('; ').slice(0, 500) : null;
       }
 
-      await this.prisma.collectionJob.update({
-        where: { id: job.id },
-        data: {
+      await this.closeJob(job.id, {
           status,
           finishedAt: new Date(),
           pagesFetched: c.pages,
@@ -179,12 +208,10 @@ export class ScrapeRunner {
           errorsCount: c.failed + (fatal ? 1 : 0),
           avgResponseMs: http.stats.requests > 0 ? Math.round(http.stats.totalMs / http.stats.requests) : null,
           errorSummary,
-        },
       });
     } catch (err) {
       this.logger.error(`Kaynak ${source.code} sonuç kaydı başarısız: ${message(err)}`);
-      await this.prisma.collectionJob
-        .update({ where: { id: job.id }, data: { status: 'FAILED', finishedAt: new Date(), errorSummary: `Altyapı hatası: ${message(err)}`.slice(0, 500) } })
+      await this.closeJob(job.id, { status: 'FAILED', finishedAt: new Date(), errorSummary: `Altyapı hatası: ${message(err)}`.slice(0, 500) })
         .catch((e: unknown) => this.logger.error(`İş durumu güncellenemedi: ${message(e)}`));
       throw err;
     }

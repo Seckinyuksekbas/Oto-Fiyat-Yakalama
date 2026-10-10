@@ -1,7 +1,7 @@
 import * as cheerio from 'cheerio';
 import { z } from 'zod';
 import type { AdapterContext, ListPage, ParseResult, SourceAdapter } from '../adapter';
-import { FetchError } from '../errors';
+import { FetchError, LayoutError } from '../errors';
 import type { ListingProblem, RawListing } from '../types';
 
 const configSchema = z.object({
@@ -26,7 +26,7 @@ export class DemoSiteAdapter implements SourceAdapter {
       }
       const hasNext = cheerio.load(res.body)('main').attr('data-has-next');
       if (hasNext !== 'true' && hasNext !== 'false') {
-        throw new Error(`Sayfa yapısı tanınmadı: data-has-next bulunamadı (${url})`);
+        throw new LayoutError(`Sayfa yapısı tanınmadı: data-has-next bulunamadı (${url})`);
       }
       const isLast = hasNext === 'false';
       yield { url, pageNo, html: res.body, isLast };

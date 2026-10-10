@@ -29,3 +29,11 @@ export function toFetchError(err: unknown, url: string): FetchError {
   const detail = code || (err instanceof Error ? err.message : String(err));
   return new FetchError('NETWORK', `Ağ hatası (${detail}): ${url}`, url, true);
 }
+
+/** Sayfa yapısı tanınmadı (beklenen işaretçi yok). Yeniden denemekle düzelmez; kaynak hemen DEGRADED sayılır. */
+export class LayoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'LayoutError';
+  }
+}

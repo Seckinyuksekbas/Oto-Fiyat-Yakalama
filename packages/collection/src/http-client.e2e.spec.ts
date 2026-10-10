@@ -211,6 +211,15 @@ describe('PoliteHttpClient', () => {
     expect(pageHits()).toHaveLength(3);
   });
 
+  it('does not wait for a Retry-After above the cap; fails transiently at once', async () => {
+    routes.set('/long', (_q, s) => s.writeHead(429, { 'retry-after': '3600' }).end());
+    const err = await client().getText(`${base}/long`).catch((e: unknown) => e);
+    expect(err).toMatchObject({ kind: 'HTTP_4XX', transient: true });
+    expect((err as Error).message).toContain('Retry-After');
+    expect(pageHits()).toHaveLength(1);
+    expect(sleeps).toEqual([]);
+  });
+
   it('tracks request stats', async () => {
     routes.set('/s', html('s'));
     const c = client();

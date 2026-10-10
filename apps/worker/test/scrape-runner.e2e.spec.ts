@@ -1,3 +1,5 @@
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import type { TestingModule } from '@nestjs/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CollectionModule } from '../src/collection/collection.module';
@@ -101,7 +103,99 @@ describe('ScrapeRunner', () => {
     await prisma.dataSource.update({ where: { id: source.id }, data: { config: { baseUrl: demo.baseUrl, maxPages: 1 } } });
     const job = await runOnce(source.id);
     expect(job).toMatchObject({ status: 'SUCCEEDED', pagesFetched: 1, listingsRemoved: 0 });
+    expect(job.errorSummary).toContain('Tarama sayfa sınırında durdu; kaldırma tespiti atlandı');
     expect(await prisma.listing.count({ where: { sourceId: source.id, status: 'ACTIVE' } })).toBe(45);
+  });
+
+  it('does not remove anything when fullCrawl is false', async () => {
+    const source = await createSource(ref, demo.baseUrl, { config: { baseUrl: demo.baseUrl, fullCrawl: false } });
+    await runOnce(source.id);
+    const [gone] = demo.site.store.active();
+    demo.site.store.patch(gone.id, { status: 'REMOVED' });
+    const job = await runOnce(source.id);
+    expect(job).toMatchObject({ status: 'SUCCEEDED', listingsRemoved: 0 });
+    expect(await prisma.listing.count({ where: { sourceId: source.id, status: 'ACTIVE' } })).toBe(45);
+  });
+
+  it('does not remove anything after a fatal error on page 2 (PARTIAL)', async () => {
+    const source = await createSource(ref, demo.baseUrl);
+    await runOnce(source.id);
+    const flaky: Server = createServer((req, res) => (req.url?.includes('sayfa=2') ? res.writeHead(500).end() : demo.site.app(req, res)));
+    await new Promise<void>((done) => flaky.listen(0, '127.0.0.1', done));
+    try {
+      const baseUrl = `http://127.0.0.1:${(flaky.address() as AddressInfo).port}`;
+      await prisma.dataSource.update({ where: { id: source.id }, data: { config: { baseUrl } } });
+      const [gone] = demo.site.store.active();
+      demo.site.store.patch(gone.id, { status: 'REMOVED' });
+      const job = await runOnce(source.id);
+      expect(job).toMatchObject({ status: 'PARTIAL', pagesFetched: 1, listingsRemoved: 0 });
+      expect(await prisma.listing.count({ where: { sourceId: source.id, status: 'ACTIVE' } })).toBe(45);
+    } finally {
+      flaky.closeAllConnections();
+      await new Promise<void>((done) => flaky.close(() => done()));
+    }
+  });
+
+  it('skips mass removal and alerts, but still removes a single disappearance', async () => {
+    const source = await createSource(ref, demo.baseUrl);
+    await runOnce(source.id);
+    const items = demo.site.store.active();
+    for (const it of items.slice(0, 30)) demo.site.store.patch(it.id, { status: 'REMOVED' });
+    const job = await runOnce(source.id);
+    expect(job).toMatchObject({ status: 'SUCCEEDED', listingsRemoved: 0 });
+    expect(job.errorSummary).toContain('toplu kaldırma');
+    expect(await prisma.listing.count({ where: { sourceId: source.id, status: 'ACTIVE' } })).toBe(45);
+    expect(await prisma.systemLog.count({ where: { level: 'WARN', message: { contains: 'toplu kaldırma' } } })).toBe(1);
+    for (const it of items.slice(0, 30)) demo.site.store.patch(it.id, { status: 'ACTIVE' });
+    await runOnce(source.id);
+    demo.site.store.patch(items[0].id, { status: 'REMOVED' });
+    const small = await runOnce(source.id);
+    expect(small).toMatchObject({ listingsRemoved: 1 });
+  });
+
+  it('degrades the source after ONE run when the page layout is unrecognisable', async () => {
+    await createAdmin(ref);
+    const bakim = createServer((_q, res) => res.writeHead(200, { 'content-type': 'text/html' }).end('<html><body>bakım</body></html>'));
+    await new Promise<void>((done) => bakim.listen(0, '127.0.0.1', done));
+    try {
+      const source = await createSource(ref, `http://127.0.0.1:${(bakim.address() as AddressInfo).port}`);
+      const job = await runOnce(source.id);
+      expect(job.status).toBe('FAILED');
+      expect(await prisma.scrapeError.findFirst({ where: { jobId: job.id } })).toMatchObject({ kind: 'PARSE', transient: false });
+      expect((await prisma.dataSource.findUniqueOrThrow({ where: { id: source.id } })).health).toBe('DEGRADED');
+      expect(await prisma.systemLog.count({ where: { level: 'WARN' } })).toBe(1);
+      const keys = (await prisma.notification.findMany({ where: { kind: 'SYSTEM_ALERT' } })).map((n) => (n.payload as { key: string }).key);
+      expect(keys).toEqual([`source:${source.id}:parse`]);
+    } finally {
+      bakim.closeAllConnections();
+      await new Promise<void>((done) => bakim.close(() => done()));
+    }
+  });
+
+  it('refuses dry-run jobs before touching the network', async () => {
+    const source = await createSource(ref, demo.baseUrl);
+    const queued = await prisma.collectionJob.create({ data: { sourceId: source.id, trigger: 'SCHEDULED', dryRun: true } });
+    expect(await runner.run(queued.id)).toBeNull();
+    const job = await prisma.collectionJob.findUniqueOrThrow({ where: { id: queued.id } });
+    expect(job).toMatchObject({ status: 'FAILED', errorSummary: 'Dry-run henüz desteklenmiyor (Plan 07)', pagesFetched: 0 });
+    expect(await prisma.listing.count()).toBe(0);
+  });
+
+  it('does not overwrite a job that was closed (reaped) while the crawl was running', async () => {
+    const source = await createSource(ref, demo.baseUrl);
+    const ingest = ref.get(IngestService);
+    const original = ingest.ingest.bind(ingest);
+    const spy = vi.spyOn(ingest, 'ingest').mockImplementationOnce(async (...args) => {
+      await prisma.collectionJob.updateMany({ where: { sourceId: source.id, status: 'RUNNING' }, data: { status: 'FAILED', finishedAt: new Date(), errorSummary: 'reaped' } });
+      return original(...args);
+    });
+    try {
+      const queued = await createQueuedJob(ref, source.id);
+      await runner.run(queued.id);
+      expect(await prisma.collectionJob.findUniqueOrThrow({ where: { id: queued.id } })).toMatchObject({ status: 'FAILED', errorSummary: 'reaped' });
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('skips jobs that are not QUEUED and fails jobs of paused sources', async () => {

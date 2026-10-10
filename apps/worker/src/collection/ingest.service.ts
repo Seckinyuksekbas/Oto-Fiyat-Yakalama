@@ -133,12 +133,23 @@ export class IngestService {
     return count;
   }
 
+  /** Belirtilen andan beri görülmeyen aktif ilan sayısı (markRemoved'un kaldıracağı küme). */
+  async countRemovalCandidates(sourceId: number, notSeenSince: Date): Promise<number> {
+    return this.prisma.listing.count({ where: { sourceId, status: 'ACTIVE', lastSeenAt: { lt: notSeenSince } } });
+  }
+
+  async countActive(sourceId: number): Promise<number> {
+    return this.prisma.listing.count({ where: { sourceId, status: 'ACTIVE' } });
+  }
+
   private async enqueueAnalyze(listingId: number, reason: AnalyzeReason, contentHash: string, previousPrice?: bigint): Promise<void> {
     const data: AnalyzeJobData = { listingId, reason, ...(previousPrice !== undefined ? { previousPrice: previousPrice.toString() } : {}) };
     await this.queues.analyze.add('analyze', data, {
       jobId: analyzeJobId(listingId, reason, contentHash),
       removeOnComplete: true,
-      removeOnFail: { age: 7 * 24 * 60 * 60 },
+      removeOnFail: { age: 24 * 60 * 60 },
+      attempts: 5,
+      backoff: { type: 'exponential', delay: 10_000 },
     });
   }
 }

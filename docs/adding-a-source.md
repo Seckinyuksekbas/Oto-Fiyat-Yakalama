@@ -31,3 +31,13 @@ Kod yazmadan önce aşağıdakilerin **hepsi** yazılı olarak doğrulanmalıdı
 - `SystemLog` + admin panel bildirimi: engellenme, ardışık hata, %20 üzeri ayrıştırma hatası.
 - Kaynaktan kaynaklanmayan worker hataları (DB/Redis erişimi, kurulum) işi `Altyapı hatası` / `Kurulum hatası` mesajıyla FAILED yapar ve kaynağın sağlık durumunu etkilemez.
 - Duraklatılmış kaynağı yeniden açmak (Plan 07'ye kadar): `UPDATE "DataSource" SET health='HEALTHY', "consecutiveFailures"=0 WHERE code='<kod>';` — önce engelin nedenini ve izni kontrol edin.
+
+## İlk gerçek kaynaktan önce (zorunlu)
+Demo kaynağı bu maddeleri gerektirmez; ilk gerçek kaynak canlıya alınmadan **hepsi** kapatılmalıdır:
+
+- [ ] **İlerleme tabanlı stale tespiti:** Şu an RUNNING iş yalnızca süreye göre `stale` sayılıyor; uzun taramalar yanlışlıkla kapatılabilir. Lease/heartbeat (ör. her sayfada `updatedAt` yenileme) ile ilerlemeye bakılmalı.
+- [ ] **Çapraz-origin yönlendirme:** `maxRedirections` başka bir origin'e gidebilir. Yönlendirilen origin için robots + hız limiti uygulanmalı ya da çapraz-origin yönlendirme reddedilmeli.
+- [ ] **Crawl-delay:** robots.txt `Crawl-delay` değerine uyulmalı (`minRequestGapMs` ile maksimumu alınarak).
+- [ ] **Yanıt gövdesi boyut sınırı:** `res.body.text()` öncesinde bayt üst sınırı uygulanmalı.
+- [ ] **Toplu kaldırma eşikleri:** `MASS_REMOVAL_MIN` / `MASS_REMOVAL_RATIO` (scrape-runner) kaynak başına gözden geçirilmeli.
+- [ ] **Adapter'a özgü `LayoutError` kontrolleri:** Sayfa yapısı beklenen işaretçileri taşımıyorsa (sayfalama, toplam sayı, ilan kapsayıcısı) adapter `LayoutError` fırlatmalı; sessizce boş sayfa dönmemeli.

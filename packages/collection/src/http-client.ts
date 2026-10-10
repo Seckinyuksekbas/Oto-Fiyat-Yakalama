@@ -38,6 +38,17 @@ export function backoff(attempt: number): number {
   return 500 * 2 ** (attempt - 1);
 }
 
+/** Üst sınırlanmamış Retry-After (ms); geçersizse null. */
+export function rawRetryAfterMs(header: string | string[] | undefined, now = Date.now()): number | null {
+  const value = Array.isArray(header) ? header[0] : header;
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const at = Date.parse(value);
+  if (Number.isNaN(at)) return null;
+  return Math.max(at - now, 0);
+}
+
 export function retryAfterMs(header: string | string[] | undefined, now = Date.now()): number | null {
   const value = Array.isArray(header) ? header[0] : header;
   if (!value) return null;
@@ -105,7 +116,11 @@ export class PoliteHttpClient implements HttpFetcher {
       if (res.status === 429 || res.status >= 500) {
         if (this.isBlocked(res.body)) throw new BlockedError(`Bot doğrulama sayfası algılandı (HTTP ${res.status}): ${url}`, url);
         if (last) throw new FetchError(res.status === 429 ? 'HTTP_4XX' : 'HTTP_5XX', `HTTP ${res.status}: ${url}`, url, true);
-        await this.sleep(retryAfterMs(res.headers['retry-after']) ?? backoff(attempt));
+        const raw = rawRetryAfterMs(res.headers['retry-after']);
+        if (raw !== null && raw > MAX_RETRY_AFTER_MS) {
+          throw new FetchError(res.status === 429 ? 'HTTP_4XX' : 'HTTP_5XX', `HTTP ${res.status}: Retry-After ${Math.round(raw / 1000)} sn, ${MAX_RETRY_AFTER_MS / 1000} sn sınırını aşıyor; beklenmeden vazgeçildi: ${url}`, url, true);
+        }
+        await this.sleep(raw ?? backoff(attempt));
         continue;
       }
       return res;

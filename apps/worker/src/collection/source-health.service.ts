@@ -34,6 +34,20 @@ export class SourceHealthService {
     }
   }
 
+  /** Sayfa yapısı tanınmadı: ardışık hata sayacını beklemeden kaynağı hemen DEGRADED yapar ve uyarır. */
+  async recordLayoutBreak(sourceId: number, err: Error): Promise<void> {
+    const source = await this.prisma.dataSource.findUniqueOrThrow({ where: { id: sourceId } });
+    const health: SourceHealth = source.health === 'PAUSED' || source.health === 'DOWN' ? source.health : 'DEGRADED';
+    await this.prisma.dataSource.update({ where: { id: sourceId }, data: { lastErrorAt: new Date(), health } });
+    await this.alerts.raise({
+      key: `source:${sourceId}:parse`,
+      level: 'WARN',
+      component: 'collection',
+      message: `${source.name}: sayfa yapısı tanınmadı; kaynak sitenin düzeni değişmiş olabilir.`,
+      context: { sourceId, error: err.message.slice(0, 300) },
+    });
+  }
+
   async recordFailure(sourceId: number, err: Error): Promise<void> {
     const source = await this.prisma.dataSource.findUniqueOrThrow({ where: { id: sourceId } });
     const failures = source.consecutiveFailures + 1;
