@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { Logger } from '@nestjs/common';
 import { inject } from 'vitest';
 
 Object.assign(process.env, {
@@ -10,3 +11,5 @@ Object.assign(process.env, {
   DATA_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
   BOT_CONTACT_URL: 'http://localhost:3000/bot',
 });
+
+Logger.overrideLogger(false);

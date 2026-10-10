@@ -33,6 +33,7 @@ export class ScrapeWorkerHost implements OnModuleInit, OnModuleDestroy {
       },
       { connection: bullConnection(this.env.REDIS_URL), concurrency: this.env.SCRAPE_CONCURRENCY },
     );
+    this.worker.on('error', (err) => this.logger.error(`Scrape worker hatası: ${err.message}`));
     this.worker.on('failed', (job, err) => this.logger.error(`Scrape işi ${job?.id} başarısız: ${err.message}`));
   }
 

@@ -31,11 +31,21 @@ export class SchedulerService {
       if (last && (last.status === 'QUEUED' || last.status === 'RUNNING')) continue;
       if (last && now.getTime() - last.createdAt.getTime() < source.intervalSec * 1000) continue;
       const job = await this.prisma.collectionJob.create({ data: { sourceId: source.id, trigger: 'SCHEDULED', createdAt: now } });
-      await this.queues.scrape.add(
-        'scrape',
-        { collectionJobId: job.id, sourceId: source.id },
-        { jobId: scrapeQueueJobId(job.id), removeOnComplete: { age: 24 * 60 * 60 }, removeOnFail: { age: 7 * 24 * 60 * 60 } },
-      );
+      try {
+        await this.queues.scrape.add(
+          'scrape',
+          { collectionJobId: job.id, sourceId: source.id },
+          { jobId: scrapeQueueJobId(job.id), removeOnComplete: { age: 24 * 60 * 60 }, removeOnFail: { age: 7 * 24 * 60 * 60 } },
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.error(`Kaynak ${source.code} için iş kuyruğa eklenemedi: ${message}`);
+        await this.prisma.collectionJob.update({
+          where: { id: job.id },
+          data: { status: 'FAILED', finishedAt: now, errorSummary: `Kuyruğa eklenemedi: ${message}` },
+        });
+        continue;
+      }
       enqueued += 1;
     }
     return enqueued;

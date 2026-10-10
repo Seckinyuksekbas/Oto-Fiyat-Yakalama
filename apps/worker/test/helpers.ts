@@ -10,7 +10,9 @@ import { PrismaService } from '../src/infra/prisma.service';
 import { RedisService } from '../src/infra/redis.service';
 
 export async function createContext(imports: (Type<unknown> | DynamicModule)[] = []): Promise<TestingModule> {
-  const ref = await Test.createTestingModule({ imports: [CoreModule, ...imports] }).compile();
+  // compile() installs a TestingLogger that prints errors; use a silent logger so intentional error paths stay quiet.
+  const silent = { log: () => undefined, error: () => undefined, warn: () => undefined, debug: () => undefined, verbose: () => undefined };
+  const ref = await Test.createTestingModule({ imports: [CoreModule, ...imports] }).setLogger(silent).compile();
   await ref.init();
   return ref;
 }
