@@ -26,14 +26,20 @@ export class MatchService {
 
   async process(data: MatchJobData): Promise<MatchOutcome> {
     const out = await this.prisma.$transaction(
-      async (tx) => {
+      async (tx): Promise<MatchOutcome> => {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(${MATCH_LOCK_NAMESPACE}::int, ${data.listingId}::int)`;
         const analysis = await tx.listingAnalysis.findUnique({ where: { id: data.analysisId }, include: { listing: true } });
         if (!analysis || analysis.listingId !== data.listingId) return { status: 'SKIPPED', reason: 'NOT_FOUND', created: [] } as const;
         const listing = analysis.listing;
         if (listing.status !== 'ACTIVE') return { status: 'SKIPPED', reason: 'LISTING_INACTIVE', created: [] } as const;
+        // Eski bir analiz işi yeniden gönderilmiş olabilir: her zaman ilanın en güncel analizi değerlendirilir.
+        const latest =
+          listing.latestAnalysisId !== null && listing.latestAnalysisId !== analysis.id
+            ? await tx.listingAnalysis.findUnique({ where: { id: listing.latestAnalysisId } })
+            : null;
+        const effective = latest && latest.listingId === listing.id ? latest : analysis;
 
-        const price = analysis.listingPrice ?? listing.price;
+        const price = effective.listingPrice ?? listing.price;
         const facts: ListingFacts = {
           make: listing.make,
           model: listing.model,
@@ -43,9 +49,9 @@ export class MatchService {
           fuel: listing.fuel,
           transmission: listing.transmission,
           city: listing.city,
-          damaged: analysis.flags.includes('DAMAGED'),
-          confidence: analysis.confidence,
-          discountPct: analysis.discountPct === null ? null : Number(analysis.discountPct),
+          damaged: effective.flags.includes('DAMAGED'),
+          confidence: effective.confidence,
+          discountPct: effective.discountPct === null ? null : Number(effective.discountPct),
         };
         const candidates = await findMatchingProfiles(tx, facts, listing.id);
         const created: CreatedMatch[] = [];
@@ -59,18 +65,18 @@ export class MatchService {
           if (!reason) continue;
           const rows = await tx.$queryRaw<{ id: number }[]>`
             INSERT INTO "ListingMatch" ("userId", "searchProfileId", "listingId", "analysisId", "reason", "matchedPrice")
-            VALUES (${c.userId}, ${c.id}, ${listing.id}::int, ${analysis.id}::int, ${reason}::"MatchReason", ${price}::bigint)
+            VALUES (${c.userId}, ${c.id}, ${listing.id}::int, ${effective.id}::int, ${reason}::"MatchReason", ${price}::bigint)
             ON CONFLICT ("searchProfileId", "listingId", "reason", "matchedPrice") DO NOTHING
             RETURNING "id"`;
           if (rows[0]) created.push({ matchId: rows[0].id, userId: c.userId, searchProfileId: c.id, reason });
         }
         return { status: 'MATCHED', created, candidates: candidates.length } as const;
       },
-      { timeout: 30_000 },
+      { maxWait: 10_000, timeout: 30_000 },
     );
     if (out.status === 'MATCHED' && out.created.length > 0) {
       this.logger.log(`İlan ${data.listingId} (${data.event}): ${out.created.length} eşleşme`);
     }
-    return out as MatchOutcome;
+    return out;
   }
 }

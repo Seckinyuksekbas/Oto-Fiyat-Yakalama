@@ -64,6 +64,13 @@ describe('MatchService', () => {
     const big = await createAnalysis(ref, l.id, { listingPrice: 940_000n });
     const out = await svc.process({ listingId: l.id, analysisId: big.id, event: 'PRICE_DROP', previousPrice: '960000' });
     expect(out.created.map((c) => c.reason)).toEqual(['PRICE_DROP']);
+    expect((await prisma.listingMatch.findFirstOrThrow({ where: { reason: 'PRICE_DROP' } })).matchedPrice).toBe(940_000n);
+    // sonraki düşüş 940k'dan ölçülür: 900k (%4.3) yetmez, 890k (%5.3) yeter
+    await prisma.listing.update({ where: { id: l.id }, data: { price: 900_000n } });
+    const a900 = await createAnalysis(ref, l.id, { listingPrice: 900_000n });
+    expect((await svc.process({ listingId: l.id, analysisId: a900.id, event: 'PRICE_DROP', previousPrice: '940000' })).created).toEqual([]);
+    const a890 = await createAnalysis(ref, l.id, { listingPrice: 890_000n });
+    expect((await svc.process({ listingId: l.id, analysisId: a890.id, event: 'PRICE_DROP', previousPrice: '900000' })).created.map((c) => c.reason)).toEqual(['PRICE_DROP']);
   });
 
   it('out-of-order: PRICE_DROP before NEW yields a single NEW', async () => {
@@ -104,5 +111,39 @@ describe('MatchService', () => {
     const u = await createUser(ref, { status: 'SUSPENDED' });
     await createProfile(ref, u.id);
     expect((await svc.process({ listingId: l.id, analysisId: a.id, event: 'NEW' })).created).toEqual([]);
+  });
+
+  it('stale analysis job is evaluated with the latest analysis', async () => {
+    const { l, a: a1 } = await setup(1_000_000n);
+    const u = await createUser(ref);
+    const matched = await createProfile(ref, u.id);
+    await svc.process({ listingId: l.id, analysisId: a1.id, event: 'NEW' });
+    const late = await createProfile(ref, u.id, { name: 'Geç' });
+    const a1b = await createAnalysis(ref, l.id, { listingPrice: 900_000n });
+    const a2 = await createAnalysis(ref, l.id, { listingPrice: 1_100_000n });
+    const out = await svc.process({ listingId: l.id, analysisId: a1b.id, event: 'PRICE_DROP', previousPrice: '1000000' });
+    expect(out.created.map((c) => [c.searchProfileId, c.reason])).toEqual([[late.id, 'NEW']]);
+    const rows = await prisma.listingMatch.findMany({ where: { searchProfileId: late.id } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ analysisId: a2.id, matchedPrice: 1_100_000n });
+    expect(await prisma.listingMatch.count({ where: { searchProfileId: matched.id, matchedPrice: 900_000n } })).toBe(0);
+  });
+
+  it('concurrent NEW and PRICE_DROP for one never-matched profile yield one row', async () => {
+    const { l, a: a1 } = await setup(1_000_000n);
+    const u = await createUser(ref);
+    await createProfile(ref, u.id);
+    const a2 = await createAnalysis(ref, l.id, { listingPrice: 900_000n });
+    await Promise.all([
+      svc.process({ listingId: l.id, analysisId: a1.id, event: 'NEW' }),
+      svc.process({ listingId: l.id, analysisId: a2.id, event: 'PRICE_DROP', previousPrice: '1000000' }),
+    ]);
+    expect(await prisma.listingMatch.count()).toBe(1);
+  });
+
+  it('analysis belonging to another listing is NOT_FOUND', async () => {
+    const { l } = await setup();
+    const { a: other } = await setup();
+    expect(await svc.process({ listingId: l.id, analysisId: other.id, event: 'NEW' })).toMatchObject({ status: 'SKIPPED', reason: 'NOT_FOUND' });
   });
 });
