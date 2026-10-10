@@ -1,0 +1,12 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+onlyBuiltDependencies:
+  - argon2
+  - prisma
+  - "@prisma/client"
+  - "@prisma/engines"
+  - "@swc/core"
+  - esbuild
+  - cpu-features
+  - ssh2
