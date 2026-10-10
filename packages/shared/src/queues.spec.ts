@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { analyzeJobSchema, QueueName, scrapeJobSchema } from './index';
+import { analyzeJobSchema, matchJobSchema, QueueName, scrapeJobSchema } from './index';
 
 describe('queue contracts', () => {
   it('names queues without colons (BullMQ restriction)', () => {
@@ -15,5 +15,12 @@ describe('queue contracts', () => {
     expect(analyzeJobSchema.safeParse({ listingId: 1, reason: 'PRICE_CHANGE', previousPrice: '960000' }).success).toBe(true);
     expect(analyzeJobSchema.safeParse({ listingId: 1, reason: 'PRICE_CHANGE', previousPrice: 960000 }).success).toBe(false);
     expect(analyzeJobSchema.safeParse({ listingId: 1, reason: 'NOPE' }).success).toBe(false);
+  });
+
+  it('accepts REFRESH for analyze and validates match jobs', () => {
+    expect(analyzeJobSchema.safeParse({ listingId: 1, reason: 'REFRESH' }).success).toBe(true);
+    expect(QueueName.MATCH).toBe('match');
+    expect(matchJobSchema.parse({ listingId: 1, analysisId: 2, event: 'PRICE_DROP', previousPrice: '960000' })).toEqual({ listingId: 1, analysisId: 2, event: 'PRICE_DROP', previousPrice: '960000' });
+    expect(matchJobSchema.safeParse({ listingId: 1, analysisId: 2, event: 'CHANGE' }).success).toBe(false);
   });
 });

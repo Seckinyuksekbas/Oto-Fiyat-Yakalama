@@ -3,6 +3,7 @@ import type { ListingProblem, NormalizedListing } from '@oto/collection';
 import { Prisma } from '@oto/db';
 import type { AnalyzeJobData, AnalyzeReason } from '@oto/shared';
 import { PrismaService } from '../infra/prisma.service';
+import { RETRYING_JOB_OPTS } from '../queues/job-options';
 import { QueueRegistry } from '../queues/queue-registry';
 
 export type IngestOutcome = 'NEW' | 'PRICE_CHANGED' | 'UPDATED' | 'RELISTED' | 'UNCHANGED';
@@ -144,12 +145,6 @@ export class IngestService {
 
   private async enqueueAnalyze(listingId: number, reason: AnalyzeReason, contentHash: string, previousPrice?: bigint): Promise<void> {
     const data: AnalyzeJobData = { listingId, reason, ...(previousPrice !== undefined ? { previousPrice: previousPrice.toString() } : {}) };
-    await this.queues.analyze.add('analyze', data, {
-      jobId: analyzeJobId(listingId, reason, contentHash),
-      removeOnComplete: true,
-      removeOnFail: { age: 24 * 60 * 60 },
-      attempts: 5,
-      backoff: { type: 'exponential', delay: 10_000 },
-    });
+    await this.queues.analyze.add('analyze', data, { jobId: analyzeJobId(listingId, reason, contentHash), ...RETRYING_JOB_OPTS });
   }
 }
