@@ -315,6 +315,7 @@ model CollectionJob {
   listingsSeen    Int           @default(0)
   listingsNew     Int           @default(0)
   listingsUpdated Int           @default(0)
+  listingsRemoved Int           @default(0)
   errorsCount     Int           @default(0)
   avgResponseMs   Int?
   errorSummary    String?
