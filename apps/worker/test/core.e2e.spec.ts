@@ -38,13 +38,28 @@ describe('AlertService', () => {
   });
 });
 
+describe('AlertService delivery', () => {
+  it('does not suppress a key when no admin received it', async () => {
+    const alerts = ref.get(AlertService);
+    const alert = { key: 'source:2:blocked', level: 'ERROR' as const, component: 'collection', message: 'x' };
+    await alerts.raise(alert);
+    const prisma = ref.get(PrismaService);
+    expect(await prisma.notification.count()).toBe(0);
+    await createAdmin(ref);
+    await alerts.raise(alert);
+    expect(await prisma.notification.count()).toBe(1);
+  });
+});
+
 describe('HeartbeatService', () => {
   it('publishes a heartbeat with TTL and removes it on shutdown', async () => {
     const hb = new HeartbeatService(ref.get(RedisService), { ROLE: 'worker' } as never);
     await hb.onModuleInit();
     const redis = ref.get(RedisService);
     expect(JSON.parse((await redis.get(hb.key))!)).toMatchObject({ role: 'worker', pid: process.pid });
-    expect(await redis.ttl(hb.key)).toBeLessThanOrEqual(HEARTBEAT_TTL_SEC);
+    const ttl = await redis.ttl(hb.key);
+    expect(ttl).toBeGreaterThan(0);
+    expect(ttl).toBeLessThanOrEqual(HEARTBEAT_TTL_SEC);
     await hb.onModuleDestroy();
     expect(await redis.get(hb.key)).toBeNull();
   });

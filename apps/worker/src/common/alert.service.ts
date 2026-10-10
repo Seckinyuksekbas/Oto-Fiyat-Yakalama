@@ -35,21 +35,31 @@ export class AlertService {
     });
     const fresh = await this.redis.set(`alert:${alert.key}`, '1', 'EX', ALERT_SUPPRESS_SEC, 'NX');
     if (fresh !== 'OK') return;
-    const admins = await this.prisma.user.findMany({
-      where: { role: { in: ['ADMIN', 'SUPER_ADMIN'] }, status: 'ACTIVE' },
-      select: { id: true },
-    });
-    if (admins.length === 0) return;
-    await this.prisma.notification.createMany({
-      data: admins.map((a) => ({
-        userId: a.id,
-        kind: 'SYSTEM_ALERT' as const,
-        channel: 'IN_APP' as const,
-        status: 'SENT' as const,
-        sentAt: new Date(),
-        payload: { type: 'SYSTEM_ALERT', key: alert.key, level: alert.level, message: alert.message },
-      })),
-    });
+    const suppressKey = `alert:${alert.key}`;
+    try {
+      const admins = await this.prisma.user.findMany({
+        where: { role: { in: ['ADMIN', 'SUPER_ADMIN'] }, status: 'ACTIVE' },
+        select: { id: true },
+      });
+      if (admins.length === 0) {
+        // Teslim edilmedi: sonradan eklenen bir admin bu alarmı yine de alabilsin.
+        await this.redis.del(suppressKey);
+        return;
+      }
+      await this.prisma.notification.createMany({
+        data: admins.map((a) => ({
+          userId: a.id,
+          kind: 'SYSTEM_ALERT' as const,
+          channel: 'IN_APP' as const,
+          status: 'SENT' as const,
+          sentAt: new Date(),
+          payload: { type: 'SYSTEM_ALERT', key: alert.key, level: alert.level, message: alert.message },
+        })),
+      });
+    } catch (err) {
+      await this.redis.del(suppressKey).catch(() => undefined);
+      throw err;
+    }
     this.logger.warn(`Alarm (${alert.level}) ${alert.key}: ${alert.message}`);
   }
 }

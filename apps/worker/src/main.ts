@@ -19,4 +19,7 @@ async function main(): Promise<void> {
   app.get(Logger).log(`Oto Fırsat ${scheduler ? 'scheduler' : 'worker'} başladı`);
 }
 
-void main();
+main().catch((err: unknown) => {
+  console.error('Oto Fırsat worker başlatılamadı:', err);
+  process.exit(1);
+});

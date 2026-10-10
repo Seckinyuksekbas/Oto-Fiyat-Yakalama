@@ -1,5 +1,5 @@
 import { hostname } from 'node:os';
-import { Inject, Injectable, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { ENV } from '../config/config.module';
 import type { Env } from '../config/env';
 import { RedisService } from '../infra/redis.service';
@@ -11,6 +11,7 @@ export const HEARTBEAT_TTL_SEC = 45;
 @Injectable()
 export class HeartbeatService implements OnModuleInit, OnModuleDestroy {
   readonly key = `worker:heartbeat:${hostname()}:${process.pid}`;
+  private readonly logger = new Logger(HeartbeatService.name);
   private timer?: NodeJS.Timeout;
   private readonly startedAt = new Date().toISOString();
 
@@ -21,7 +22,11 @@ export class HeartbeatService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit(): Promise<void> {
     await this.beat();
-    this.timer = setInterval(() => void this.beat().catch(() => undefined), HEARTBEAT_INTERVAL_MS);
+    this.timer = setInterval(() => {
+      this.beat().catch((err: unknown) => {
+        this.logger.warn(`Heartbeat yazılamadı: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    }, HEARTBEAT_INTERVAL_MS);
   }
 
   async onModuleDestroy(): Promise<void> {
