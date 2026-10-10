@@ -135,10 +135,22 @@ importers:
 
   packages/collection:
     dependencies:
+      ioredis:
+        specifier: ^5.4.2
+        version: 5.11.1
+      robots-parser:
+        specifier: ^3.0.1
+        version: 3.0.1
+      undici:
+        specifier: ^6.21.1
+        version: 6.29.0
       zod:
         specifier: ^3.24.1
         version: 3.25.76
     devDependencies:
+      '@oto/testing':
+        specifier: workspace:*
+        version: link:../testing
       vitest:
         specifier: ^3.0.5
         version: 3.2.7(@types/node@22.20.5)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1)
@@ -2769,6 +2781,10 @@ packages:
     resolution: {integrity: sha512-9LkiTwjUh6rT555DtE9rTX+BKByPfrMzEAtnlEtdEwr3Nkffwiihqe2bWADg+OQRjt9gl6ICdmB/ZFDCGAtSow==}
     engines: {node: '>= 4'}
 
+  robots-parser@3.0.1:
+    resolution: {integrity: sha512-s+pyvQeIKIZ0dx5iJiQk1tPLJAWln39+MI5jtM8wnyws+G5azk+dMnMX0qfbqNetKKNgcWWOdi0sfm+FbQbgdQ==}
+    engines: {node: '>=10.0.0'}
+
   rollup@4.64.5:
     resolution: {integrity: sha512-EAP5ZHcz2ijbgCWwPkpI7zh6bfsri2Ez5FtCy2dCp1k62duXzfG7DLGGh7RU2QQXWwavT+u4qpvDF/TWOiiGTw==}
     engines: {node: '>=18.0.0', npm: '>=8.0.0'}
@@ -3155,6 +3171,10 @@ packages:
   undici@5.29.0:
     resolution: {integrity: sha512-raqeBD6NQK4SkWhQzeYKd1KmIG6dllBOTt55Rmkt4HtI9mwdWtJljnrXjAFUBLTSN67HWrOIZ3EPF4kjUw80Bg==}
     engines: {node: '>=14.0'}
+
+  undici@6.29.0:
+    resolution: {integrity: sha512-R+RODBqp6i2pPflGdq+xIOUkl+RNfGgHwoinecKu/JCuf2uO06cOKoDbI2P7Dn6KcswdKwrczbU6IYJ6K8X+wg==}
+    engines: {node: '>=18.17'}
 
   universalify@2.0.1:
     resolution: {integrity: sha512-gptHNQghINnc/vTGIk0SOFGFNXw7JVrlRUtConJRlvaw6DuX0wO5Jeko9sWrMBhh+PsYAZ7oXAiOnf/UKogyiw==}
@@ -5969,6 +5989,8 @@ snapshots:
 
   retry@0.12.0: {}
 
+  robots-parser@3.0.1: {}
+
   rollup@4.64.5:
     dependencies:
       '@types/estree': 1.0.9
@@ -6433,6 +6455,8 @@ snapshots:
   undici@5.29.0:
     dependencies:
       '@fastify/busboy': 2.1.1
+
+  undici@6.29.0: {}
 
   universalify@2.0.1: {}
 
