@@ -1,7 +1,7 @@
 import { Test } from '@nestjs/testing';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { truncateAll } from '@oto/testing';
-import { seedPlans, type Role } from '@oto/db';
+import { seedPlans, type Notification, type Role } from '@oto/db';
 import request from 'supertest';
 import type TestAgent from 'supertest/lib/agent';
 import { AppModule } from '../src/app.module';
@@ -107,4 +107,38 @@ export async function seedMatch(
     data: { userId, searchProfileId: profileId, listingId, analysisId, reason: over.reason ?? 'NEW', matchedPrice: 960_000n },
   });
   return m.id;
+}
+
+/** Giriş yapıp tüm çerezleri `Cookie` başlığı biçiminde döndürür (ham HTTP/SSE istemcileri için). */
+export async function loginCookie(app: NestExpressApplication, email: string, password: string): Promise<string> {
+  const res = await newAgent(app).post('/api/v1/auth/login').send({ email, password });
+  if (res.status !== 200) throw new Error(`login failed: ${res.status}`);
+  const raw = (res.headers['set-cookie'] as unknown as string[] | undefined) ?? [];
+  return raw.map((c) => c.split(';')[0]).join('; ');
+}
+
+export async function seedNotification(
+  app: NestExpressApplication,
+  userId: string,
+  over: Partial<{
+    kind: 'MATCH' | 'SECURITY' | 'SYSTEM_ALERT';
+    channel: 'IN_APP' | 'TELEGRAM' | 'EMAIL';
+    status: 'PENDING' | 'SENT' | 'FAILED' | 'SKIPPED_LIMIT';
+    lastError: string | null;
+    readAt: Date | null;
+    payload: Record<string, unknown>;
+  }> = {},
+): Promise<Notification> {
+  return app.get(PrismaService).notification.create({
+    data: {
+      userId,
+      kind: over.kind ?? 'SECURITY',
+      channel: over.channel ?? 'IN_APP',
+      status: over.status ?? 'SENT',
+      lastError: over.lastError ?? null,
+      readAt: over.readAt ?? null,
+      sentAt: new Date(),
+      payload: (over.payload ?? { type: 'TELEGRAM_LINKED' }) as object,
+    },
+  });
 }

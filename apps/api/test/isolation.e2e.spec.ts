@@ -1,6 +1,8 @@
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createTestApp, newAgent, registerUser, resetState, seedMatch } from './helpers';
+import { UserEventsService } from '../src/infra/user-events.service';
+import { createTestApp, loginCookie, newAgent, registerUser, resetState, seedMatch, seedNotification } from './helpers';
+import { openSse } from './sse';
 import { listRoutes } from './routes';
 
 type Actor = Awaited<ReturnType<typeof registerUser>>;
@@ -89,6 +91,41 @@ const CASES: Record<string, Case> = {
     expect((await A.agent.get('/api/v1/me/matches')).body.items.map((m: { id: number }) => m.id)).toEqual([aMatch]);
     expect((await B.agent.get('/api/v1/me/matches')).body.items.map((m: { id: number }) => m.id)).toEqual([bMatch]);
     expect((await B.agent.get(`/api/v1/me/matches?profileId=${id}`)).body.items).toEqual([]);
+  },
+  'GET /me/notifications': async ({ A, B }) => {
+    const aN = await seedNotification(app, A.user.id);
+    const bN = await seedNotification(app, B.user.id);
+    const aIds = (await A.agent.get('/api/v1/me/notifications')).body.items.map((n: { id: number }) => n.id);
+    const bRes = (await B.agent.get('/api/v1/me/notifications')).body;
+    expect(aIds).toEqual([aN.id]);
+    expect(bRes.items.map((n: { id: number }) => n.id)).toEqual([bN.id]);
+    expect(bRes.unreadCount).toBe(1);
+  },
+  'POST /me/notifications/read': async ({ A, B }) => {
+    const aN = await seedNotification(app, A.user.id);
+    expect((await B.agent.post('/api/v1/me/notifications/read').send({ ids: [aN.id] })).body).toEqual({ updated: 0 });
+    expect((await B.agent.post('/api/v1/me/notifications/read').send({ all: true })).body).toEqual({ updated: 0 });
+    expect((await A.agent.get('/api/v1/me/notifications')).body.unreadCount).toBe(1);
+  },
+  'GET /me/notifications/stream': async ({ A, B }) => {
+    const sa = await openSse(app, await loginCookie(app, A.email, A.password));
+    const sb = await openSse(app, await loginCookie(app, B.email, B.password));
+    try {
+      await sa.waitFor((e) => e.event === 'ready');
+      await sb.waitFor((e) => e.event === 'ready');
+      await new Promise((r) => setTimeout(r, 300));
+      const n = await seedNotification(app, A.user.id);
+      await app.get(UserEventsService).publish(A.user.id, {
+        type: 'notification',
+        notification: { id: n.id, kind: 'SECURITY', channel: 'IN_APP', status: 'SENT', payload: n.payload, createdAt: n.createdAt.toISOString() },
+      });
+      expect((await sa.waitFor((e) => e.event === 'notification')).data.id).toBe(n.id);
+      await new Promise((r) => setTimeout(r, 500));
+      expect(sb.events.some((e) => e.event === 'notification')).toBe(false);
+    } finally {
+      sa.close();
+      sb.close();
+    }
   },
   'PATCH /me/search-profiles/:id': async ({ A, B }) => {
     const { id } = (await A.agent.post('/api/v1/me/search-profiles').send({ name: 'A' })).body;
