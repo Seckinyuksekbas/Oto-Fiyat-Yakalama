@@ -2,7 +2,7 @@ import type { DynamicModule, Type } from '@nestjs/common';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { Test, type TestingModule } from '@nestjs/testing';
-import { seedMakeModelAliases, type CollectionJob, type DataSource, type Listing } from '@oto/db';
+import { seedMakeModelAliases, type CollectionJob, type DataSource, type Listing, type ListingAnalysis, type SearchProfile, type User } from '@oto/db';
 import { createDemoSite, type DemoSite } from '@oto/demo-site';
 import { truncateAll } from '@oto/testing';
 import { CoreModule } from '../src/core.module';
@@ -81,4 +81,28 @@ export async function createListing(ref: TestingModule, sourceId: number, over: 
       ...over,
     },
   });
+}
+let userSeq = 0;
+export async function createUser(ref: TestingModule, over: Record<string, unknown> = {}): Promise<User> {
+  userSeq += 1;
+  return ref.get(PrismaService).user.create({ data: { email: `w${userSeq}@test.com`, passwordHash: 'x', name: `U${userSeq}`, ...over } });
+}
+
+export async function createProfile(ref: TestingModule, userId: string, over: Record<string, unknown> = {}): Promise<SearchProfile> {
+  return ref.get(PrismaService).searchProfile.create({ data: { userId, name: 'Profil', channels: ['IN_APP'], fuels: [], transmissions: [], cities: [], minDiscountPct: 0, ...over } });
+}
+
+/** Analiz satırı yazar ve ilanın latestAnalysisId'sini günceller. */
+export async function createAnalysis(ref: TestingModule, listingId: number, over: Record<string, unknown> = {}): Promise<ListingAnalysis> {
+  const prisma = ref.get(PrismaService);
+  const listing = await prisma.listing.findUniqueOrThrow({ where: { id: listingId } });
+  const a = await prisma.listingAnalysis.create({
+    data: {
+      listingId, engineVersion: 'rules-v1', estimatedPrice: 1_200_000n, priceDiff: 240_000n, discountPct: 0.2, opportunityScore: 77,
+      comparableCount: 14, confidence: 'HIGH', flags: [], explanation: {}, comparableIds: [], listingPrice: listing.price,
+      listingContentHash: listing.contentHash, ...over,
+    },
+  });
+  await prisma.listing.update({ where: { id: listingId }, data: { latestAnalysisId: a.id } });
+  return a;
 }
