@@ -5,6 +5,8 @@ export const QueueName = {
   SCRAPE: 'scrape',
   ANALYZE: 'analyze',
   MATCH: 'match',
+  NOTIFY: 'notify',
+  NOTIFY_TELEGRAM: 'notify-telegram',
 } as const;
 export type QueueName = (typeof QueueName)[keyof typeof QueueName];
 
@@ -38,3 +40,9 @@ export const matchJobSchema = z.object({
   previousPrice: z.string().regex(/^\d+$/).optional(),
 });
 export type MatchJobData = z.infer<typeof matchJobSchema>;
+
+export const notifyJobSchema = z.object({ notificationId: z.number().int().positive() });
+export type NotifyJobData = z.infer<typeof notifyJobSchema>;
+export function notifyJobId(notificationId: number): string {
+  return `notify-${notificationId}`;
+}
