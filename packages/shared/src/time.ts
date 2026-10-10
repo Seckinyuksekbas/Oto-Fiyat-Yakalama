@@ -1,4 +1,4 @@
-const ISTANBUL_OFFSET_MS = 3 * 60 * 60 * 1000; // Türkiye UTC+3, yaz saati yok
+export const ISTANBUL_OFFSET_MS = 3 * 60 * 60 * 1000; // Türkiye UTC+3, yaz saati yok
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export function startOfIstanbulDay(d: Date): Date {

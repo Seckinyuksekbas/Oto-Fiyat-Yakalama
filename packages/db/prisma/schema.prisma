@@ -414,26 +414,34 @@ model ListingIssue {
 }
 
 model ListingAnalysis {
-  id               Int            @id @default(autoincrement())
-  listingId        Int
-  listing          Listing        @relation("ListingAnalyses", fields: [listingId], references: [id], onDelete: Cascade)
-  latestFor        Listing?       @relation("LatestAnalysis")
-  engineVersion    String
-  estimatedPrice   BigInt?
-  priceDiff        BigInt?
-  discountPct      Decimal?       @db.Decimal(6, 4)
-  opportunityScore Int
-  comparableCount  Int
-  confidence       Confidence
-  expansionLevel   Int?
-  flags            AnalysisFlag[]
-  explanation      Json
-  comparableIds    Int[]
-  createdAt        DateTime       @default(now())
-  matches          ListingMatch[]
+  id                 Int            @id @default(autoincrement())
+  listingId          Int
+  listing            Listing        @relation("ListingAnalyses", fields: [listingId], references: [id], onDelete: Cascade)
+  latestFor          Listing?       @relation("LatestAnalysis")
+  engineVersion      String
+  estimatedPrice     BigInt?
+  priceDiff          BigInt?
+  discountPct        Decimal?       @db.Decimal(6, 4)
+  opportunityScore   Int
+  comparableCount    Int
+  confidence         Confidence
+  expansionLevel     Int?
+  flags              AnalysisFlag[]
+  explanation        Json
+  comparableIds      Int[]
+  /// Analiz anındaki ilan fiyatı ve içerik özeti: sonraki analizde "ne değişti" buradan anlaşılır
+  listingPrice       BigInt?
+  listingContentHash String?
+  /// Bu analizin ürettiği eşleştirme olayı (NEW/PRICE_DROP/RELIST) ve kuyruğa alınma zamanı
+  matchEvent         MatchReason?
+  matchPreviousPrice BigInt?
+  matchQueuedAt      DateTime?
+  createdAt          DateTime       @default(now())
+  matches            ListingMatch[]
 
   @@index([listingId, createdAt])
   @@index([confidence, opportunityScore])
+  @@index([matchEvent, matchQueuedAt])
 }
 
 // ---------- Kullanıcı tarafı ----------

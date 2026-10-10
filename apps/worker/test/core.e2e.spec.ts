@@ -66,8 +66,8 @@ describe('HeartbeatService', () => {
 });
 
 describe('QueueRegistry', () => {
-  it('exposes the scrape and analyze queues', () => {
+  it('exposes the scrape, analyze and match queues', () => {
     const q = ref.get(QueueRegistry);
-    expect([q.scrape.name, q.analyze.name]).toEqual(['scrape', 'analyze']);
+    expect([q.scrape.name, q.analyze.name, q.match.name]).toEqual(['scrape', 'analyze', 'match']);
   });
 });

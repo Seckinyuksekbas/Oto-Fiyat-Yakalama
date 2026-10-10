@@ -14,6 +14,7 @@ export const envSchema = z
     BOT_CONTACT_URL: z.string().url().optional(),
     SCHEDULER_TICK_MS: z.coerce.number().int().min(1000).default(15_000),
     SCRAPE_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(2),
+    ANALYZE_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
   })
   .superRefine((env, ctx) => {
     if (env.NODE_ENV !== 'production') return;

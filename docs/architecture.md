@@ -28,3 +28,8 @@ Ayrıntılı tasarım: `docs/superpowers/specs/2026-10-10-oto-firsat-platformu-d
 - **Tarama:** adapter sayfaları `PoliteHttpClient` ile çeker (robots, Redis'te paylaşılan hız limiti, 3 deneme, Retry-After, engel tespiti) → `normalizeListing` → `IngestService` (mükerrersiz upsert, fiyat/km geçmişi, REMOVED/RELISTED) → değişen ilanlar için `analyze` kuyruğu (tüketicisi Plan 03).
 - **Güvenlik ağı:** tam ve sağlıklı (hata ≤ %20) taramalar dışında hiçbir ilan REMOVED yapılmaz; engellenen kaynak PAUSED olur ve yeniden denenmez.
 - **Sağlık:** 3 ardışık hata DEGRADED, 6 DOWN; alarmlar `SystemLog` + adminlere panel bildirimi (anahtar başına 30 dk susturma). Worker'lar `worker:heartbeat:*` Redis anahtarlarıyla canlılık bildirir.
+
+## Analiz (Plan 03)
+- `@oto/analysis` (saf `rules-v1` motoru) + worker `AnalysisModule`. `analyze` kuyruğunu `AnalyzeWorkerHost` tüketir (`ANALYZE_CONCURRENCY`, varsayılan 4); ilan başına Redis kilidi eşzamanlı analizi engeller.
+- Olay türetme DB'den: son analizdeki `listingPrice`/`listingContentHash` ile güncel ilan karşılaştırılır. `NEW`/`PRICE_DROP`/`RELIST` → `match` kuyruğu (Plan 04). Kuyruğa alınamayan olaylar scheduler tarafından 60 sn sonra yeniden gönderilir.
+- Scheduler İstanbul saatiyle 03:00'ten sonra günde bir kez tüm aktif ilanlar için `REFRESH` işi üretir; bu analizler `REFRESH` olarak yeniden bildirim üretmez (yalnızca ilanı daha eşleşebilir yapan `REFRESH`/`CHANGE` bir `NEW` üretir), düşük öncelikle (`priority: 100`) kuyruğa girer. Başarılı bir tarama sonrası, o taramada ilk görülen `INSUFFICIENT`/analizsiz ilanlar için `analyze-post-*` `REFRESH` işleri eklenir. Kuralların ayrıntısı: [analysis-engine.md](analysis-engine.md).

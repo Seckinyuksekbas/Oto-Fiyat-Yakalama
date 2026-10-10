@@ -2,7 +2,7 @@ import type { DynamicModule, Type } from '@nestjs/common';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { Test, type TestingModule } from '@nestjs/testing';
-import { seedMakeModelAliases, type CollectionJob, type DataSource } from '@oto/db';
+import { seedMakeModelAliases, type CollectionJob, type DataSource, type Listing } from '@oto/db';
 import { createDemoSite, type DemoSite } from '@oto/demo-site';
 import { truncateAll } from '@oto/testing';
 import { CoreModule } from '../src/core.module';
@@ -58,4 +58,27 @@ export async function createSource(ref: TestingModule, baseUrl: string, over: Re
 
 export async function createQueuedJob(ref: TestingModule, sourceId: number): Promise<CollectionJob> {
   return ref.get(PrismaService).collectionJob.create({ data: { sourceId, trigger: 'SCHEDULED' } });
+}
+
+let listingSeq = 0;
+export async function createListing(ref: TestingModule, sourceId: number, over: Record<string, unknown> = {}): Promise<Listing> {
+  listingSeq += 1;
+  return ref.get(PrismaService).listing.create({
+    data: {
+      sourceId,
+      externalId: `T${listingSeq}`,
+      url: `http://demo/ilan/T${listingSeq}`,
+      title: `İlan T${listingSeq}`,
+      make: 'BMW',
+      model: '3 Serisi',
+      trim: '318i',
+      year: 2019,
+      km: 85_000,
+      fuel: 'GASOLINE',
+      transmission: 'AUTOMATIC',
+      price: 1_200_000n,
+      contentHash: `h${listingSeq}`,
+      ...over,
+    },
+  });
 }

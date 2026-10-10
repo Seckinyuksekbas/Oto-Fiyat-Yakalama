@@ -33,6 +33,8 @@ pnpm dev:worker                # tarama işlerini yürütür
 ```
 Demo sitesinin kontrol uç noktaları: `POST /__tick` (piyasayı ilerlet), `POST /__inject` (ilan ekle, ör. `{"discount":0.25}`), `POST /__patch/:id`, `POST /__mode` (`normal|broken|captcha|forbidden`), `POST /__reset`.
 
+Worker aynı süreçte analiz kuyruğunu da tüketir; analiz sonuçları `ListingAnalysis` tablosuna yazılır. Motorun kuralları: [`docs/analysis-engine.md`](docs/analysis-engine.md).
+
 ## Testler
 ```bash
 pnpm lint && pnpm typecheck
