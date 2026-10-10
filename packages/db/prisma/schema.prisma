@@ -385,6 +385,7 @@ model Listing {
   @@index([make, model, year])
   @@index([status, firstSeenAt])
   @@index([make, model, fuel, transmission, year, km])
+  @@index([sourceId, status, year, km])
 }
 
 model ListingPriceHistory {
@@ -459,9 +460,9 @@ model SearchProfile {
   priceMin          BigInt?
   priceMax          BigInt?
   kmMax             Int?
-  fuels             Fuel[]
-  transmissions     Transmission[]
-  cities            String[]
+  fuels             Fuel[]         @default([])
+  transmissions     Transmission[] @default([])
+  cities            String[]       @default([])
   minDiscountPct    Decimal        @default(0) @db.Decimal(5, 4)
   minConfidence     Confidence     @default(MEDIUM)
   excludeDamaged    Boolean        @default(false)
@@ -494,6 +495,7 @@ model ListingMatch {
 
   @@unique([searchProfileId, listingId, reason, matchedPrice])
   @@index([userId, createdAt])
+  @@index([userId, id])
 }
 
 model Notification {

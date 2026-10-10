@@ -40,6 +40,8 @@ function listingData(l: NormalizedListing) {
   };
 }
 
+const RELIST_TWIN_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
 const isUniqueViolation = (err: unknown) => err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002';
 
 @Injectable()
@@ -55,6 +57,19 @@ export class IngestService {
     });
 
     if (!existing) {
+      const twin = await this.findRelistTwin(sourceId, l, seenAt);
+      if (twin) {
+        try {
+          // Compare-and-set: ikiz hâlâ REMOVED ve externalId değişmemişse sahiplen (eşzamanlı ingest'e karşı)
+          await this.prisma.listing.updateMany({
+            where: { id: twin.id, status: 'REMOVED', externalId: twin.externalId },
+            data: { externalId: l.externalId },
+          });
+        } catch (err) {
+          if (!isUniqueViolation(err)) throw err;
+        }
+        return this.ingest(sourceId, l, seenAt);
+      }
       try {
         const created = await this.prisma.listing.create({
           data: {
@@ -100,6 +115,22 @@ export class IngestService {
     const reason: AnalyzeReason = relisted ? 'RELIST' : priceChanged ? 'PRICE_CHANGE' : 'UPDATE';
     await this.enqueueAnalyze(existing.id, reason, l.contentHash, priceChanged ? existing.price : undefined);
     return { outcome, listingId: existing.id };
+  }
+
+  /** Spec §5.1: aynı kaynak + başlık + km + yıl ve son 7 günde kaldırılmış ilan → yeni externalId ile yeniden yayın. */
+  private findRelistTwin(sourceId: number, l: NormalizedListing, seenAt: Date) {
+    return this.prisma.listing.findFirst({
+      where: {
+        sourceId,
+        status: 'REMOVED',
+        year: l.year,
+        km: l.km,
+        title: l.title,
+        removedAt: { gte: new Date(seenAt.getTime() - RELIST_TWIN_WINDOW_MS) },
+      },
+      orderBy: { removedAt: 'desc' },
+      select: { id: true, externalId: true },
+    });
   }
 
   async recordProblems(sourceId: number, problems: ListingProblem[]): Promise<void> {

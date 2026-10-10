@@ -33,3 +33,11 @@ Ayrıntılı tasarım: `docs/superpowers/specs/2026-10-10-oto-firsat-platformu-d
 - `@oto/analysis` (saf `rules-v1` motoru) + worker `AnalysisModule`. `analyze` kuyruğunu `AnalyzeWorkerHost` tüketir (`ANALYZE_CONCURRENCY`, varsayılan 4); ilan başına Redis kilidi eşzamanlı analizi engeller.
 - Olay türetme DB'den: son analizdeki `listingPrice`/`listingContentHash` ile güncel ilan karşılaştırılır. `NEW`/`PRICE_DROP`/`RELIST` → `match` kuyruğu (Plan 04). Kuyruğa alınamayan olaylar scheduler tarafından 60 sn sonra yeniden gönderilir.
 - Scheduler İstanbul saatiyle 03:00'ten sonra günde bir kez tüm aktif ilanlar için `REFRESH` işi üretir; bu analizler `REFRESH` olarak yeniden bildirim üretmez (yalnızca ilanı daha eşleşebilir yapan `REFRESH`/`CHANGE` bir `NEW` üretir), düşük öncelikle (`priority: 100`) kuyruğa girer. Başarılı bir tarama sonrası, o taramada ilk görülen `INSUFFICIENT`/analizsiz ilanlar için `analyze-post-*` `REFRESH` işleri eklenir. Kuralların ayrıntısı: [analysis-engine.md](analysis-engine.md).
+
+## Eşleştirme (Plan 04)
+Akış: `scrape` → ingest → `analyze` (olay türetme) → `match` → `ListingMatch` (Plan 05: → `notify`).
+
+- `MatchWorkerHost` `match` kuyruğunu `MATCH_CONCURRENCY` (varsayılan 4) paralellikle tüketir; `MatchService` ilan başına advisory kilit altında `@oto/db` `matchPredicate` ile ACTIVE profilleri bulur, `decideMatchReason` ile nedeni (`NEW`/`PRICE_DROP`/`RELIST`) belirler ve `ListingMatch`'i `ON CONFLICT DO NOTHING` ile yazar.
+- API tarafında `/me/search-profiles` (CRUD, duraklat/sürdür, önizleme, plan limitleri) ve `/me/matches` (cursor sayfalama) userId kapsamlı repository'lerle çalışır; önizleme aynı `matchPredicate`'i ters yönde kullanır.
+- Ingest, yeni externalId ile gelen ve son 7 günde kaldırılmış bir ilanın ikizini bulursa RELIST yolunu izler.
+- Ayrıntılar: [matching.md](matching.md).

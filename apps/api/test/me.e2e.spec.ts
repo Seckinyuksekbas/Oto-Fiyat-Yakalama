@@ -28,6 +28,19 @@ async function loginAgain(email: string, password: string) {
 }
 
 describe('/me', () => {
+  it('shows the FREE fallback plan when the PRO subscription has expired', async () => {
+    const A = await registerUser(app);
+    const pro = await prisma.subscriptionPlan.findUniqueOrThrow({ where: { code: 'PRO' } });
+    await prisma.userSubscription.updateMany({
+      where: { userId: A.user.id },
+      data: { planId: pro.id, endsAt: new Date(Date.now() - 86_400_000) },
+    });
+    const res = await A.agent.get('/api/v1/me');
+    const free = await prisma.subscriptionPlan.findUniqueOrThrow({ where: { code: 'FREE' } });
+    expect(res.body.subscription).toMatchObject({ planCode: 'FREE', planName: free.name, status: 'FALLBACK', endsAt: null });
+    expect(res.body.subscription.limits.maxSearchProfiles).toBe((free.limits as { maxSearchProfiles: number }).maxSearchProfiles);
+  });
+
   it('PATCH /me trims the name and validates length', async () => {
     const { agent } = await registerUser(app);
     const ok = await agent.patch('/api/v1/me').send({ name: '  Yeni İsim  ' });

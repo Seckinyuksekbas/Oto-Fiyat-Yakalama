@@ -1,6 +1,6 @@
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createTestApp, newAgent, registerUser, resetState } from './helpers';
+import { createTestApp, newAgent, registerUser, resetState, seedMatch } from './helpers';
 import { listRoutes } from './routes';
 
 type Actor = Awaited<ReturnType<typeof registerUser>>;
@@ -54,6 +54,62 @@ const CASES: Record<string, Case> = {
   'DELETE /me': async ({ A, B }) => {
     expect((await B.agent.delete('/api/v1/me').send({ password: B.password })).status).toBe(204);
     await aStillLogsIn(A);
+  },
+  'GET /me/search-profiles': async ({ A, B }) => {
+    const created = await A.agent.post('/api/v1/me/search-profiles').send({ name: 'A profili' });
+    expect(created.status).toBe(201);
+    const res = await B.agent.get('/api/v1/me/search-profiles');
+    expect(res.body.items).toEqual([]);
+    expect((await A.agent.get('/api/v1/me/search-profiles')).body.items.map((p: { id: string }) => p.id)).toEqual([created.body.id]);
+  },
+  'POST /me/search-profiles': async ({ A, B }) => {
+    const created = await B.agent.post('/api/v1/me/search-profiles').send({ name: 'B profili' });
+    expect(created.status).toBe(201);
+    expect((await A.agent.get('/api/v1/me/search-profiles')).body.items).toEqual([]);
+    expect((await B.agent.get('/api/v1/me/search-profiles')).body.items.map((p: { id: string }) => p.id)).toEqual([created.body.id]);
+  },
+  'GET /me/search-profiles/:id': async ({ A, B }) => {
+    const created = await A.agent.post('/api/v1/me/search-profiles').send({ name: 'A' });
+    expect(created.status).toBe(201);
+    const { id } = created.body;
+    expect((await B.agent.get(`/api/v1/me/search-profiles/${id}`)).status).toBe(404);
+    expect((await A.agent.get(`/api/v1/me/search-profiles/${id}`)).status).toBe(200);
+  },
+  'POST /me/search-profiles/preview': async ({ A, B }) => {
+    await A.agent.post('/api/v1/me/search-profiles').send({ name: 'A' });
+    const res = await B.agent.post('/api/v1/me/search-profiles/preview').send({});
+    expect(res.status).toBe(200);
+    expect(JSON.stringify(res.body)).not.toContain(A.user.id);
+  },
+  'GET /me/matches': async ({ A, B }) => {
+    const { id } = (await A.agent.post('/api/v1/me/search-profiles').send({ name: 'A' })).body;
+    const { id: bId } = (await B.agent.post('/api/v1/me/search-profiles').send({ name: 'B' })).body;
+    const aMatch = await seedMatch(app, A.user.id, id);
+    const bMatch = await seedMatch(app, B.user.id, bId);
+    expect((await A.agent.get('/api/v1/me/matches')).body.items.map((m: { id: number }) => m.id)).toEqual([aMatch]);
+    expect((await B.agent.get('/api/v1/me/matches')).body.items.map((m: { id: number }) => m.id)).toEqual([bMatch]);
+    expect((await B.agent.get(`/api/v1/me/matches?profileId=${id}`)).body.items).toEqual([]);
+  },
+  'PATCH /me/search-profiles/:id': async ({ A, B }) => {
+    const { id } = (await A.agent.post('/api/v1/me/search-profiles').send({ name: 'A' })).body;
+    expect((await B.agent.patch(`/api/v1/me/search-profiles/${id}`).send({ name: 'B' })).status).toBe(404);
+    expect((await A.agent.get(`/api/v1/me/search-profiles/${id}`)).body.name).toBe('A');
+  },
+  'DELETE /me/search-profiles/:id': async ({ A, B }) => {
+    const { id } = (await A.agent.post('/api/v1/me/search-profiles').send({ name: 'A' })).body;
+    expect((await B.agent.delete(`/api/v1/me/search-profiles/${id}`)).status).toBe(404);
+    expect((await A.agent.get(`/api/v1/me/search-profiles/${id}`)).status).toBe(200);
+  },
+  'POST /me/search-profiles/:id/pause': async ({ A, B }) => {
+    const { id } = (await A.agent.post('/api/v1/me/search-profiles').send({ name: 'A' })).body;
+    expect((await B.agent.post(`/api/v1/me/search-profiles/${id}/pause`)).status).toBe(404);
+    expect((await A.agent.get(`/api/v1/me/search-profiles/${id}`)).body.status).toBe('ACTIVE');
+  },
+  'POST /me/search-profiles/:id/resume': async ({ A, B }) => {
+    const { id } = (await A.agent.post('/api/v1/me/search-profiles').send({ name: 'A' })).body;
+    await A.agent.post(`/api/v1/me/search-profiles/${id}/pause`);
+    expect((await B.agent.post(`/api/v1/me/search-profiles/${id}/resume`)).status).toBe(404);
+    expect((await A.agent.get(`/api/v1/me/search-profiles/${id}`)).body.status).toBe('PAUSED');
   },
 };
 

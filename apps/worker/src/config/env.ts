@@ -15,6 +15,7 @@ export const envSchema = z
     SCHEDULER_TICK_MS: z.coerce.number().int().min(1000).default(15_000),
     SCRAPE_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(2),
     ANALYZE_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
+    MATCH_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
   })
   .superRefine((env, ctx) => {
     if (env.NODE_ENV !== 'production') return;

@@ -35,6 +35,8 @@ Demo sitesinin kontrol uç noktaları: `POST /__tick` (piyasayı ilerlet), `POST
 
 Worker aynı süreçte analiz kuyruğunu da tüketir; analiz sonuçları `ListingAnalysis` tablosuna yazılır. Motorun kuralları: [`docs/analysis-engine.md`](docs/analysis-engine.md).
 
+Worker ayrıca `match` kuyruğunu tüketir: analiz olayları kullanıcıların arama profilleriyle eşleştirilir ve `ListingMatch` yazılır. Paralellik `MATCH_CONCURRENCY` (varsayılan 4) ile ayarlanır; `DATABASE_URL` `connection_limit` değeri `SCRAPE_CONCURRENCY + ANALYZE_CONCURRENCY + MATCH_CONCURRENCY` toplamından büyük olmalıdır. Ayrıntılar: [`docs/matching.md`](docs/matching.md).
+
 ## Testler
 ```bash
 pnpm lint && pnpm typecheck

@@ -24,3 +24,12 @@ describe('queue contracts', () => {
     expect(matchJobSchema.safeParse({ listingId: 1, analysisId: 2, event: 'CHANGE' }).success).toBe(false);
   });
 });
+
+describe('matchJobSchema negative cases', () => {
+  it('rejects numeric previousPrice and non-positive ids', () => {
+    expect(matchJobSchema.safeParse({ listingId: 1, analysisId: 1, event: 'PRICE_DROP', previousPrice: 1000 }).success).toBe(false);
+    expect(matchJobSchema.safeParse({ listingId: 1, analysisId: 0, event: 'NEW' }).success).toBe(false);
+    expect(matchJobSchema.safeParse({ listingId: -1, analysisId: 1, event: 'NEW' }).success).toBe(false);
+    expect(matchJobSchema.safeParse({ listingId: 1, analysisId: 1, event: 'REFRESH' }).success).toBe(false);
+  });
+});

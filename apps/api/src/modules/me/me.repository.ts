@@ -19,6 +19,10 @@ export class MeRepository {
     });
   }
 
+  findPlanByCode(code: string): Promise<SubscriptionPlan | null> {
+    return this.prisma.subscriptionPlan.findUnique({ where: { code } });
+  }
+
   countSearchProfiles(userId: string) {
     return this.prisma.searchProfile.count({ where: { userId } });
   }
@@ -49,11 +53,6 @@ export class MeRepository {
   /** Kullanıcının kullanılmamış tüm şifre sıfırlama token'larını geçersiz kılar. */
   async invalidateResetTokens(userId: string): Promise<void> {
     await this.prisma.passwordResetToken.updateMany({ where: { userId, usedAt: null }, data: { usedAt: new Date() } });
-  }
-
-  async findPasswordHash(userId: string): Promise<string | null> {
-    const u = await this.prisma.user.findFirst({ where: { id: userId, status: { not: 'DELETED' } }, select: { passwordHash: true } });
-    return u?.passwordHash ?? null;
   }
 
   async updatePasswordHash(userId: string, passwordHash: string): Promise<void> {

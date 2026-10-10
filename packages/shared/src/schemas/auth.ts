@@ -20,6 +20,7 @@ export type LoginInput = z.infer<typeof loginSchema>;
 
 export const verifyEmailSchema = z.object({ token: tokenSchema }).strict();
 export const forgotPasswordSchema = z.object({ email: emailSchema }).strict();
+export const resendVerificationSchema = z.object({ email: emailSchema }).strict();
 export const resetPasswordSchema = z.object({ token: tokenSchema, newPassword: newPasswordSchema }).strict();
 export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
 

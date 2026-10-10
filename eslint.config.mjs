@@ -28,6 +28,14 @@ export default tseslint.config(
           selector: "Identifier[name='PrismaService']",
           message: '/me modüllerinde PrismaService yerine *.repository.ts kullanın.',
         },
+        {
+          selector: "ObjectPattern > Property[key.name='prisma']",
+          message: '/me modüllerinde prisma destructuring yasaktır; *.repository.ts kullanın.',
+        },
+        {
+          selector: "Identifier[name='PrismaClient']",
+          message: '/me modüllerinde PrismaClient kullanılamaz; *.repository.ts kullanın.',
+        },
       ],
     },
   },
