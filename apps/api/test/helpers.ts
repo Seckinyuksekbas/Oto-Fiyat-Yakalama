@@ -1,6 +1,6 @@
 import { Test } from '@nestjs/testing';
 import type { NestExpressApplication } from '@nestjs/platform-express';
-import { seedPlans } from '@oto/db';
+import { seedPlans, type Role } from '@oto/db';
 import request from 'supertest';
 import type TestAgent from 'supertest/lib/agent';
 import { AppModule } from '../src/app.module';
@@ -60,4 +60,8 @@ export function tokenFromMail(text: string): string {
   const m = text.match(/token=([A-Za-z0-9_-]+)/);
   if (!m) throw new Error(`no token in mail: ${text}`);
   return m[1];
+}
+
+export async function setRole(app: NestExpressApplication, userId: string, role: Role): Promise<void> {
+  await app.get(PrismaService).user.update({ where: { id: userId }, data: { role } });
 }
