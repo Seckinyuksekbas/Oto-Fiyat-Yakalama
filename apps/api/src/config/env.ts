@@ -1,0 +1,37 @@
+import { z } from 'zod';
+
+const bool = z.enum(['true', 'false']).transform((v) => v === 'true');
+const pem = z
+  .string()
+  .min(1)
+  .transform((v) => v.replace(/\\n/g, '\n'));
+
+export const envSchema = z.object({
+  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  PORT: z.coerce.number().int().default(3001),
+  LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
+  DATABASE_URL: z.string().url(),
+  REDIS_URL: z.string().url(),
+  JWT_PRIVATE_KEY: pem,
+  JWT_PUBLIC_KEY: pem,
+  DATA_ENCRYPTION_KEY: z
+    .string()
+    .refine((v) => Buffer.from(v, 'base64').length === 32, 'base64 kodlu 32 bayt olmalı'),
+  PUBLIC_BASE_URL: z.string().url(),
+  COOKIE_SECURE: bool.default('true'),
+  MAIL_TRANSPORT: z.enum(['smtp', 'json']).default('smtp'),
+  SMTP_HOST: z.string().default('localhost'),
+  SMTP_PORT: z.coerce.number().int().default(1025),
+  SMTP_FROM: z.string().default('Oto Fırsat <no-reply@localhost>'),
+  HIBP_ENABLED: bool.default('false'),
+});
+export type Env = z.infer<typeof envSchema>;
+
+export function parseEnv(source: Record<string, string | undefined>): Env {
+  const result = envSchema.safeParse(source);
+  if (!result.success) {
+    const msg = result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
+    throw new Error(`Invalid environment: ${msg}`);
+  }
+  return result.data;
+}
