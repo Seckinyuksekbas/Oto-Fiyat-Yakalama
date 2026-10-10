@@ -32,6 +32,26 @@ describe('Encryptor', () => {
     expect(() => enc.decrypt([v, iv, tag, flipped.toString('base64url')].join(':'))).toThrow();
   });
 
+  it('rejects a truncated auth tag', () => {
+    const enc = new Encryptor(key());
+    const [v, iv, tag, ct] = enc.encrypt('secret').split(':');
+    const short = Buffer.from(tag, 'base64url').subarray(0, 8);
+    expect(() => enc.decrypt([v, iv, short.toString('base64url'), ct].join(':'))).toThrow();
+  });
+
+  it('rejects a tampered IV', () => {
+    const enc = new Encryptor(key());
+    const [v, iv, tag, ct] = enc.encrypt('secret').split(':');
+    const flipped = Buffer.from(iv, 'base64url');
+    flipped[0] ^= 0xff;
+    expect(() => enc.decrypt([v, flipped.toString('base64url'), tag, ct].join(':'))).toThrow();
+  });
+
+  it('rejects a payload with the wrong part count', () => {
+    const enc = new Encryptor(key());
+    expect(() => enc.decrypt('v1:a:b')).toThrow(/format/);
+  });
+
   it('fails with a different key', () => {
     const ct = new Encryptor(key()).encrypt('secret');
     expect(() => new Encryptor(key()).decrypt(ct)).toThrow();
