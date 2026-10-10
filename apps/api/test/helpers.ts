@@ -1,5 +1,6 @@
 import { Test } from '@nestjs/testing';
 import type { NestExpressApplication } from '@nestjs/platform-express';
+import { truncateAll } from '@oto/testing';
 import { seedPlans, type Role } from '@oto/db';
 import request from 'supertest';
 import type TestAgent from 'supertest/lib/agent';
@@ -19,11 +20,7 @@ export async function createTestApp(): Promise<NestExpressApplication> {
 
 export async function resetState(app: NestExpressApplication): Promise<void> {
   const prisma = app.get(PrismaService);
-  const tables = await prisma.$queryRaw<{ tablename: string }[]>`
-    SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename <> '_prisma_migrations'`;
-  await prisma.$executeRawUnsafe(
-    `TRUNCATE ${tables.map((t) => `"${t.tablename}"`).join(', ')} RESTART IDENTITY CASCADE`,
-  );
+  await truncateAll(prisma);
   await app.get(RedisService).flushdb();
   await seedPlans(prisma);
   app.get(MailService).outbox.length = 0;

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import type { Role } from '@oto/db';
 import type { ClientMeta } from '../../common/client-meta';
-import { generateToken, hashToken } from '../../common/crypto/tokens';
+import { generateToken, hashToken } from '@oto/server-common';
 import { PrismaService } from '../../infra/prisma.service';
 import { REFRESH_TTL_MS, ROTATION_GRACE_MS } from './auth.constants';
 

@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { User } from '@oto/db';
-import { generateToken, hashToken } from '../../common/crypto/tokens';
+import { generateToken, hashToken } from '@oto/server-common';
 import { ENV } from '../../config/config.module';
 import type { Env } from '../../config/env';
 import { PrismaService } from '../../infra/prisma.service';

@@ -1,4 +1,4 @@
-import type { PrismaClient, User } from '@prisma/client';
+import type { DataSource, PrismaClient, User } from '@prisma/client';
 import type { PlanLimits } from '@oto/shared';
 import argon2 from 'argon2';
 import { ARGON2_OPTIONS } from './argon2';
@@ -55,6 +55,53 @@ export async function seedSuperAdmin(
       kvkkAcceptedAt: now,
       subscriptions: { create: { planId: free.id } },
       channels: { create: { type: 'IN_APP', isVerified: true } },
+    },
+  });
+}
+
+/** Marka/model eşleme tablosu başlangıç verisi. Gerçek marka/model adlarıdır; demo katalog da bunları kullanır. */
+export const MAKE_MODEL_ALIAS_SEEDS: { rawText: string; make: string; model: string; trim: string | null }[] = [
+  { rawText: 'Renault Clio', make: 'Renault', model: 'Clio', trim: null },
+  { rawText: 'Fiat Egea', make: 'Fiat', model: 'Egea', trim: null },
+  { rawText: 'Toyota Corolla', make: 'Toyota', model: 'Corolla', trim: null },
+  { rawText: 'Volkswagen Golf', make: 'Volkswagen', model: 'Golf', trim: null },
+  { rawText: 'Volkswagen Passat', make: 'Volkswagen', model: 'Passat', trim: null },
+  { rawText: 'VW Golf', make: 'Volkswagen', model: 'Golf', trim: null },
+  { rawText: 'VW Passat', make: 'Volkswagen', model: 'Passat', trim: null },
+  { rawText: 'BMW 3 Serisi', make: 'BMW', model: '3 Serisi', trim: null },
+  { rawText: 'Mercedes-Benz C Serisi', make: 'Mercedes-Benz', model: 'C Serisi', trim: null },
+  { rawText: 'Mercedes C Serisi', make: 'Mercedes-Benz', model: 'C Serisi', trim: null },
+  { rawText: 'Honda Civic', make: 'Honda', model: 'Civic', trim: null },
+  { rawText: 'Hyundai i20', make: 'Hyundai', model: 'i20', trim: null },
+  { rawText: 'Ford Focus', make: 'Ford', model: 'Focus', trim: null },
+  { rawText: 'Peugeot 3008', make: 'Peugeot', model: '3008', trim: null },
+  { rawText: 'Dacia Duster', make: 'Dacia', model: 'Duster', trim: null },
+];
+
+export async function seedMakeModelAliases(prisma: PrismaClient): Promise<void> {
+  for (const alias of MAKE_MODEL_ALIAS_SEEDS) {
+    await prisma.makeModelAlias.upsert({ where: { rawText: alias.rawText }, update: {}, create: alias });
+  }
+}
+
+/** Yalnızca geliştirme: yerel demo ilan sitesini (apps/demo-site) izinli TEST kaynağı olarak kaydeder. */
+export async function seedDemoSource(prisma: PrismaClient, baseUrl: string): Promise<DataSource> {
+  return prisma.dataSource.upsert({
+    where: { code: 'demo-site' },
+    update: { config: { baseUrl } },
+    create: {
+      code: 'demo-site',
+      name: 'Demo İlan Sitesi',
+      adapterKey: 'demo-site',
+      kind: 'HTTP',
+      permissionType: 'TEST',
+      permissionNote: 'Yerel sahte ilan sitesi (apps/demo-site); gerçek veri içermez.',
+      permissionVerifiedAt: new Date(),
+      isActive: true,
+      intervalSec: 120,
+      minRequestGapMs: 200,
+      maxConcurrency: 1,
+      config: { baseUrl },
     },
   });
 }

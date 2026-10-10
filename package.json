@@ -6,7 +6,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "build:packages": "pnpm -r --filter \"./packages/*\" build",
+    "build:packages": "pnpm -r --filter \"./packages/*\" --filter @oto/demo-site build",
     "build": "pnpm -r build",
     "lint": "eslint .",
     "typecheck": "pnpm build:packages && pnpm -r typecheck",
@@ -17,7 +17,10 @@
     "db:migrate": "pnpm --filter @oto/db migrate:deploy",
     "db:seed": "pnpm --filter @oto/db seed",
     "keys:gen": "node scripts/gen-keys.mjs",
-    "dev:api": "pnpm --filter @oto/api dev"
+    "dev:api": "pnpm --filter @oto/api dev",
+    "dev:demo": "pnpm --filter @oto/demo-site dev",
+    "dev:worker": "pnpm --filter @oto/worker dev",
+    "dev:scheduler": "pnpm --filter @oto/worker dev:scheduler"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",

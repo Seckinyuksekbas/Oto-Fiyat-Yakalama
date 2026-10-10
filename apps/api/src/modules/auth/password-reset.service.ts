@@ -2,7 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { ResetPasswordInput } from '@oto/shared';
 import { AuditService } from '../../common/audit/audit.service';
 import type { ClientMeta } from '../../common/client-meta';
-import { generateToken, hashToken } from '../../common/crypto/tokens';
+import { generateToken, hashToken } from '@oto/server-common';
 import { ENV } from '../../config/config.module';
 import type { Env } from '../../config/env';
 import { PrismaService } from '../../infra/prisma.service';

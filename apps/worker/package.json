@@ -1,0 +1,41 @@
+{
+  "name": "@oto/worker",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "build": "nest build",
+    "dev": "nest start --watch",
+    "dev:scheduler": "nest start --watch -- --role=scheduler",
+    "start": "node dist/main.js",
+    "start:scheduler": "node dist/main.js --role=scheduler",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:e2e": "vitest run -c vitest.e2e.config.ts"
+  },
+  "dependencies": {
+    "@nestjs/common": "^11.0.5",
+    "@nestjs/core": "^11.0.5",
+    "@oto/collection": "workspace:*",
+    "@oto/db": "workspace:*",
+    "@oto/server-common": "workspace:*",
+    "@oto/shared": "workspace:*",
+    "bullmq": "^5.34.0",
+    "ioredis": "^5.4.2",
+    "nestjs-pino": "^4.3.0",
+    "pino": "^9.6.0",
+    "pino-http": "^10.4.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^11.0.2",
+    "@nestjs/testing": "^11.0.5",
+    "@oto/demo-site": "workspace:*",
+    "@oto/testing": "workspace:*",
+    "@swc/core": "^1.10.7",
+    "pino-pretty": "^13.0.0",
+    "unplugin-swc": "^1.5.1",
+    "vitest": "^3.0.5"
+  }
+}

@@ -1,0 +1,54 @@
+import { Inject, Injectable, Logger, type OnApplicationBootstrap, type OnModuleDestroy } from '@nestjs/common';
+import { ENV } from '../config/config.module';
+import type { Env } from '../config/env';
+import { SchedulerService } from './scheduler.service';
+
+const CLEANUP_EVERY_MS = 24 * 60 * 60 * 1000;
+
+/** Yalnızca ROLE=scheduler süreçlerinde yüklenir; tek instance çalışmalıdır. */
+@Injectable()
+export class SchedulerLoop implements OnApplicationBootstrap, OnModuleDestroy {
+  private readonly logger = new Logger(SchedulerLoop.name);
+  private tickTimer?: NodeJS.Timeout;
+  private cleanupTimer?: NodeJS.Timeout;
+  private ticking = false;
+
+  constructor(
+    private readonly scheduler: SchedulerService,
+    @Inject(ENV) private readonly env: Env,
+  ) {}
+
+  onApplicationBootstrap(): void {
+    void this.safeTick();
+    void this.safeCleanup();
+    this.tickTimer = setInterval(() => void this.safeTick(), this.env.SCHEDULER_TICK_MS);
+    this.cleanupTimer = setInterval(() => void this.safeCleanup(), CLEANUP_EVERY_MS);
+  }
+
+  onModuleDestroy(): void {
+    if (this.tickTimer) clearInterval(this.tickTimer);
+    if (this.cleanupTimer) clearInterval(this.cleanupTimer);
+  }
+
+  private async safeTick(): Promise<void> {
+    if (this.ticking) return;
+    this.ticking = true;
+    try {
+      const n = await this.scheduler.tick();
+      if (n > 0) this.logger.log(`${n} tarama işi kuyruğa eklendi`);
+    } catch (err) {
+      this.logger.error(`Scheduler tick başarısız: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      this.ticking = false;
+    }
+  }
+
+  private async safeCleanup(): Promise<void> {
+    try {
+      const r = await this.scheduler.cleanup();
+      this.logger.log(`Temizlik: ${r.systemLogs} log, ${r.scrapeErrors} tarama hatası, ${r.listingIssues} ilan sorunu silindi`);
+    } catch (err) {
+      this.logger.error(`Temizlik başarısız: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+}

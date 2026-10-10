@@ -23,6 +23,16 @@ Mailpit arayüzü: http://localhost:8025
 
 Diğer yerel yığınlarla port çakışmasını önlemek için dev compose varsayılan olmayan host portları kullanır: Postgres `localhost:5433`, Redis `localhost:6380` (`.env.example` bunlara göre ayarlıdır). Mailpit: SMTP `1025`, arayüz `8025`.
 
+## Toplama hattını çalıştırma (geliştirme)
+```bash
+pnpm db:up && pnpm build:packages && pnpm db:migrate
+pnpm db:seed                   # SEED_DEMO_SOURCE=true ise demo kaynağı da kaydeder
+pnpm dev:demo                  # http://localhost:4000/ilanlar — sahte ilan sitesi
+pnpm dev:scheduler             # zamanı gelen kaynak için tarama işi üretir
+pnpm dev:worker                # tarama işlerini yürütür
+```
+Demo sitesinin kontrol uç noktaları: `POST /__tick` (piyasayı ilerlet), `POST /__inject` (ilan ekle, ör. `{"discount":0.25}`), `POST /__patch/:id`, `POST /__mode` (`normal|broken|captcha|forbidden`), `POST /__reset`.
+
 ## Testler
 ```bash
 pnpm lint && pnpm typecheck
