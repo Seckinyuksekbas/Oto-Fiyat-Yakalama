@@ -7,22 +7,26 @@ import { AnalysisModule } from '../src/analysis/analysis.module';
 import { CollectionModule } from '../src/collection/collection.module';
 import { analyzeJobId } from '../src/collection/ingest.service';
 import { PrismaService } from '../src/infra/prisma.service';
+import { MatchingModule } from '../src/matching/matching.module';
 import { ANALYZE_WORKER_AUTOSTART, AnalyzeWorkerHost } from '../src/processors/analyze-worker.host';
+import { MATCH_WORKER_AUTOSTART, MatchWorkerHost } from '../src/processors/match-worker.host';
 import { SCRAPE_WORKER_AUTOSTART, ScrapeWorkerHost } from '../src/processors/scrape-worker.host';
 import { QueueRegistry } from '../src/queues/queue-registry';
 import { SchedulerModule } from '../src/scheduler/scheduler.module';
 import { SchedulerService } from '../src/scheduler/scheduler.service';
-import { createAdmin, createContext, resetState, startDemo } from './helpers';
+import { createAdmin, createContext, createProfile, createUser, resetState, startDemo } from './helpers';
 
 @Module({
-  imports: [CollectionModule, AnalysisModule],
+  imports: [CollectionModule, AnalysisModule, MatchingModule],
   providers: [
     ScrapeWorkerHost,
     { provide: SCRAPE_WORKER_AUTOSTART, useValue: false },
     AnalyzeWorkerHost,
     { provide: ANALYZE_WORKER_AUTOSTART, useValue: false },
+    MatchWorkerHost,
+    { provide: MATCH_WORKER_AUTOSTART, useValue: false },
   ],
-  exports: [ScrapeWorkerHost, AnalyzeWorkerHost],
+  exports: [ScrapeWorkerHost, AnalyzeWorkerHost, MatchWorkerHost],
 })
 class ProcessorTestModule {}
 
@@ -39,6 +43,7 @@ beforeAll(async () => {
   ref.get(ScrapeWorkerHost).start();
 });
 afterAll(async () => {
+  await ref.get(MatchWorkerHost).onModuleDestroy();
   await ref.get(AnalyzeWorkerHost).onModuleDestroy();
   await ref.get(ScrapeWorkerHost).onModuleDestroy();
   await demo.close();
@@ -114,7 +119,10 @@ describe('collection pipeline (scheduler → queue → worker → DB → analyze
   // Analiz worker'ı yalnızca bu testte çalışır: ilk senaryo analyze kuyruğundaki işleri sayıp inceler.
   it('analyzes scraped listings and emits a NEW match event for an injected deal', async () => {
     ref.get(AnalyzeWorkerHost).start();
+    ref.get(MatchWorkerHost).start();
     await createAdmin(ref);
+    const user = await createUser(ref);
+    const profile = await createProfile(ref, user.id, { make: 'BMW', minDiscountPct: 0.1, minConfidence: 'LOW' });
     const source = await seedDemoSource(prisma, demo.baseUrl);
     await prisma.dataSource.update({ where: { id: source.id }, data: { minRequestGapMs: 0, intervalSec: 60 } });
     const year = new Date().getFullYear();
@@ -139,6 +147,15 @@ describe('collection pipeline (scheduler → queue → worker → DB → analyze
     expect(Number(a.discountPct)).toBeGreaterThan(0.18);
     expect(Number(a.discountPct)).toBeLessThan(0.32);
     expect(a.opportunityScore).toBeGreaterThanOrEqual(60);
-    expect(await ref.get(QueueRegistry).match.getJob(`match-${a.id}`)).toBeTruthy();
+    // Eşleşme kuyrukta bekleyebilir ya da worker tarafından tüketilmiş olabilir; asıl sonuç ListingMatch'tir.
+    let match = null;
+    const matchDeadline = Date.now() + 30_000;
+    while (Date.now() < matchDeadline && !match) {
+      match = await prisma.listingMatch.findFirst({ where: { listingId: row.id, searchProfileId: profile.id } });
+      if (!match) await new Promise((r) => setTimeout(r, 200));
+    }
+    expect(match).not.toBeNull();
+    expect(match!.reason).toBe('NEW');
+    expect(match!.matchedPrice).toBe(row.price);
   });
 });
