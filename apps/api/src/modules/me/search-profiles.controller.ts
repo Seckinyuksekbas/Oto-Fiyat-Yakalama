@@ -1,8 +1,10 @@
 import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post } from '@nestjs/common';
 import {
   createSearchProfileSchema,
+  previewSearchProfileSchema,
   updateSearchProfileSchema,
   type CreateSearchProfileInput,
+  type PreviewSearchProfileInput,
   type UpdateSearchProfileInput,
 } from '@oto/shared';
 import { CurrentUser } from '../../common/decorators/current-user';
@@ -22,6 +24,12 @@ export class SearchProfilesController {
   @Post()
   create(@CurrentUser() user: AuthUser, @Body(new ZodPipe(createSearchProfileSchema)) body: CreateSearchProfileInput) {
     return this.profiles.create(user.id, body);
+  }
+
+  @Post('preview')
+  @HttpCode(200)
+  preview(@Body(new ZodPipe(previewSearchProfileSchema)) body: PreviewSearchProfileInput) {
+    return this.profiles.preview(body);
   }
 
   @Get(':id')

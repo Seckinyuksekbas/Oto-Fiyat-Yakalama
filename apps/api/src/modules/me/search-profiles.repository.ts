@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { NormalizedProfile } from '@oto/shared';
-import type { SearchProfile } from '@oto/db';
+import { countPreviewSince, previewListings, type MatchFilter, type PreviewListingRow, type SearchProfile } from '@oto/db';
 import { PrismaService } from '../../infra/prisma.service';
 
 function toData(p: NormalizedProfile) {
@@ -18,6 +18,12 @@ function toData(p: NormalizedProfile) {
 @Injectable()
 export class SearchProfilesRepository {
   constructor(private readonly prisma: PrismaService) {}
+
+  /** Kişisel veri okumaz (ilanlar merkezi veridir); repository'de durur çünkü ham SQL çalıştırır. */
+  async preview(filter: MatchFilter, limit: number, since: Date): Promise<{ rows: PreviewListingRow[]; recent: number }> {
+    const [rows, recent] = await Promise.all([previewListings(this.prisma, filter, limit), countPreviewSince(this.prisma, filter, since)]);
+    return { rows, recent };
+  }
 
   list(userId: string): Promise<SearchProfile[]> {
     return this.prisma.searchProfile.findMany({ where: { userId }, orderBy: { createdAt: 'asc' } });

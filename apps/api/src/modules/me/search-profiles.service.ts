@@ -5,9 +5,10 @@ import {
   withProfileDefaults,
   type CreateSearchProfileInput,
   type NormalizedProfile,
+  type PreviewSearchProfileInput,
   type UpdateSearchProfileInput,
 } from '@oto/shared';
-import type { SearchProfile } from '@oto/db';
+import type { MatchFilter, SearchProfile } from '@oto/db';
 import { AppError, Errors } from '../../common/errors/app-error';
 import { LimitsService, type UserLimits } from './limits.service';
 import { toSearchProfileView, type SearchProfileView } from './search-profile.view';
@@ -39,6 +40,28 @@ export class SearchProfilesService {
     const p = await this.repo.find(userId, id);
     if (!p) throw Errors.notFound();
     return toSearchProfileView(p);
+  }
+
+  async preview(input: PreviewSearchProfileInput, now = new Date()) {
+    const p = withProfileDefaults({ name: 'önizleme', ...input });
+    const filter: MatchFilter = {
+      make: p.make, model: p.model, yearMin: p.yearMin, yearMax: p.yearMax,
+      priceMin: p.priceMin === null ? null : BigInt(p.priceMin), priceMax: p.priceMax === null ? null : BigInt(p.priceMax),
+      kmMax: p.kmMax, fuels: p.fuels, transmissions: p.transmissions, cities: p.cities, excludeDamaged: p.excludeDamaged,
+      minDiscountPct: p.minDiscountPct, minConfidence: p.minConfidence,
+    };
+    const { rows, recent } = await this.repo.preview(filter, 20, new Date(now.getTime() - 7 * 86_400_000));
+    return {
+      items: rows.map((r) => ({
+        id: r.id, title: r.title, make: r.make, model: r.model, year: r.year, km: r.km, city: r.city, price: r.price.toString(),
+        imageUrl: r.imageUrl, url: r.url, firstSeenAt: r.firstSeenAt,
+        analysis: {
+          opportunityScore: r.opportunityScore, confidence: r.confidence,
+          discountPct: r.discountPct === null ? null : Number(r.discountPct), estimatedPrice: r.estimatedPrice?.toString() ?? null,
+        },
+      })),
+      estimatedDailyMatches: Math.round((recent / 7) * 10) / 10,
+    };
   }
 
   async create(userId: string, input: CreateSearchProfileInput): Promise<SearchProfileView> {
@@ -83,7 +106,7 @@ export class SearchProfilesService {
     if (!(await this.repo.delete(userId, id))) throw Errors.notFound();
   }
 
-  private assertChannels(channels: readonly string[], lim: UserLimits): void {
+  private assertChannels(channels: NormalizedProfile['channels'], lim: UserLimits): void {
     const missing = channels.find((c) => !lim.limits.channels.includes(c));
     if (missing) throw new AppError(ErrorCode.LIMIT_REACHED, 403, 'Planınız bu bildirim kanalını içermiyor', { channel: missing });
   }

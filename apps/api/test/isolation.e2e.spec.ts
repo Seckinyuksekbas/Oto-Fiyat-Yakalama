@@ -1,6 +1,6 @@
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createTestApp, newAgent, registerUser, resetState } from './helpers';
+import { createTestApp, newAgent, registerUser, resetState, seedMatch } from './helpers';
 import { listRoutes } from './routes';
 
 type Actor = Awaited<ReturnType<typeof registerUser>>;
@@ -74,6 +74,19 @@ const CASES: Record<string, Case> = {
     const { id } = created.body;
     expect((await B.agent.get(`/api/v1/me/search-profiles/${id}`)).status).toBe(404);
     expect((await A.agent.get(`/api/v1/me/search-profiles/${id}`)).status).toBe(200);
+  },
+  'POST /me/search-profiles/preview': async ({ A, B }) => {
+    await A.agent.post('/api/v1/me/search-profiles').send({ name: 'A' });
+    const res = await B.agent.post('/api/v1/me/search-profiles/preview').send({});
+    expect(res.status).toBe(200);
+    expect(JSON.stringify(res.body)).not.toContain(A.user.id);
+  },
+  'GET /me/matches': async ({ A, B }) => {
+    const { id } = (await A.agent.post('/api/v1/me/search-profiles').send({ name: 'A' })).body;
+    await seedMatch(app, A.user.id, id);
+    expect((await A.agent.get('/api/v1/me/matches')).body.items).toHaveLength(1);
+    expect((await B.agent.get('/api/v1/me/matches')).body.items).toEqual([]);
+    expect((await B.agent.get(`/api/v1/me/matches?profileId=${id}`)).body.items).toEqual([]);
   },
   'PATCH /me/search-profiles/:id': async ({ A, B }) => {
     const { id } = (await A.agent.post('/api/v1/me/search-profiles').send({ name: 'A' })).body;
