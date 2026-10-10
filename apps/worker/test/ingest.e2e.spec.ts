@@ -49,6 +49,16 @@ describe('IngestService.ingest', () => {
     expect(row.priceHistory).toHaveLength(1);
     const job = await ref.get(QueueRegistry).analyze.getJob(analyzeJobId(r.listingId, 'NEW', l.contentHash));
     expect(job?.data).toEqual({ listingId: r.listingId, reason: 'NEW' });
+    expect(job?.opts.removeOnComplete).toBe(true);
+  });
+
+  it('handles concurrent ingests of the same new listing without duplicates', async () => {
+    const l = listing();
+    const [a, b] = await Promise.all([ingest.ingest(sourceId, l, t(0)), ingest.ingest(sourceId, l, t(0))]);
+    expect([a.outcome, b.outcome].sort()).toEqual(['NEW', 'UNCHANGED']);
+    expect(a.listingId).toBe(b.listingId);
+    expect(await prisma.listing.count()).toBe(1);
+    expect(await prisma.listingPriceHistory.count()).toBe(1);
   });
 
   it('is idempotent: the same listing twice (e.g. pagination shift) is UNCHANGED and adds no history', async () => {
@@ -58,6 +68,7 @@ describe('IngestService.ingest', () => {
     expect(second).toEqual({ outcome: 'UNCHANGED', listingId: first.listingId });
     expect(await prisma.listing.count()).toBe(1);
     expect(await prisma.listingPriceHistory.count()).toBe(1);
+    expect(await ref.get(QueueRegistry).analyze.count()).toBe(1);
     expect((await prisma.listing.findUniqueOrThrow({ where: { id: first.listingId } })).lastSeenAt).toEqual(t(1));
   });
 

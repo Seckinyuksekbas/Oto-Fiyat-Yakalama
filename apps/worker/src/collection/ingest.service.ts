@@ -127,7 +127,7 @@ export class IngestService {
     const data: AnalyzeJobData = { listingId, reason, ...(previousPrice !== undefined ? { previousPrice: previousPrice.toString() } : {}) };
     await this.queues.analyze.add('analyze', data, {
       jobId: analyzeJobId(listingId, reason, contentHash),
-      removeOnComplete: { age: 24 * 60 * 60 },
+      removeOnComplete: true,
       removeOnFail: { age: 7 * 24 * 60 * 60 },
     });
   }
