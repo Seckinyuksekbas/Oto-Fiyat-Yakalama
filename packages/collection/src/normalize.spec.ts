@@ -40,11 +40,27 @@ describe('parseInteger', () => {
     ['85.000 km', 85_000],
     ['1250000', 1_250_000],
     [960000, 960_000],
+    ['9600.50 TL', 9600],
+    ['12.5', 12],
+    ['1.250', 1250],
+    ['85,000', 85_000],
   ])('%s → %d', (input, expected) => {
     expect(parseInteger(input)).toBe(expected);
   });
 
-  it.each(['', 'yok', '12345678901234', 12.5])('rejects %s', (input) => {
+  it.each([
+    '',
+    'yok',
+    '12345678901234',
+    12.5,
+    '-85.000 km',
+    '1e6',
+    '2019 - 2020',
+    '1.250.000,00 TL (KDV 20%)',
+    undefined,
+    null,
+    {},
+  ])('rejects %s', (input) => {
     expect(parseInteger(input)).toBeNull();
   });
 });
@@ -60,6 +76,13 @@ describe('fuel / transmission', () => {
     expect(parseTransmission('Düz')).toBe('MANUAL');
     expect(parseTransmission('CVT?')).toBeNull();
   });
+
+  it('maps ASCII-uppercase Turkish labels (dotless ı)', () => {
+    expect(parseFuel('BENZIN')).toBe('GASOLINE');
+    expect(parseFuel('DIZEL')).toBe('DIESEL');
+    expect(parseTransmission('OTOMATIK')).toBe('AUTOMATIC');
+    expect(parseTransmission('YARI OTOMATIK')).toBe('SEMI_AUTOMATIC');
+  });
 });
 
 describe('createAliasResolver', () => {
@@ -67,6 +90,10 @@ describe('createAliasResolver', () => {
     expect(resolve('BMW 3 Serisi 320i M Sport')).toEqual({ make: 'BMW', model: '3 Serisi', trim: '320i M Sport' });
     expect(resolve('bmw  3 serisi 318i')).toEqual({ make: 'BMW', model: '3 Serisi', trim: '318i' });
     expect(resolve('BMW 3 Serisi')).toEqual({ make: 'BMW', model: '3 Serisi', trim: null });
+  });
+
+  it('matches ASCII-uppercase input and keeps the original trim case', () => {
+    expect(resolve('BMW 3 SERISI 320I')).toEqual({ make: 'BMW', model: '3 Serisi', trim: '320I' });
   });
 
   it('does not match a prefix in the middle of a word', () => {
@@ -114,6 +141,13 @@ describe('normalizeListing', () => {
     expect(normalizeListing(raw({ year: 2028 }), resolve, NOW).ok).toBe(false);
   });
 
+  it('reports a problem instead of throwing when year/km/price are undefined', () => {
+    const r = normalizeListing(raw({ year: undefined as never, km: undefined as never, price: undefined as never }), resolve, NOW);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.problems.map((p) => p.field).sort()).toEqual(['km', 'price', 'year']);
+  });
+
   it('drops empty damage info and non-http image URLs', () => {
     const r = normalizeListing(raw({ damage: { tramerAmount: '', paintedParts: [], changedParts: [] }, imageUrl: 'javascript:alert(1)' }), resolve, NOW);
     expect(r.ok && r.listing.damageInfo).toBeNull();
@@ -131,5 +165,13 @@ describe('contentHash', () => {
     expect(a.listing.contentHash).not.toBe(c.listing.contentHash);
     const { contentHash: _h, ...rest } = a.listing;
     expect(contentHash(rest)).toBe(a.listing.contentHash);
+  });
+
+  it('ignores object key order', () => {
+    const a = normalizeListing(raw(), resolve, NOW);
+    if (!a.ok) throw new Error('unexpected');
+    const { contentHash: _h, ...rest } = a.listing;
+    const reordered = Object.fromEntries(Object.entries(rest).reverse()) as typeof rest;
+    expect(contentHash(reordered)).toBe(a.listing.contentHash);
   });
 });

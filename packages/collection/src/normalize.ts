@@ -16,7 +16,18 @@ export interface AliasRow {
 
 export const LIMITS = { minYear: 1980, minKm: 0, maxKm: 1_500_000, minPrice: 50_000, maxPrice: 50_000_000 } as const;
 
-const FUELS: Record<string, Fuel> = {
+/** Türkçe büyük/küçük harf katlama: tr-TR lower + NFC + birleşik nokta temizliği + ı→i. */
+export function normalizeText(s: string): string {
+  return s
+    .toLocaleLowerCase('tr-TR')
+    .normalize('NFC')
+    .replace(/̇/g, '')
+    .replace(/ı/g, 'i')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+const FUEL_LABELS: Record<string, Fuel> = {
   benzin: 'GASOLINE',
   dizel: 'DIESEL',
   lpg: 'LPG',
@@ -28,7 +39,7 @@ const FUELS: Record<string, Fuel> = {
   elektrikli: 'ELECTRIC',
 };
 
-const TRANSMISSIONS: Record<string, Transmission> = {
+const TRANSMISSION_LABELS: Record<string, Transmission> = {
   manuel: 'MANUAL',
   düz: 'MANUAL',
   otomatik: 'AUTOMATIC',
@@ -36,25 +47,41 @@ const TRANSMISSIONS: Record<string, Transmission> = {
   'yarı-otomatik': 'SEMI_AUTOMATIC',
 };
 
-export function normalizeText(s: string): string {
-  return s.toLocaleLowerCase('tr-TR').replace(/\s+/g, ' ').trim();
-}
+const FUELS = new Map<string, Fuel>(Object.entries(FUEL_LABELS).map(([k, v]) => [normalizeText(k), v]));
+const TRANSMISSIONS = new Map<string, Transmission>(
+  Object.entries(TRANSMISSION_LABELS).map(([k, v]) => [normalizeText(k), v]),
+);
 
-/** "1.250.000 TL", "1.250.000,00 TL", "₺1,250,000", "85.000 km" → tam sayı. Kuruş kısmı atılır. */
-export function parseInteger(input: string | number): number | null {
+const THOUSANDS_FORM = /^(\d{1,3}(?:[.,]\d{3})+)(?:[.,]\d{1,2})?$/;
+const PLAIN_FORM = /^(\d+)(?:[.,]\d{1,2})?$/;
+const NUMERIC_TOKEN = /\d[\d.,]*\d|\d/g;
+
+/**
+ * "1.250.000 TL", "1.250.000,00 TL", "₺1,250,000", "85.000 km", "9600.50 TL" → tam sayı.
+ * Kuruş/ondalık kısmı atılır. Belirsiz veya birden fazla sayı içeren girdi (ör. "1e6",
+ * "2019 - 2020", "-85.000") `null` döner.
+ */
+export function parseInteger(input: unknown): number | null {
   if (typeof input === 'number') return Number.isSafeInteger(input) ? input : null;
-  const withoutCents = input.trim().replace(/,\d{1,2}(?=\D*$)/, '');
-  const digits = withoutCents.replace(/\D/g, '');
-  if (digits.length === 0 || digits.length > 12) return null;
-  return Number(digits);
+  if (typeof input !== 'string') return null;
+  const s = input.trim();
+  const firstDigit = s.search(/\d/);
+  if (firstDigit === -1) return null;
+  if (s.slice(0, firstDigit).includes('-')) return null;
+  const tokens = s.match(NUMERIC_TOKEN) ?? [];
+  if (tokens.length !== 1) return null;
+  const token = tokens[0];
+  const intPart = THOUSANDS_FORM.exec(token)?.[1].replace(/[.,]/g, '') ?? PLAIN_FORM.exec(token)?.[1];
+  if (intPart === undefined || intPart.length > 12) return null;
+  return Number(intPart);
 }
 
 export function parseFuel(s: string): Fuel {
-  return FUELS[normalizeText(s)] ?? 'OTHER';
+  return FUELS.get(normalizeText(s)) ?? 'OTHER';
 }
 
 export function parseTransmission(s: string): Transmission | null {
-  return TRANSMISSIONS[normalizeText(s)] ?? null;
+  return TRANSMISSIONS.get(normalizeText(s)) ?? null;
 }
 
 /** En uzun eşleşen takma ad kazanır; takma adın ötesindeki kelimeler `trim` olur. */
@@ -67,7 +94,8 @@ export function createAliasResolver(rows: AliasRow[]): MakeModelResolver {
     const norm = normalizeText(original);
     for (const { key, row } of entries) {
       if (norm === key || norm.startsWith(`${key} `)) {
-        const rest = original.slice(key.length).trim();
+        const keyWords = key.split(' ').length;
+        const rest = original.split(' ').slice(keyWords).join(' ');
         return { make: row.make, model: row.model, trim: row.trim ?? (rest || null) };
       }
     }
@@ -99,9 +127,30 @@ function parseDamage(d: RawListing['damage']): DamageInfo | null {
   return { tramerAmount, paintedParts, changedParts };
 }
 
+/** Alanları sabit bir sırada diziye alır; nesne anahtar sırasından bağımsız, kararlı bir hash üretir. */
 export function contentHash(listing: Omit<NormalizedListing, 'contentHash'>): string {
-  const json = JSON.stringify(listing, (_k, v: unknown) => (typeof v === 'bigint' ? v.toString() : v));
-  return createHash('sha256').update(json).digest('hex');
+  const d = listing.damageInfo;
+  const fields = [
+    listing.externalId,
+    listing.url,
+    listing.title,
+    listing.make,
+    listing.model,
+    listing.trim,
+    listing.year,
+    listing.km,
+    listing.price.toString(),
+    listing.currency,
+    listing.fuel,
+    listing.transmission,
+    listing.city,
+    listing.imageUrl,
+    listing.bodyType,
+    listing.color,
+    listing.sellerType,
+    d ? [d.tramerAmount, d.paintedParts, d.changedParts] : null,
+  ];
+  return createHash('sha256').update(JSON.stringify(fields)).digest('hex');
 }
 
 export type NormalizeResult = { ok: true; listing: NormalizedListing } | { ok: false; problems: ListingProblem[] };
