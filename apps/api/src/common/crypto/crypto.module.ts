@@ -1,7 +1,7 @@
 import { Global, Module } from '@nestjs/common';
 import { ENV } from '../../config/config.module';
 import type { Env } from '../../config/env';
-import { Encryptor } from './encryptor';
+import { Encryptor } from '@oto/server-common';
 
 @Global()
 @Module({

@@ -1,0 +1,15 @@
+{
+  "name": "@oto/testing",
+  "version": "0.0.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@testcontainers/postgresql": "^10.18.0",
+    "@testcontainers/redis": "^10.18.0"
+  }
+}
