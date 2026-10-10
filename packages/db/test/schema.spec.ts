@@ -1,6 +1,6 @@
 import { execSync } from 'node:child_process';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
-import { Prisma, PrismaClient } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
 import argon2 from 'argon2';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { seedPlans, seedSuperAdmin } from '../src/seed-data';
@@ -55,7 +55,7 @@ describe('schema', () => {
     await prisma.user.create({ data: { email: 'Case@Test.com', name: 'a', passwordHash: 'x' } });
     await expect(
       prisma.user.create({ data: { email: 'case@test.com', name: 'b', passwordHash: 'x' } }),
-    ).rejects.toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
+    ).rejects.toMatchObject({ code: 'P2002' });
   });
 
   it('seedSuperAdmin is idempotent and never overwrites the password', async () => {
