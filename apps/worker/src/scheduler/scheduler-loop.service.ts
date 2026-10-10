@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, type OnApplicationBootstrap, type OnModuleDestroy } from '@nestjs/common';
 import { ENV } from '../config/config.module';
 import type { Env } from '../config/env';
+import { AnalysisSweepService } from './analysis-sweep.service';
 import { SchedulerService } from './scheduler.service';
 
 const CLEANUP_EVERY_MS = 24 * 60 * 60 * 1000;
@@ -15,6 +16,7 @@ export class SchedulerLoop implements OnApplicationBootstrap, OnModuleDestroy {
 
   constructor(
     private readonly scheduler: SchedulerService,
+    private readonly sweep: AnalysisSweepService,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
@@ -36,6 +38,9 @@ export class SchedulerLoop implements OnApplicationBootstrap, OnModuleDestroy {
     try {
       const n = await this.scheduler.tick();
       if (n > 0) this.logger.log(`${n} tarama işi kuyruğa eklendi`);
+      await this.sweep.maybeRunNightly();
+      const requeued = await this.sweep.requeuePendingMatches();
+      if (requeued > 0) this.logger.warn(`${requeued} eşleştirme olayı yeniden kuyruğa alındı`);
     } catch (err) {
       this.logger.error(`Scheduler tick başarısız: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
