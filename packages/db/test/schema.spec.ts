@@ -3,7 +3,7 @@ import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testconta
 import { PrismaClient } from '@prisma/client';
 import argon2 from 'argon2';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { seedMakeModelAliases, seedPlans, seedSuperAdmin } from '../src/seed-data';
+import { MAKE_MODEL_ALIAS_SEEDS, seedMakeModelAliases, seedPlans, seedSuperAdmin } from '../src/seed-data';
 
 let pg: StartedPostgreSqlContainer;
 let prisma: PrismaClient;
@@ -70,7 +70,8 @@ describe('schema', () => {
 
   it('seedMakeModelAliases is idempotent', async () => {
     await seedMakeModelAliases(prisma);
+    expect(await prisma.makeModelAlias.count()).toBe(MAKE_MODEL_ALIAS_SEEDS.length);
     await seedMakeModelAliases(prisma);
-    expect(await prisma.makeModelAlias.count()).toBeGreaterThanOrEqual(12);
+    expect(await prisma.makeModelAlias.count()).toBe(MAKE_MODEL_ALIAS_SEEDS.length);
   });
 });

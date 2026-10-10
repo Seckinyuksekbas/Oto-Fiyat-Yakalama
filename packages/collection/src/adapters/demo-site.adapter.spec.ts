@@ -56,6 +56,18 @@ describe('DemoSiteAdapter', () => {
     const listings = pages.flatMap((p) => adapter.parseList(p).listings);
     expect(listings).toHaveLength(45);
     for (const raw of listings) {
+      const t = site.store.get(raw.externalId)!;
+      expect(raw.year).toBe(String(t.year));
+      expect(raw.fuel).toBe(t.fuel);
+      expect(raw.transmission).toBe(t.transmission);
+      expect(raw.city).toBe(t.city);
+      expect(raw.color).toBe(t.color);
+      expect(raw.bodyType).toBe(t.bodyType);
+      expect(raw.title).toBe(`${t.year} ${t.make} ${t.model} ${t.trim}`);
+      expect(raw.imageUrl).toBe(`${baseUrl}/img/${t.id}.jpg`);
+      expect(raw.damage?.tramerAmount ?? null).toBe(t.tramerAmount === null ? null : String(t.tramerAmount));
+      expect(raw.damage?.paintedParts).toEqual(t.paintedParts);
+      expect(raw.damage?.changedParts).toEqual(t.changedParts);
       const r = normalizeListing(raw, resolve, new Date('2026-10-11T00:00:00Z'));
       expect(r.ok, JSON.stringify(r, (_k, v) => (typeof v === 'bigint' ? v.toString() : v))).toBe(true);
       if (!r.ok) continue;
@@ -69,7 +81,9 @@ describe('DemoSiteAdapter', () => {
 
   it('every demo catalog model is covered by the alias seeds', () => {
     const resolve = createAliasResolver(MAKE_MODEL_ALIAS_SEEDS);
-    for (const m of CATALOG) expect(resolve(`${m.make} ${m.model} ${m.trims[0]}`), `${m.make} ${m.model}`).not.toBeNull();
+    for (const m of CATALOG)
+      for (const trim of m.trims)
+        expect(resolve(`${m.make} ${m.model} ${trim}`), `${m.make} ${m.model} ${trim}`).toEqual({ make: m.make, model: m.model, trim });
   });
 
   it('reports a problem per card when the layout changes', async () => {
@@ -98,5 +112,33 @@ describe('DemoSiteAdapter', () => {
       for await (const _ of getAdapter('demo-site').listPages({ http: failing, config: { baseUrl } })) void _;
     };
     await expect(iterate()).rejects.toMatchObject({ kind: 'HTTP_4XX', transient: false });
+  });
+
+  it('fails closed when the page has no recognisable data-has-next', async () => {
+    const odd: HttpFetcher = { getText: async (url) => ({ status: 200, body: '<html><body><p>bakım</p></body></html>', url, headers: {} }) };
+    const yielded: ListPage[] = [];
+    const iterate = async () => {
+      for await (const p of getAdapter('demo-site').listPages({ http: odd, config: { baseUrl } })) yielded.push(p);
+    };
+    await expect(iterate()).rejects.toThrow(/Sayfa yapısı tanınmadı/);
+    expect(yielded).toHaveLength(0);
+  });
+
+  it('does not throw on bad URLs: bad href becomes a problem, bad image becomes null', () => {
+    const html = `<main data-has-next="false">
+<article data-listing data-id="a1" data-tramer="" data-painted="" data-changed=""><a class="link" href="http://"><h2 class="title">T</h2></a><span class="make-model">Fiat Egea</span><span class="price">1 TL</span></article>
+<article data-listing data-id="a2" data-tramer="" data-painted="" data-changed=""><a class="link" href="/ilan/a2"><h2 class="title">T</h2></a><img class="photo" src="https://:80"><span class="make-model">Fiat Egea</span><span class="price">1 TL</span></article>
+</main>`;
+    const parsed = getAdapter('demo-site').parseList({ url: `${baseUrl}/ilanlar?sayfa=1`, pageNo: 1, html, isLast: true });
+    expect(parsed.problems).toHaveLength(1);
+    expect(parsed.problems[0]).toMatchObject({ externalId: 'a1', field: 'href', problem: 'geçersiz bağlantı' });
+    expect(parsed.listings).toHaveLength(1);
+    expect(parsed.listings[0].externalId).toBe('a2');
+    expect(parsed.listings[0].imageUrl).toBeNull();
+  });
+
+  it('does not resolve inherited object keys as adapters', () => {
+    expect(() => getAdapter('constructor')).toThrow(/Bilinmeyen adapter/);
+    expect(() => getAdapter('toString')).toThrow(/Bilinmeyen adapter/);
   });
 });

@@ -24,7 +24,11 @@ export class DemoSiteAdapter implements SourceAdapter {
       if (res.status !== 200) {
         throw new FetchError(res.status >= 500 ? 'HTTP_5XX' : 'HTTP_4XX', `Liste sayfası alınamadı (HTTP ${res.status}): ${url}`, url, false);
       }
-      const isLast = cheerio.load(res.body)('main').attr('data-has-next') !== 'true';
+      const hasNext = cheerio.load(res.body)('main').attr('data-has-next');
+      if (hasNext !== 'true' && hasNext !== 'false') {
+        throw new Error(`Sayfa yapısı tanınmadı: data-has-next bulunamadı (${url})`);
+      }
+      const isLast = hasNext === 'false';
       yield { url, pageNo, html: res.body, isLast };
       if (isLast) return;
     }
@@ -50,10 +54,26 @@ export class DemoSiteAdapter implements SourceAdapter {
         });
         return;
       }
+      const snippet = () => ($.html(el) ?? '').slice(0, 300);
+      let listingUrl: string;
+      try {
+        listingUrl = new URL(href, page.url).toString();
+      } catch {
+        problems.push({ externalId, field: 'href', problem: 'geçersiz bağlantı', rawSnippet: snippet() });
+        return;
+      }
       const image = card.find('img.photo').attr('src');
+      let imageUrl: string | null = null;
+      if (image) {
+        try {
+          imageUrl = new URL(image, page.url).toString();
+        } catch {
+          imageUrl = null;
+        }
+      }
       listings.push({
         externalId,
-        url: new URL(href, page.url).toString(),
+        url: listingUrl,
         title: required.title,
         makeModelText: required.makeModel,
         year: text('.year'),
@@ -65,7 +85,7 @@ export class DemoSiteAdapter implements SourceAdapter {
         color: text('.color') || null,
         bodyType: text('.body') || null,
         sellerType: null,
-        imageUrl: image ? new URL(image, page.url).toString() : null,
+        imageUrl,
         damage: {
           tramerAmount: card.attr('data-tramer') || null,
           paintedParts: csv(card.attr('data-painted')),

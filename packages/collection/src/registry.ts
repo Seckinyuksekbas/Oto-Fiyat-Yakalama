@@ -12,6 +12,7 @@ const FACTORIES: Record<string, () => SourceAdapter> = {
 export const ADAPTER_KEYS = Object.keys(FACTORIES);
 
 export function getAdapter(key: string): SourceAdapter {
+  if (!Object.hasOwn(FACTORIES, key)) throw new Error(`Bilinmeyen adapter: ${key}`);
   const factory = FACTORIES[key];
   if (!factory) throw new Error(`Bilinmeyen adapter: ${key}`);
   return factory();
