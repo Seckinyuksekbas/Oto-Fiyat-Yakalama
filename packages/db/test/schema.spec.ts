@@ -3,7 +3,7 @@ import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testconta
 import { PrismaClient } from '@prisma/client';
 import argon2 from 'argon2';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { MAKE_MODEL_ALIAS_SEEDS, seedMakeModelAliases, seedPlans, seedSuperAdmin } from '../src/seed-data';
+import { MAKE_MODEL_ALIAS_SEEDS, seedDemoSource, seedMakeModelAliases, seedPlans, seedSuperAdmin } from '../src/seed-data';
 
 let pg: StartedPostgreSqlContainer;
 let prisma: PrismaClient;
@@ -73,5 +73,13 @@ describe('schema', () => {
     expect(await prisma.makeModelAlias.count()).toBe(MAKE_MODEL_ALIAS_SEEDS.length);
     await seedMakeModelAliases(prisma);
     expect(await prisma.makeModelAlias.count()).toBe(MAKE_MODEL_ALIAS_SEEDS.length);
+  });
+
+  it('seedDemoSource creates an active, permission-verified TEST source idempotently', async () => {
+    await seedDemoSource(prisma, 'http://localhost:4000');
+    const s = await seedDemoSource(prisma, 'http://localhost:4001');
+    expect(s).toMatchObject({ code: 'demo-site', isActive: true, permissionType: 'TEST', config: { baseUrl: 'http://localhost:4001' } });
+    expect(s.permissionVerifiedAt).not.toBeNull();
+    expect(await prisma.dataSource.count({ where: { code: 'demo-site' } })).toBe(1);
   });
 });

@@ -1,11 +1,16 @@
 import { PrismaClient } from '@prisma/client';
-import { seedMakeModelAliases, seedPlans, seedSuperAdmin } from '../src/seed-data';
+import { seedDemoSource, seedMakeModelAliases, seedPlans, seedSuperAdmin } from '../src/seed-data';
 
 async function main(): Promise<void> {
   const prisma = new PrismaClient();
   try {
     await seedPlans(prisma);
     await seedMakeModelAliases(prisma);
+    if (process.env.SEED_DEMO_SOURCE === 'true') {
+      const url = process.env.DEMO_SITE_URL ?? 'http://localhost:4000';
+      await seedDemoSource(prisma, url);
+      console.log(`Demo kaynak hazır: ${url}`);
+    }
     const email = process.env.SEED_ADMIN_EMAIL;
     const password = process.env.SEED_ADMIN_PASSWORD;
     if (email && password) {

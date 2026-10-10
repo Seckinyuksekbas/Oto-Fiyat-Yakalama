@@ -1,0 +1,63 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { PrismaService } from '../infra/prisma.service';
+import { QueueRegistry } from '../queues/queue-registry';
+
+export const STALE_AFTER_MS = 30 * 60 * 1000;
+export const RETENTION_DAYS = 30;
+
+export function scrapeQueueJobId(collectionJobId: number): string {
+  return `scrape-${collectionJobId}`;
+}
+
+@Injectable()
+export class SchedulerService {
+  private readonly logger = new Logger(SchedulerService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly queues: QueueRegistry,
+  ) {}
+
+  /** Zamanı gelen her kaynak için bir CollectionJob + scrape işi üretir. Dönen değer: kuyruğa eklenen iş sayısı. */
+  async tick(now: Date = new Date()): Promise<number> {
+    await this.failStaleJobs(now);
+    const sources = await this.prisma.dataSource.findMany({
+      where: { isActive: true, permissionVerifiedAt: { not: null }, health: { not: 'PAUSED' } },
+      include: { jobs: { orderBy: { createdAt: 'desc' }, take: 1 } },
+    });
+    let enqueued = 0;
+    for (const source of sources) {
+      const last = source.jobs[0];
+      if (last && (last.status === 'QUEUED' || last.status === 'RUNNING')) continue;
+      if (last && now.getTime() - last.createdAt.getTime() < source.intervalSec * 1000) continue;
+      const job = await this.prisma.collectionJob.create({ data: { sourceId: source.id, trigger: 'SCHEDULED', createdAt: now } });
+      await this.queues.scrape.add(
+        'scrape',
+        { collectionJobId: job.id, sourceId: source.id },
+        { jobId: scrapeQueueJobId(job.id), removeOnComplete: { age: 24 * 60 * 60 }, removeOnFail: { age: 7 * 24 * 60 * 60 } },
+      );
+      enqueued += 1;
+    }
+    return enqueued;
+  }
+
+  /** Çöken bir worker'ın bıraktığı işleri kapatır; aksi halde kaynak sonsuza dek "meşgul" görünür. */
+  async failStaleJobs(now: Date): Promise<number> {
+    const { count } = await this.prisma.collectionJob.updateMany({
+      where: { status: { in: ['QUEUED', 'RUNNING'] }, createdAt: { lt: new Date(now.getTime() - STALE_AFTER_MS) } },
+      data: { status: 'FAILED', finishedAt: now, errorSummary: 'İş zaman aşımına uğradı (worker çökmüş olabilir)' },
+    });
+    if (count > 0) this.logger.warn(`${count} eski tarama işi FAILED olarak kapatıldı`);
+    return count;
+  }
+
+  async cleanup(now: Date = new Date()): Promise<{ systemLogs: number; scrapeErrors: number; listingIssues: number }> {
+    const before = new Date(now.getTime() - RETENTION_DAYS * 24 * 60 * 60 * 1000);
+    const [systemLogs, scrapeErrors, listingIssues] = await Promise.all([
+      this.prisma.systemLog.deleteMany({ where: { createdAt: { lt: before } } }),
+      this.prisma.scrapeError.deleteMany({ where: { createdAt: { lt: before } } }),
+      this.prisma.listingIssue.deleteMany({ where: { createdAt: { lt: before } } }),
+    ]);
+    return { systemLogs: systemLogs.count, scrapeErrors: scrapeErrors.count, listingIssues: listingIssues.count };
+  }
+}

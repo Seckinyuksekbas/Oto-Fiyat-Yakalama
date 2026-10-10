@@ -1,4 +1,4 @@
-import type { PrismaClient, User } from '@prisma/client';
+import type { DataSource, PrismaClient, User } from '@prisma/client';
 import type { PlanLimits } from '@oto/shared';
 import argon2 from 'argon2';
 import { ARGON2_OPTIONS } from './argon2';
@@ -82,4 +82,26 @@ export async function seedMakeModelAliases(prisma: PrismaClient): Promise<void> 
   for (const alias of MAKE_MODEL_ALIAS_SEEDS) {
     await prisma.makeModelAlias.upsert({ where: { rawText: alias.rawText }, update: {}, create: alias });
   }
+}
+
+/** Yalnızca geliştirme: yerel demo ilan sitesini (apps/demo-site) izinli TEST kaynağı olarak kaydeder. */
+export async function seedDemoSource(prisma: PrismaClient, baseUrl: string): Promise<DataSource> {
+  return prisma.dataSource.upsert({
+    where: { code: 'demo-site' },
+    update: { config: { baseUrl } },
+    create: {
+      code: 'demo-site',
+      name: 'Demo İlan Sitesi',
+      adapterKey: 'demo-site',
+      kind: 'HTTP',
+      permissionType: 'TEST',
+      permissionNote: 'Yerel sahte ilan sitesi (apps/demo-site); gerçek veri içermez.',
+      permissionVerifiedAt: new Date(),
+      isActive: true,
+      intervalSec: 120,
+      minRequestGapMs: 200,
+      maxConcurrency: 1,
+      config: { baseUrl },
+    },
+  });
 }
