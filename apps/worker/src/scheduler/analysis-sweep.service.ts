@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ISTANBUL_OFFSET_MS, startOfIstanbulDay } from '@oto/shared';
+import { ISTANBUL_OFFSET_MS, MATCH_DISPATCH_MAX_ATTEMPTS, matchDispatchStuckFlagKey, startOfIstanbulDay } from '@oto/shared';
 import { AlertService } from '../common/alert.service';
 import { MatchDispatcher } from '../analysis/match-dispatcher.service';
 import { PrismaService } from '../infra/prisma.service';
@@ -10,7 +10,7 @@ import { QueueRegistry } from '../queues/queue-registry';
 export const NIGHTLY_HOUR_ISTANBUL = 3;
 export const MATCH_REQUEUE_AFTER_MS = 60_000;
 /** Bu kadar başarısız yeniden gönderimden sonra satır atlanır (head-of-line engeli) ve bir kez alarm verilir. */
-export const MATCH_DISPATCH_MAX_ATTEMPTS = 10;
+export { MATCH_DISPATCH_MAX_ATTEMPTS };
 const PAGE = 500;
 /** Gece yenilemesi gerçek zamanlı analizlerden düşük öncelikli (BullMQ: büyük sayı = geç). */
 export const REFRESH_PRIORITY = 100;
@@ -121,7 +121,7 @@ export class AnalysisSweepService {
       select: { id: true, listingId: true },
     });
     for (const row of stuck) {
-      const flag = `match-dispatch-stuck:alerted:${row.id}`;
+      const flag = matchDispatchStuckFlagKey(row.id);
       try {
         if ((await this.redis.exists(flag)) === 1) continue;
         await this.alerts.raise({

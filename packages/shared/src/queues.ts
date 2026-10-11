@@ -21,6 +21,24 @@ export const RETRYING_JOB_OPTS = {
   removeOnFail: { age: 24 * 60 * 60 },
 };
 
+/**
+ * Bildirim işleri (worker dağıtıcısı + admin yeniden denemesi ortak): 5 deneme; başarısızlar 7 gün tutulur (admin yeniden
+ * deneyebilir); bekleme süreleri worker'daki notifyBackoffMs (özel strateji) ile belirlenir.
+ */
+export const NOTIFY_JOB_OPTS = {
+  attempts: 5,
+  backoff: { type: 'custom' as const },
+  removeOnComplete: true,
+  removeOnFail: { age: 7 * 24 * 60 * 60 },
+};
+
+/** Eşleştirme olayı yeniden gönderim sınırı: bu kadar başarısız denemeden sonra süpürme satırı atlar (admin sıfırlayabilir). */
+export const MATCH_DISPATCH_MAX_ATTEMPTS = 10;
+/** Takılı eşleştirme alarmının "bir kez" işareti (Redis); admin sayacı sıfırlayınca silinir ki yinelenirse yeniden alarm verilsin. */
+export function matchDispatchStuckFlagKey(analysisId: number): string {
+  return `match-dispatch-stuck:alerted:${analysisId}`;
+}
+
 export const scrapeJobSchema = z.object({
   collectionJobId: z.number().int().positive(),
   sourceId: z.number().int().positive(),

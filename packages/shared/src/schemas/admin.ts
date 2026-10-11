@@ -82,7 +82,7 @@ export const adminNotificationsQuerySchema = z
   .object({
     status: z.enum(['PENDING', 'SENT', 'FAILED', 'SKIPPED_LIMIT']).optional(),
     channel: z.enum(['IN_APP', 'TELEGRAM', 'EMAIL']).optional(),
-    kind: text(50).optional(),
+    kind: z.enum(['MATCH', 'SYSTEM_ALERT', 'SECURITY']).optional(),
     userId: text(50).optional(),
     ...adminPageShape,
   })
@@ -203,6 +203,12 @@ export const adminNotificationRetrySchema = z
   .object({ ids: z.array(z.number().int().min(1)).min(1).max(100) })
   .strict();
 export type AdminNotificationRetry = z.infer<typeof adminNotificationRetrySchema>;
+
+export const adminNotificationLatencyQuerySchema = z.object({ range: z.enum(['24h', '7d']).default('24h') }).strict();
+export type AdminNotificationLatencyQuery = z.infer<typeof adminNotificationLatencyQuerySchema>;
+
+export const adminStuckDispatchesQuerySchema = z.object(adminPageShape).strict();
+export type AdminStuckDispatchesQuery = z.infer<typeof adminStuckDispatchesQuerySchema>;
 
 const planFields = {
   code: z.string().regex(/^[A-Z0-9_]{2,20}$/),

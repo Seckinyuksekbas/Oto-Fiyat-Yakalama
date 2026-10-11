@@ -19,6 +19,14 @@ import { AdminPlansController } from './plans.controller';
 import { AdminPlansService } from './plans.service';
 import { AdminSettingsController } from './settings.controller';
 import { AdminSettingsService } from './settings.service';
+import { AdminQueuesController } from './queues.controller';
+import { AdminQueuesService } from './queues.service';
+import { AdminWorkersController } from './workers.controller';
+import { AdminWorkersService } from './workers.service';
+import { AdminNotificationsController } from './notifications.controller';
+import { AdminNotificationsService } from './notifications.service';
+import { AdminMatchDispatchesController } from './match-dispatches.controller';
+import { AdminMatchDispatchesService } from './match-dispatches.service';
 
 @Module({
   imports: [AuthModule],
@@ -27,6 +35,10 @@ import { AdminSettingsService } from './settings.service';
     AdminPlansController,
     AdminSettingsController,
     AdminLogsController,
+    AdminQueuesController,
+    AdminWorkersController,
+    AdminNotificationsController,
+    AdminMatchDispatchesController,
   ],
   providers: [
     AdminUsersService,
@@ -37,6 +49,10 @@ import { AdminSettingsService } from './settings.service';
     AdminPlansService,
     AdminSettingsService,
     AdminLogsService,
+    AdminQueuesService,
+    AdminWorkersService,
+    AdminNotificationsService,
+    AdminMatchDispatchesService,
     { provide: ALLOW_PRIVATE_URLS, inject: [ENV], useFactory: (env: Env) => env.NODE_ENV !== 'production' },
   ],
 })
