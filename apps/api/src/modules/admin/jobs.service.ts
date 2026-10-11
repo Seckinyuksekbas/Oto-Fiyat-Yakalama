@@ -30,14 +30,28 @@ function toJobView(j: JobWithSource) {
   };
 }
 
-/** Dry-run sonucundaki ilan URL'lerinin sorgu dizisini maskeler. */
+const URL_KEY = /(^url$|Url$|Urls$)/;
+
+function maskUrlFields(obj: Record<string, Prisma.JsonValue>): Record<string, Prisma.JsonValue> {
+  const out: Record<string, Prisma.JsonValue> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (URL_KEY.test(k) && typeof v === 'string') out[k] = maskUrlQuery(v);
+    else if (URL_KEY.test(k) && Array.isArray(v)) out[k] = v.map((x) => (typeof x === 'string' ? maskUrlQuery(x) : x));
+    else out[k] = v;
+  }
+  return out;
+}
+
+/** Dry-run sonucunda ilanların URL alanlarını (url, *Url, *Urls) ve sorun ham parçalarındaki URL'leri maskeler. */
 function maskDryRunResult(value: Prisma.JsonValue | null): unknown {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
   const r = value as Record<string, Prisma.JsonValue>;
-  const items = Array.isArray(r.items)
-    ? r.items.map((it) => (it && typeof it === 'object' && !Array.isArray(it) && typeof it.url === 'string' ? { ...it, url: maskUrlQuery(it.url) } : it))
-    : r.items;
-  return { ...r, items: items ?? null };
+  const isObj = (x: Prisma.JsonValue): x is Record<string, Prisma.JsonValue> => !!x && typeof x === 'object' && !Array.isArray(x);
+  const items = Array.isArray(r.items) ? r.items.map((it) => (isObj(it) ? maskUrlFields(it) : it)) : r.items;
+  const problems = Array.isArray(r.problems)
+    ? r.problems.map((p) => (isObj(p) ? { ...p, ...(typeof p.rawSnippet === 'string' ? { rawSnippet: maskUrlsInText(p.rawSnippet) } : {}), ...(typeof p.problem === 'string' ? { problem: maskUrlsInText(p.problem) } : {}) } : p))
+    : r.problems;
+  return { ...r, items: items ?? null, problems: problems ?? null };
 }
 
 @Injectable()

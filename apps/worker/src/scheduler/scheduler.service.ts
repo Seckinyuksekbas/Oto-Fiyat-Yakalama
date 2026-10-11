@@ -23,14 +23,21 @@ export class SchedulerService {
     await this.failStaleJobs(now);
     const sources = await this.prisma.dataSource.findMany({
       where: { isActive: true, permissionVerifiedAt: { not: null }, health: { not: 'PAUSED' } },
-      include: { jobs: { orderBy: { createdAt: 'desc' }, take: 1 } },
     });
     let enqueued = 0;
     for (const source of sources) {
-      const last = source.jobs[0];
-      if (last && (last.status === 'QUEUED' || last.status === 'RUNNING')) continue;
-      if (last && now.getTime() - last.createdAt.getTime() < source.intervalSec * 1000) continue;
-      const job = await this.prisma.collectionJob.create({ data: { sourceId: source.id, trigger: 'SCHEDULED', createdAt: now } });
+      // Kaynak satır kilidi: admin test taramasıyla iş oluşturma sıralanır (aynı anda iki iş oluşmaz).
+      const job = await this.prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM "DataSource" WHERE id = ${source.id} FOR UPDATE`;
+        // Uçuştaki herhangi bir iş (dry-run dahil) yeni zamanlanmış işi engeller.
+        const inFlight = await tx.collectionJob.findFirst({ where: { sourceId: source.id, status: { in: ['QUEUED', 'RUNNING'] } }, select: { id: true } });
+        if (inFlight) return null;
+        // Aralık saati yalnızca dry-run olmayan işlerden hesaplanır (test taraması saati sıfırlamaz).
+        const last = await tx.collectionJob.findFirst({ where: { sourceId: source.id, dryRun: false }, orderBy: { createdAt: 'desc' }, select: { createdAt: true } });
+        if (last && now.getTime() - last.createdAt.getTime() < source.intervalSec * 1000) return null;
+        return tx.collectionJob.create({ data: { sourceId: source.id, trigger: 'SCHEDULED', createdAt: now } });
+      });
+      if (!job) continue;
       try {
         await this.queues.scrape.add(
           'scrape',

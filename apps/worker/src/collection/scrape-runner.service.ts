@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { FetchError, getAdapter, LayoutError, normalizeListing, PoliteHttpClient, type ListingProblem, type SourceAdapter } from '@oto/collection';
+import { BlockedError, FetchError, getAdapter, LayoutError, normalizeListing, PoliteHttpClient, type ListingProblem, type SourceAdapter } from '@oto/collection';
 import type { JobStatus, Prisma } from '@oto/db';
 import { Encryptor } from '@oto/server-common';
 import { AlertService } from '../common/alert.service';
@@ -244,6 +244,8 @@ export class ScrapeRunner {
     refuse: (reason: string) => Promise<null>,
   ): Promise<RunSummary | null> {
     if (!source.permissionVerifiedAt) return refuse('Kaynağın izni doğrulanmamış');
+    // Engel sinyali sonrası (PAUSED) dry-run dahil hiçbir istek atılmaz.
+    if (source.health === 'PAUSED') return refuse('Kaynak engel nedeniyle duraklatılmış; önce nedeni inceleyip etkinleştirin');
     let adapter: SourceAdapter;
     try {
       adapter = getAdapter(source.adapterKey);
@@ -307,6 +309,10 @@ export class ScrapeRunner {
       dryRunResult,
     });
     if (fatal) this.logger.warn(`Kaynak ${source.code} dry-run başarısız: ${message(fatal)}`);
+    // Tek yan etki: engel sinyali (403/captcha/robots) normal taramadaki gibi kaynağı duraklatır ve uyarır.
+    if (fatal instanceof BlockedError) {
+      await this.health.recordFailure(source.id, fatal).catch((e: unknown) => this.logger.error(`Engel kaydı yazılamadı: ${message(e)}`));
+    }
     return { status, pages: c.pages, cards: c.cards, created: 0, updated: 0, removed: 0, failed: c.failed };
   }
 }

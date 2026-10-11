@@ -1,3 +1,5 @@
+import { PRIVATE_ADDRESS_CODE } from '@oto/server-common';
+
 export type FetchErrorKind = 'NETWORK' | 'TIMEOUT' | 'HTTP_4XX' | 'HTTP_5XX' | 'BLOCKED';
 
 export class FetchError extends Error {
@@ -20,8 +22,6 @@ export class BlockedError extends FetchError {
   }
 }
 
-/** guardedLookup'ın işaretlediği hata kodu: iç ağ adresi, yeniden denenmez. */
-export const PRIVATE_ADDRESS_CODE = 'OTO_PRIVATE_ADDRESS';
 
 const TIMEOUT_CODES = new Set(['UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT']);
 

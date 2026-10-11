@@ -1,19 +1,34 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { ProxyConfig } from '@oto/db';
-import { Encryptor } from '@oto/server-common';
-import type { AdminProxyCreate, AdminProxyUpdate } from '@oto/shared';
+import { Encryptor, guardedLookup, type HostLookup } from '@oto/server-common';
+import { ErrorCode, type AdminProxyCreate, type AdminProxyUpdate } from '@oto/shared';
 import { ProxyAgent, request } from 'undici';
 import type { AuditCtx } from '../../common/audit/audit-ctx.decorator';
 import { AuditService } from '../../common/audit/audit.service';
-import { Errors } from '../../common/errors/app-error';
+import { AppError, Errors } from '../../common/errors/app-error';
 import { assertPublicHttpUrl } from '../../common/security/ssrf';
 import { ENV } from '../../config/config.module';
 import type { Env } from '../../config/env';
 import { PrismaService } from '../../infra/prisma.service';
+import { RedisService } from '../../infra/redis.service';
 import { ALLOW_PRIVATE_URLS } from './admin.tokens';
 import { maskProxyUrl } from './url-mask';
 
 export const PROXY_CHECK_TIMEOUT_MS = 10_000;
+export const PROXY_CHECK_THROTTLE_SEC = 10;
+export const proxyCheckKey = (id: number) => `proxy-check:${id}`;
+
+/**
+ * Proxy kontrolü için ProxyAgent seçenekleri. İç ağ yasaklıysa bağlantı anında (DNS rebinding'e karşı)
+ * tüm çözülen adresler denetlenir; ön denetim (assertPublicHttpUrl) ayrıca yapılır.
+ */
+export function proxyAgentOptions(uri: string, allowPrivate: boolean, resolver?: HostLookup) {
+  return {
+    uri,
+    requestTls: { timeout: PROXY_CHECK_TIMEOUT_MS },
+    connect: { timeout: PROXY_CHECK_TIMEOUT_MS, ...(allowPrivate ? {} : ({ lookup: guardedLookup(resolver) } as object)) },
+  };
+}
 
 @Injectable()
 export class AdminProxiesService {
@@ -23,17 +38,26 @@ export class AdminProxiesService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly encryptor: Encryptor,
+    private readonly redis: RedisService,
     @Inject(ENV) env: Env,
     @Inject(ALLOW_PRIVATE_URLS) private readonly allowPrivate: boolean,
   ) {
     this.checkUrl = env.PROXY_CHECK_URL;
   }
 
+  private maskedUrl(p: ProxyConfig): string {
+    try {
+      return maskProxyUrl(this.encryptor.decrypt(p.urlEncrypted));
+    } catch {
+      return '[çözülemedi]';
+    }
+  }
+
   private view(p: ProxyConfig, sourceCount?: number) {
     return {
       id: p.id,
       name: p.name,
-      url: maskProxyUrl(this.encryptor.decrypt(p.urlEncrypted)),
+      url: this.maskedUrl(p),
       isEnabled: p.isEnabled,
       lastCheckAt: p.lastCheckAt,
       lastLatencyMs: p.lastLatencyMs,
@@ -92,13 +116,15 @@ export class AdminProxiesService {
     const proxy = await this.prisma.proxyConfig.findUnique({ where: { id } });
     if (!proxy) throw Errors.notFound();
     const url = this.encryptor.decrypt(proxy.urlEncrypted);
+    const acquired = await this.redis.set(proxyCheckKey(id), '1', 'EX', PROXY_CHECK_THROTTLE_SEC, 'NX');
+    if (acquired !== 'OK') throw new AppError(ErrorCode.RATE_LIMITED, 429, `Proxy kontrolü ${PROXY_CHECK_THROTTLE_SEC} saniyede en fazla 1 kez yapılabilir`);
     let latencyMs: number | null = null;
     let error: string | null = null;
     const startedAt = Date.now();
     let agent: ProxyAgent | null = null;
     try {
       await assertPublicHttpUrl(url, { allowPrivate: this.allowPrivate, allowCredentials: true });
-      agent = new ProxyAgent({ uri: url, requestTls: { timeout: PROXY_CHECK_TIMEOUT_MS } });
+      agent = new ProxyAgent(proxyAgentOptions(url, this.allowPrivate));
       const res = await request(this.checkUrl, {
         dispatcher: agent,
         method: 'GET',
@@ -116,10 +142,14 @@ export class AdminProxiesService {
       await agent?.close().catch(() => undefined);
     }
     const updated = await this.prisma.$transaction(async (tx) => {
-      const p = await tx.proxyConfig.update({
-        where: { id },
+      // Kontrol sırasında URL değiştiyse (eski URL'nin sonucu) yazılmaz.
+      const { count } = await tx.proxyConfig.updateMany({
+        where: { id, urlEncrypted: proxy.urlEncrypted },
         data: { lastCheckAt: new Date(), lastLatencyMs: error ? null : latencyMs, lastError: error },
       });
+      const p = await tx.proxyConfig.findUnique({ where: { id } });
+      if (!p) throw Errors.notFound();
+      if (count === 0) return p;
       await this.audit.recordInTx(tx, ctx, { targetType: 'ProxyConfig', targetId: String(id), before: null, after: { ok: !error, latencyMs: error ? null : latencyMs, error } });
       return p;
     });

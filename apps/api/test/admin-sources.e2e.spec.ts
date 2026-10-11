@@ -377,8 +377,7 @@ describe('proxies', () => {
     expect(row.urlEncrypted).not.toContain('s3cret');
     expect(app.get(Encryptor).decrypt(row.urlEncrypted)).toBe(proxyUrl());
 
-    const s = await createSource(agent, { proxyConfigId: row.id });
-    expect(s.id).toBeGreaterThan(0);
+    await createSource(agent, { proxyConfigId: row.id });
     const list = await agent.get(`${api}/proxies`);
     expect(list.body.items[0]).toMatchObject({ id: row.id, name: 'P1', isEnabled: true, sourceCount: 1, url: `http://***@127.0.0.1:${port(fakeProxy)}` });
 

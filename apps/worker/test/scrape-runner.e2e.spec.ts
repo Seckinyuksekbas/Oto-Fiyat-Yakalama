@@ -238,6 +238,27 @@ describe('ScrapeRunner', () => {
       expect(await prisma.dataSource.findUniqueOrThrow({ where: { id: source.id } })).toMatchObject({ health: 'HEALTHY', consecutiveFailures: 0 });
     });
 
+    it('pauses and alerts when the dry-run is blocked (403), then refuses further dry-runs', async () => {
+      await createAdmin(ref);
+      const source = await createSource(ref, demo.baseUrl);
+      demo.site.setMode('forbidden');
+      const first = await queuedDry(source.id);
+      await runner.run(first.id);
+      expect(await prisma.collectionJob.findUniqueOrThrow({ where: { id: first.id } })).toMatchObject({ status: 'FAILED' });
+      expect(await prisma.dataSource.findUniqueOrThrow({ where: { id: source.id } })).toMatchObject({ health: 'PAUSED', consecutiveFailures: 1 });
+      expect(await prisma.systemLog.count({ where: { level: 'ERROR' } })).toBe(1);
+      expect(await prisma.notification.count({ where: { kind: 'SYSTEM_ALERT' } })).toBe(1);
+      expect(await prisma.scrapeError.count()).toBe(0);
+      expect(await prisma.listing.count()).toBe(0);
+
+      demo.site.setMode('normal');
+      const second = await queuedDry(source.id);
+      expect(await runner.run(second.id)).toBeNull();
+      expect(await prisma.collectionJob.findUniqueOrThrow({ where: { id: second.id } })).toMatchObject({
+        status: 'FAILED', pagesFetched: 0, errorSummary: 'Kaynak engel nedeniyle duraklatılmış; önce nedeni inceleyip etkinleştirin',
+      });
+    });
+
     it('requires permissionVerifiedAt and refuses before touching the network', async () => {
       const source = await createSource(ref, demo.baseUrl, { permissionVerifiedAt: null, isActive: false });
       const queued = await queuedDry(source.id);

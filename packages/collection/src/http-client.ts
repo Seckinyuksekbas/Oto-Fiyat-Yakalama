@@ -1,9 +1,8 @@
-import { lookup as dnsLookup } from 'node:dns';
 import { isIP } from 'node:net';
-import { assertPublicHttpUrl, isPrivateAddress, UnsafeUrlError } from '@oto/server-common';
+import { assertPublicHttpUrl, guardedLookup, systemLookup, UnsafeUrlError, type HostLookup } from '@oto/server-common';
 import type Redis from 'ioredis';
 import { Agent, ProxyAgent, request, type Dispatcher } from 'undici';
-import { BlockedError, FetchError, PRIVATE_ADDRESS_CODE, toFetchError } from './errors';
+import { BlockedError, FetchError, toFetchError } from './errors';
 import { SourceRateLimiter } from './rate-limiter';
 import { RobotsCache } from './robots';
 
@@ -17,6 +16,8 @@ export interface HttpResult {
 export interface HttpFetcher {
   getText(url: string): Promise<HttpResult>;
 }
+
+export type { HostLookup };
 
 export interface PoliteHttpOptions {
   sourceId: number;
@@ -37,36 +38,7 @@ export interface PoliteHttpOptions {
   dispatcher?: Dispatcher;
 }
 
-export type HostLookup = (hostname: string) => Promise<{ address: string; family: number }[]>;
-
 const MAX_REDIRECTS = 3;
-
-const systemLookup: HostLookup = (hostname) =>
-  new Promise((resolve, reject) => {
-    dnsLookup(hostname, { all: true, verbatim: true }, (err, addrs) => (err ? reject(err) : resolve(addrs)));
-  });
-
-function privateAddressError(message: string): Error {
-  return Object.assign(new Error(message), { code: PRIVATE_ADDRESS_CODE });
-}
-
-/** undici connect.lookup: tüm adresleri çözer, biri bile özelse bağlantıyı reddeder. */
-function guardedLookup(resolver: HostLookup) {
-  return (hostname: string, options: { all?: boolean }, cb: (...args: unknown[]) => void) => {
-    resolver(hostname).then(
-      (addrs) => {
-        if (addrs.length === 0 || addrs.some((a) => isPrivateAddress(a.address))) {
-          cb(privateAddressError(`İç ağ adresine bağlanılamaz: ${hostname}`));
-        } else if (options?.all) {
-          cb(null, addrs);
-        } else {
-          cb(null, addrs[0].address, addrs[0].family);
-        }
-      },
-      (err: unknown) => cb(err),
-    );
-  };
-}
 
 const GENERIC_BLOCK_MARKERS =
   /class=["'][^"']*\b(g-recaptcha|h-captcha|cf-turnstile)\b|cf-chl-|challenge-platform|<title>[^<]*(attention required|just a moment)/i;

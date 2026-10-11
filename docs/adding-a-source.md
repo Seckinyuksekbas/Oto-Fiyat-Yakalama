@@ -41,3 +41,9 @@ Demo kaynağı bu maddeleri gerektirmez; ilk gerçek kaynak canlıya alınmadan 
 - [ ] **Yanıt gövdesi boyut sınırı:** `res.body.text()` öncesinde bayt üst sınırı uygulanmalı.
 - [ ] **Toplu kaldırma eşikleri:** `MASS_REMOVAL_MIN` / `MASS_REMOVAL_RATIO` (scrape-runner) kaynak başına gözden geçirilmeli.
 - [ ] **Adapter'a özgü `LayoutError` kontrolleri:** Sayfa yapısı beklenen işaretçileri taşımıyorsa (sayfalama, toplam sayı, ilan kapsayıcısı) adapter `LayoutError` fırlatmalı; sessizce boş sayfa dönmemeli.
+
+## Admin SSRF ve test taraması notları
+
+- Admin API'de URL doğrulaması (`config.baseUrl`, proxy URL'si) `NODE_ENV !== 'production'` iken iç ağ adreslerine izin verir (worker ile tutarlı; demo-site için); production'da DNS çözümü sonrası özel adresler reddedilir, proxy kontrolü ayrıca bağlantı anında `guardedLookup` ile korunur (DNS rebinding).
+- `PAUSED` (engel sinyali) kaynakta dry-run dahil test taraması yapılmaz (409); dry-run sırasında engel (403/captcha/robots) alınırsa kaynak normal tarama gibi duraklatılır ve uyarı üretilir.
+- Zamanlayıcı aralığı yalnızca dry-run olmayan işlerden hesaplanır; uçuştaki herhangi bir iş yeni zamanlanmış işi engeller.

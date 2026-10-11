@@ -16,7 +16,6 @@
     "@nestjs/core": "^11.0.5",
     "@nestjs/platform-express": "^11.0.5",
     "@nestjs/throttler": "^6.4.0",
-    "@oto/collection": "workspace:*",
     "@oto/db": "workspace:*",
     "@oto/server-common": "workspace:*",
     "@oto/shared": "workspace:*",

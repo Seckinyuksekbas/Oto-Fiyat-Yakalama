@@ -1,9 +1,14 @@
 import { maskUrlQuery } from '@oto/shared';
 
-/** Serbest metindeki http(s) URL'lerinin sorgu dizisini `?…` ile maskeler. */
+/**
+ * Serbest metindeki her şemanın (postgres://, redis://, http://…) kimlik bilgisini `***@` yapar;
+ * http(s) URL'lerinin sorgu dizisini `?…` ile maskeler.
+ */
 export function maskUrlsInText<T extends string | null | undefined>(text: T): T {
   if (!text) return text;
-  return text.replace(/https?:\/\/[^\s"'<>)]+/gi, (u) => maskUrlQuery(u)) as T;
+  return text
+    .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1***@')
+    .replace(/https?:\/\/[^\s"'<>)]+/gi, (u) => maskUrlQuery(u)) as T;
 }
 
 /** Proxy URL'sini kimlik bilgisi içermeyecek biçimde `http://***@host:port` olarak maskeler. */

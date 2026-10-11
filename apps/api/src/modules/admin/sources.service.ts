@@ -1,7 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { ADAPTER_KEYS } from '@oto/collection';
 import type { DataSource, Prisma } from '@oto/db';
-import { ErrorCode, type AdminSourceCreate, type AdminSourceUpdate } from '@oto/shared';
+import { ADAPTER_KEYS, ErrorCode, maskUrlQuery, type AdminSourceCreate, type AdminSourceUpdate } from '@oto/shared';
 import type { AuditCtx } from '../../common/audit/audit-ctx.decorator';
 import { AuditService } from '../../common/audit/audit.service';
 import { AppError, Errors } from '../../common/errors/app-error';
@@ -23,6 +22,14 @@ const badRequest = (msg: string) => new AppError(ErrorCode.VALIDATION_FAILED, 40
 
 const istanbulDay = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul' }).format(d);
 
+/** config.baseUrl sorgu dizisi (olası token) yanıt ve denetim kaydında maskelenir. */
+function maskConfig(config: unknown): unknown {
+  if (config && typeof config === 'object' && !Array.isArray(config) && typeof (config as { baseUrl?: unknown }).baseUrl === 'string') {
+    return { ...(config as Record<string, unknown>), baseUrl: maskUrlQuery((config as { baseUrl: string }).baseUrl) };
+  }
+  return config;
+}
+
 export function toSourceView(s: DataSource) {
   return {
     id: s.id,
@@ -37,7 +44,7 @@ export function toSourceView(s: DataSource) {
     intervalSec: s.intervalSec,
     maxConcurrency: s.maxConcurrency,
     minRequestGapMs: s.minRequestGapMs,
-    config: s.config as unknown,
+    config: maskConfig(s.config),
     proxyConfigId: s.proxyConfigId,
     health: s.health,
     lastSuccessAt: s.lastSuccessAt,
@@ -171,7 +178,7 @@ export class AdminSourcesService {
       const after = await tx.dataSource.update({ where: { id }, data });
       const b = snap(toSourceView(before));
       const a = snap(toSourceView(after));
-      const keys = AUDIT_FIELDS.filter((k) => JSON.stringify(b[k]) !== JSON.stringify(a[k]));
+      const keys = AUDIT_FIELDS.filter((k) => JSON.stringify((before as Record<string, unknown>)[k]) !== JSON.stringify((after as Record<string, unknown>)[k]));
       await this.audit.recordInTx(tx, ctx, {
         targetType: 'DataSource',
         targetId: String(id),
@@ -225,12 +232,17 @@ export class AdminSourcesService {
     const source = await this.requireSource(id);
     if (!source.permissionVerifiedAt) throw conflict('İzin doğrulanmadan test taraması yapılamaz');
     if (!ADAPTER_KEYS.includes(source.adapterKey)) throw conflict(`Bilinmeyen adapter: ${source.adapterKey}`);
+    // Engel/duraklatma sinyali: dry-run bile olsa duraklatılmış kaynağa istek atılmaz (önce neden incelenip etkinleştirilmeli).
+    if (source.health === 'PAUSED') throw conflict('Kaynak engel/duraklatma nedeniyle durdurulmuş; önce nedeni inceleyip etkinleştirin');
     const key = testScrapeKey(id);
     const acquired = await this.redis.set(key, '1', 'EX', TEST_SCRAPE_THROTTLE_SEC, 'NX');
     if (acquired !== 'OK') throw new AppError(ErrorCode.RATE_LIMITED, 429, 'Bu kaynak için dakikada en fazla 1 test taraması başlatılabilir');
     let jobId: number;
     try {
       jobId = await this.prisma.$transaction(async (tx) => {
+        // Zamanlayıcı da aynı satır kilidini alır: iş oluşturma sıralanır.
+        const [locked] = await tx.$queryRaw<{ id: number }[]>`SELECT id FROM "DataSource" WHERE id = ${id} FOR UPDATE`;
+        if (!locked) throw Errors.notFound();
         const busy = await tx.collectionJob.findFirst({ where: { sourceId: id, status: { in: ['QUEUED', 'RUNNING'] } }, select: { id: true } });
         if (busy) throw conflict('Bu kaynak için devam eden bir iş var');
         const job = await tx.collectionJob.create({ data: { sourceId: id, trigger: 'MANUAL', dryRun } });
