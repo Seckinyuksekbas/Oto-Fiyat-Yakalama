@@ -9,20 +9,16 @@ import { ListingTable } from '@/components/listing-table';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { apiErrorMessage } from '@/lib/messages';
-import { LEGAL_NOTE, useOpportunities, type OpportunityFilters } from '@/lib/panel-queries';
+import {
+  LEGAL_NOTE,
+  NEXT_PAGE_ERROR,
+  parseOpportunityParams,
+  useOpportunities,
+  type OpportunityFilters,
+} from '@/lib/panel-queries';
 
-const FILTER_KEYS = ['make', 'model', 'city', 'maxPrice', 'minScore', 'confidence', 'sort'] as const;
 const VIEW_KEY = 'opportunities-view';
 type View = 'card' | 'table';
-
-function readFilters(sp: URLSearchParams): OpportunityFilters {
-  const out: OpportunityFilters = {};
-  for (const k of FILTER_KEYS) {
-    const v = sp.get(k);
-    if (v) out[k] = v;
-  }
-  return out;
-}
 
 function useStoredView(): [View, (v: View) => void] {
   const [view, setView] = useState<View>('card');
@@ -59,12 +55,18 @@ function OpportunitiesInner() {
   const router = useRouter();
   const pathname = usePathname();
   const sp = useSearchParams();
-  const filters = useMemo(() => readFilters(new URLSearchParams(sp.toString())), [sp]);
+  const spString = sp.toString();
+  const parsed = useMemo(() => parseOpportunityParams(new URLSearchParams(spString)), [spString]);
+  const filters = parsed.filters;
+  // Geçersiz URL parametreleri temizlenmiş adrese yönlendirilir.
+  useEffect(() => {
+    if (parsed.clean !== spString) router.replace(parsed.clean ? `${pathname}?${parsed.clean}` : pathname, { scroll: false });
+  }, [parsed.clean, spString, router, pathname]);
   const [view, setView] = useStoredView();
 
   const setFilters = useCallback(
     (patch: OpportunityFilters) => {
-      const next = new URLSearchParams(sp.toString());
+      const next = new URLSearchParams(parsed.clean);
       for (const [k, v] of Object.entries(patch)) {
         if (v) next.set(k, v);
         else next.delete(k);
@@ -72,7 +74,7 @@ function OpportunitiesInner() {
       const qs = next.toString();
       router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
     },
-    [sp, router, pathname],
+    [parsed.clean, router, pathname],
   );
   const reset = useCallback(() => router.replace(pathname, { scroll: false }), [router, pathname]);
 
@@ -93,10 +95,10 @@ function OpportunitiesInner() {
 
   // Sonsuz kaydırma: sentinel görünür olunca sonraki sayfa.
   const sentinel = useRef<HTMLDivElement>(null);
-  const { hasNextPage, isFetchingNextPage, fetchNextPage } = q;
+  const { hasNextPage, isFetchingNextPage, fetchNextPage, isFetchNextPageError } = q;
   useEffect(() => {
     const el = sentinel.current;
-    if (!el || !hasNextPage || typeof IntersectionObserver === 'undefined') return;
+    if (!el || !hasNextPage || isFetchNextPageError || typeof IntersectionObserver === 'undefined') return;
     const io = new IntersectionObserver(
       (entries) => {
         if (entries.some((e) => e.isIntersecting) && !isFetchingNextPage) void fetchNextPage();
@@ -105,7 +107,7 @@ function OpportunitiesInner() {
     );
     io.observe(el);
     return () => io.disconnect();
-  }, [hasNextPage, isFetchingNextPage, fetchNextPage, rows.length]);
+  }, [hasNextPage, isFetchingNextPage, isFetchNextPageError, fetchNextPage, rows.length]);
 
   const filtered = Object.keys(filters).some((k) => !(k === 'sort' && filters.sort === 'score'));
 
@@ -146,7 +148,7 @@ function OpportunitiesInner() {
 
       {q.isPending ? (
         <SkeletonGrid />
-      ) : q.isError ? (
+      ) : q.isError && !q.data ? (
         <EmptyState
           title="Fırsatlar yüklenemedi"
           description={apiErrorMessage(q.error)}
@@ -165,20 +167,31 @@ function OpportunitiesInner() {
         />
       ) : (
         <>
-          <p className="num text-xs text-muted" aria-live="polite">{`${rows.length} ilan${hasNextPage ? ' · devamı var' : ''}`}</p>
-          {view === 'table' ? (
-            <ListingTable rows={rows} />
-          ) : (
-            <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {rows.map((c) => (
-                <li key={c.id}>
-                  <ListingCardView card={c} />
-                </li>
-              ))}
-            </ul>
-          )}
+          <p className="num text-xs text-muted" aria-live="polite">
+            {q.isPlaceholderData ? 'Güncelleniyor…' : `${rows.length} ilan${hasNextPage ? ' · devamı var' : ''}`}
+          </p>
+          <div aria-busy={q.isPlaceholderData || undefined} className={q.isPlaceholderData ? 'opacity-60 transition-opacity' : 'transition-opacity'}>
+            {view === 'table' ? (
+              <ListingTable rows={rows} />
+            ) : (
+              <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {rows.map((c) => (
+                  <li key={c.id}>
+                    <ListingCardView card={c} />
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
           <div ref={sentinel} className="flex justify-center py-4">
-            {hasNextPage ? (
+            {isFetchNextPageError ? (
+              <div role="alert" className="flex flex-col items-center gap-2 text-sm">
+                <p className="text-danger-text">{NEXT_PAGE_ERROR}</p>
+                <Button variant="secondary" onClick={() => void fetchNextPage()} disabled={isFetchingNextPage}>
+                  Tekrar dene
+                </Button>
+              </div>
+            ) : hasNextPage ? (
               <Button variant="secondary" onClick={() => void fetchNextPage()} disabled={isFetchingNextPage}>
                 {isFetchingNextPage ? 'Yükleniyor…' : 'Daha fazla yükle'}
               </Button>
@@ -186,7 +199,6 @@ function OpportunitiesInner() {
               <p className="text-sm text-muted">Hepsi bu kadar.</p>
             )}
           </div>
-          {q.isFetchNextPageError && <p role="alert" className="text-sm text-danger-text">Sonraki sayfa yüklenemedi. Tekrar deneyin.</p>}
         </>
       )}
 

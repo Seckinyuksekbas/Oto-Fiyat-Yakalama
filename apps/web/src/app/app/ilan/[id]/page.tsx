@@ -7,7 +7,7 @@ import { EmptyState } from '@/components/empty-state';
 import { ConfidenceMeter } from '@/components/confidence-meter';
 import { ExplanationPanel } from '@/components/explanation-panel';
 import { FavoriteButton } from '@/components/favorite-button';
-import { listingTitle } from '@/components/listing-card';
+import { DiscountText, listingTitle } from '@/components/listing-card';
 import { PriceBand } from '@/components/price-band';
 import { PriceHistoryChart } from '@/components/price-history-chart';
 import { ScoreRing } from '@/components/score-ring';
@@ -24,7 +24,7 @@ import {
   formatTl,
 } from '@/lib/format';
 import { apiErrorMessage } from '@/lib/messages';
-import { LEGAL_NOTE, MATCH_REASON_LABEL, useListing } from '@/lib/panel-queries';
+import { LEGAL_NOTE, MATCH_REASON_LABEL, isHttpUrl, useListing } from '@/lib/panel-queries';
 
 function NotFoundView() {
   return (
@@ -80,7 +80,9 @@ function DetailView({ d }: { d: ListingDetail }) {
   const discount = formatDiscount(a?.discountPct ?? null);
   const weak = !a || a.confidence === 'INSUFFICIENT';
   const damage = d.damageInfo;
-  const damaged = !!damage && ((damage.tramerAmount ?? 0) > 0 || (damage.changedParts?.length ?? 0) > 0);
+  const damaged =
+    !!a?.flags.includes('DAMAGED') ||
+    (!!damage && ((damage.tramerAmount ?? 0) > 0 || (damage.changedParts?.length ?? 0) > 0));
   const suspicious = !!a?.flags.includes('SUSPICIOUS_LOW');
 
   return (
@@ -95,7 +97,9 @@ function DetailView({ d }: { d: ListingDetail }) {
           <h1 className="font-display text-2xl font-semibold leading-tight tracking-tight sm:text-3xl">{listingTitle(d)}</h1>
           <p className="mt-1 text-sm text-muted">{d.title}</p>
           <div className="mt-3 flex flex-wrap gap-2">
-            {removed && <Badge tone="danger">Yayından kalktı</Badge>}
+            {removed && (
+              <Badge tone="danger">{`Yayından kalktı${d.removedAt ? ` · ${formatDateTime(d.removedAt)}` : ''}`}</Badge>
+            )}
             {damaged && <Badge tone="warning">Hasar kaydı var</Badge>}
             {suspicious && <Badge tone="warning">Şüpheli derecede düşük fiyat</Badge>}
             {weak && <Badge>Zayıf tahmin</Badge>}
@@ -103,15 +107,20 @@ function DetailView({ d }: { d: ListingDetail }) {
         </div>
         <div className="flex items-center gap-1">
           <FavoriteButton listingId={d.id} isFavorite={d.isFavorite} title={listingTitle(d)} className="size-10" />
-          <Button asChild variant="secondary">
-            <a href={d.url} target="_blank" rel="noopener noreferrer nofollow">
-              İlana git
-              <ExternalLink aria-hidden />
-              <span className="sr-only">(yeni sekmede açılır)</span>
-            </a>
-          </Button>
+          {isHttpUrl(d.url) && (
+            <Button asChild variant="secondary">
+              <a href={d.url} target="_blank" rel="noopener noreferrer nofollow">
+                İlana git
+                <ExternalLink aria-hidden />
+                <span className="sr-only">(yeni sekmede açılır)</span>
+              </a>
+            </Button>
+          )}
         </div>
       </header>
+      {removed && isHttpUrl(d.url) && (
+        <p className="-mt-3 text-xs text-muted">İlan yayından kalktığı için kaynak bağlantısı artık çalışmayabilir.</p>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
         <Hero d={d} />
@@ -120,8 +129,13 @@ function DetailView({ d }: { d: ListingDetail }) {
             <div>
               <p className="num text-4xl font-semibold leading-none tracking-tight">{formatTl(d.price)}</p>
               <p className="mt-2 text-sm">
-                {discount ? (
-                  <span className="font-medium text-positive-text">{`Tahmini piyasa değerinin ${discount}`}</span>
+                {discount && weak ? (
+                  <span className="text-muted">{`Tahmini değerin ${discount} (zayıf tahmin)`}</span>
+                ) : discount ? (
+                  <>
+                    <span className="text-muted">Tahmini piyasa değerinin </span>
+                    <DiscountText pct={a?.discountPct} className="text-sm" />
+                  </>
                 ) : (
                   <span className="text-muted">{weak ? 'Güvenilir bir indirim hesaplanamadı' : 'Piyasa değerine yakın'}</span>
                 )}
@@ -191,7 +205,7 @@ function DetailView({ d }: { d: ListingDetail }) {
             <h2 id="hist-title" className="mb-3 font-display text-lg font-semibold">
               Fiyat geçmişi
             </h2>
-            <PriceHistoryChart history={d.priceHistory} />
+            <PriceHistoryChart history={d.priceHistory} lastSeenAt={d.lastSeenAt} />
           </section>
         </div>
       </div>

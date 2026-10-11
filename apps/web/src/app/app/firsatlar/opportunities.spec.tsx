@@ -159,4 +159,120 @@ describe('Fırsatlar', () => {
     await screen.findAllByText(/3 Serisi/);
     await waitFor(() => expect(screen.getByRole('button', { name: 'Tablo görünümü' })).toHaveAttribute('aria-pressed', 'true'));
   });
+
+  it('geçersiz URL parametreleri atılır ve temiz adrese yönlendirilir', async () => {
+    search = 'sort=bogus&minScore=5&maxPrice=abc&confidence=LOW&make=BMW&model=X5&city=' + 'a'.repeat(61);
+    mockApi({ first: { items: [card(1)], nextCursor: null } });
+    renderWithClient(<OpportunitiesPage />);
+    await screen.findAllByText(/3 Serisi/);
+    const keys = [...requests[0].searchParams.keys()].sort();
+    expect(keys).toEqual(['limit', 'make', 'model']);
+    expect(replace).toHaveBeenCalledWith('/app/firsatlar?make=BMW&model=X5', { scroll: false });
+  });
+
+  it('markasız model parametresi temizlenir', async () => {
+    search = 'model=X5&minScore=75';
+    mockApi({ first: { items: [card(1)], nextCursor: null } });
+    renderWithClient(<OpportunitiesPage />);
+    await screen.findAllByText(/3 Serisi/);
+    expect(requests[0].searchParams.has('model')).toBe(false);
+    expect(requests[0].searchParams.get('minScore')).toBe('75');
+    expect(replace).toHaveBeenCalledWith('/app/firsatlar?minScore=75', { scroll: false });
+  });
+
+  it('şehir ve fiyat girdileri bekletilip tek seferde URL e yazılır; sondaki boşluk korunur', async () => {
+    mockApi({ first: { items: [card(1)], nextCursor: null } });
+    const user = userEvent.setup();
+    const { rerender, client } = renderWithClient(<OpportunitiesPage />);
+    await screen.findAllByText(/3 Serisi/);
+    await user.type(screen.getByLabelText('Şehir'), 'Ankara ');
+    expect(replace).not.toHaveBeenCalled();
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/app/firsatlar?city=Ankara', { scroll: false }));
+    expect(replace).toHaveBeenCalledTimes(1);
+    search = 'city=Ankara';
+    rerender(
+      <QueryClientProvider client={client}>
+        <OpportunitiesPage />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByLabelText('Şehir')).toHaveValue('Ankara ');
+
+    replace.mockClear();
+    await user.type(screen.getByLabelText('En yüksek fiyat (₺)'), '1a5');
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/app/firsatlar?city=Ankara&maxPrice=15', { scroll: false }));
+  });
+
+  it('IntersectionObserver görünür olunca sonraki sayfayı yükler; hata sonrası otomatik yeniden denemez', async () => {
+    let trigger: () => void = () => {};
+    class IO {
+      private live = true;
+      constructor(cb: (e: Array<{ isIntersecting: boolean }>) => void) {
+        trigger = () => {
+          if (this.live) cb([{ isIntersecting: true }]);
+        };
+      }
+      observe() {}
+      disconnect() {
+        this.live = false;
+      }
+      unobserve() {}
+    }
+    vi.stubGlobal('IntersectionObserver', IO);
+    let fail = true;
+    server.use(
+      http.get('*/api/v1/me/opportunities', ({ request }) => {
+        const url = new URL(request.url);
+        requests.push(url);
+        if (!url.searchParams.get('cursor')) return HttpResponse.json({ items: [card(1)], nextCursor: 'p2' });
+        return fail
+          ? HttpResponse.json({ error: { code: 'INTERNAL', message: 'x' } }, { status: 500 })
+          : HttpResponse.json({ items: [card(2, { model: 'X5' })], nextCursor: null });
+      }),
+      http.get('*/api/v1/catalog/makes', () => HttpResponse.json({ items: [] })),
+    );
+    try {
+      const user = userEvent.setup();
+      renderWithClient(<OpportunitiesPage />);
+      await screen.findAllByText(/3 Serisi/);
+      trigger();
+      expect(await screen.findByText('Sonraki sayfa yüklenemedi. Tekrar deneyin.')).toBeInTheDocument();
+      expect(screen.getAllByText(/3 Serisi/).length).toBeGreaterThan(0); // liste yerinde kalır
+      const before = requests.length;
+      trigger();
+      await new Promise((r) => setTimeout(r, 50));
+      expect(requests.length).toBe(before);
+      fail = false;
+      await user.click(screen.getByRole('button', { name: 'Tekrar dene' }));
+      await screen.findAllByText(/X5/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('filtre değişince ikinci sayfa satırları düşer', async () => {
+    server.use(
+      http.get('*/api/v1/me/opportunities', ({ request }) => {
+        const url = new URL(request.url);
+        requests.push(url);
+        if (url.searchParams.get('sort') === 'recent') return HttpResponse.json({ items: [card(9, { model: 'Z4' })], nextCursor: null });
+        if (url.searchParams.get('cursor')) return HttpResponse.json({ items: [card(2, { model: 'X5' })], nextCursor: null });
+        return HttpResponse.json({ items: [card(1)], nextCursor: 'p2' });
+      }),
+      http.get('*/api/v1/catalog/makes', () => HttpResponse.json({ items: [] })),
+    );
+    const user = userEvent.setup();
+    const { rerender, client } = renderWithClient(<OpportunitiesPage />);
+    await screen.findAllByText(/3 Serisi/);
+    await user.click(screen.getByRole('button', { name: 'Daha fazla yükle' }));
+    await screen.findAllByText(/X5/);
+    search = 'sort=recent';
+    rerender(
+      <QueryClientProvider client={client}>
+        <OpportunitiesPage />
+      </QueryClientProvider>,
+    );
+    await screen.findAllByText(/Z4/);
+    expect(screen.queryByText(/X5/)).not.toBeInTheDocument();
+    expect(requests[requests.length - 1].searchParams.has('cursor')).toBe(false);
+  });
 });

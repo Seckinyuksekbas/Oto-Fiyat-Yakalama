@@ -5,10 +5,11 @@ import { formatShortTl, formatTl } from '@/lib/format';
 
 const AXIS = { fontFamily: 'var(--font-mono)', fontSize: 11, fill: 'var(--color-muted)' } as const;
 
-const dayFmt = new Intl.DateTimeFormat('tr-TR', { timeZone: 'Europe/Istanbul', day: '2-digit', month: 'short' });
+const tickFmt = new Intl.DateTimeFormat('tr-TR', { timeZone: 'Europe/Istanbul', day: '2-digit', month: 'short', year: '2-digit' });
+const fullFmt = new Intl.DateTimeFormat('tr-TR', { timeZone: 'Europe/Istanbul', day: '2-digit', month: 'long', year: 'numeric' });
 
-/** Adım çizgisi: fiyat bir sonraki gözleme kadar sabit kalır. */
-export function PriceHistoryChart({ history }: { history: ListingDetail['priceHistory'] }) {
+/** Adım çizgisi: fiyat bir sonraki gözleme kadar sabit kalır; son fiyat son görülme anına uzatılır. */
+export function PriceHistoryChart({ history, lastSeenAt }: { history: ListingDetail['priceHistory']; lastSeenAt?: string }) {
   const data = history
     .map((h) => ({ t: new Date(h.observedAt).getTime(), price: Number(h.price) }))
     .filter((d) => Number.isFinite(d.price) && Number.isFinite(d.t))
@@ -24,26 +25,36 @@ export function PriceHistoryChart({ history }: { history: ListingDetail['priceHi
   }
   const first = data[0].price;
   const last = data[data.length - 1].price;
-  const summary = `Fiyat geçmişi: ${data.length} gözlem, ${formatTl(first)} değerinden ${formatTl(last)} değerine.`;
+  const seen = lastSeenAt ? new Date(lastSeenAt).getTime() : NaN;
+  const series = Number.isFinite(seen) && seen > data[data.length - 1].t ? [...data, { t: seen, price: last }] : data;
+  const prices = data.map((d) => d.price);
+  const min = Math.min(...prices);
+  const max = Math.max(...prices);
+  const change = last - first;
+  const summary = `${data.length} fiyat gözlemi. En düşük ${formatTl(min)}, en yüksek ${formatTl(max)}. İlk fiyattan son fiyata değişim: ${change === 0 ? 'yok' : `${change > 0 ? '+' : '-'}${formatTl(Math.abs(change))}`}.`;
 
   return (
-    <figure className="m-0" aria-label={summary}>
-      <div className="h-[180px] w-full">
+    <figure className="m-0">
+      <figcaption className="sr-only">{`Fiyat geçmişi. ${summary}`}</figcaption>
+      <div aria-hidden className="h-[180px] w-full">
         <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={data} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
+          <LineChart data={series} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
             <CartesianGrid stroke="var(--color-border)" vertical={false} />
             <XAxis
               dataKey="t"
               type="number"
               scale="time"
               domain={['dataMin', 'dataMax']}
-              tickFormatter={(t: number) => dayFmt.format(new Date(t))}
+              tickFormatter={(t: number) => tickFmt.format(new Date(t))}
               tick={AXIS}
               stroke="var(--color-border-strong)"
               tickLine={false}
             />
             <YAxis
-              domain={['dataMin - 20000', 'dataMax + 20000']}
+              domain={[
+                (dataMin: number) => dataMin - Math.max((max - min) * 0.15, dataMin * 0.01),
+                (dataMax: number) => dataMax + Math.max((max - min) * 0.15, dataMax * 0.01),
+              ]}
               tickFormatter={(v: number) => formatShortTl(v)}
               tick={AXIS}
               stroke="var(--color-border-strong)"
@@ -52,7 +63,7 @@ export function PriceHistoryChart({ history }: { history: ListingDetail['priceHi
             />
             <Tooltip
               formatter={(v) => [formatTl(Number(v)), 'Fiyat']}
-              labelFormatter={(t) => dayFmt.format(new Date(Number(t)))}
+              labelFormatter={(t) => fullFmt.format(new Date(Number(t)))}
               contentStyle={{
                 background: 'var(--color-surface-2)',
                 border: '1px solid var(--color-border)',

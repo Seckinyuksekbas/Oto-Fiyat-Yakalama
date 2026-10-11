@@ -42,7 +42,52 @@ export function useOpportunities(filters: OpportunityFilters) {
     queryFn: ({ pageParam }) =>
       apiFetch<Page<ListingCard, string>>('/me/opportunities', { query: { ...filters, limit: 24, cursor: pageParam } }),
     getNextPageParam: (last) => last.nextCursor ?? undefined,
+    placeholderData: keepPreviousData,
   });
+}
+
+/** Dış bağlantı yalnızca http(s) ise gösterilir (javascript: vb. şemalar engellenir). */
+export function isHttpUrl(url: string | null | undefined): url is string {
+  return typeof url === 'string' && /^https?:\/\//i.test(url);
+}
+
+export const NEXT_PAGE_ERROR = 'Sonraki sayfa yüklenemedi. Tekrar deneyin.';
+
+const MAX_TEXT = 60;
+const ENUMS = { sort: ['score', 'recent', 'discount'], confidence: ['MEDIUM', 'HIGH'] } as const;
+
+function validFilter(key: string, v: string): boolean {
+  switch (key) {
+    case 'sort':
+    case 'confidence':
+      return (ENUMS[key] as readonly string[]).includes(v);
+    case 'minScore':
+      return /^\d{2,3}$/.test(v) && Number(v) >= 60 && Number(v) <= 100;
+    case 'maxPrice':
+      return /^\d{1,15}$/.test(v);
+    default:
+      return v.trim().length > 0 && v.length <= MAX_TEXT;
+  }
+}
+
+export const OPPORTUNITY_FILTER_KEYS = ['make', 'model', 'city', 'maxPrice', 'minScore', 'confidence', 'sort'] as const;
+
+/** URL parametrelerini doğrular: geçersiz/yinelenen/modelsiz değerler atılır. `clean` temizlenmiş sorgu dizesidir. */
+export function parseOpportunityParams(sp: URLSearchParams): { filters: OpportunityFilters; clean: string } {
+  const filters: OpportunityFilters = {};
+  const hasMake = !!sp.get('make') && validFilter('make', sp.get('make') ?? '');
+  const kept = new URLSearchParams();
+  for (const [k, v] of sp) {
+    if (!(OPPORTUNITY_FILTER_KEYS as readonly string[]).includes(k)) {
+      kept.append(k, v);
+      continue;
+    }
+    const key = k as (typeof OPPORTUNITY_FILTER_KEYS)[number];
+    if (filters[key] !== undefined || !validFilter(k, v) || (k === 'model' && !hasMake)) continue;
+    filters[key] = v;
+    kept.append(k, v);
+  }
+  return { filters, clean: kept.toString() };
 }
 
 export function useCatalogMakes() {

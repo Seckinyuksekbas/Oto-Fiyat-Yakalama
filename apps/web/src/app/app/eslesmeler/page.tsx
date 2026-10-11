@@ -9,9 +9,10 @@ import { ScoreRing } from '@/components/score-ring';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { DiscountText } from '@/components/listing-card';
 import { formatDiscount, formatKm, formatRelative, formatTl } from '@/lib/format';
 import { apiErrorMessage } from '@/lib/messages';
-import { MATCH_REASON_LABEL, useMatches, useSearchProfileOptions, type MatchRow } from '@/lib/panel-queries';
+import { MATCH_REASON_LABEL, NEXT_PAGE_ERROR, useMatches, useSearchProfileOptions, type MatchRow } from '@/lib/panel-queries';
 
 function MatchItem({ m }: { m: MatchRow }) {
   const l = m.listing;
@@ -39,7 +40,11 @@ function MatchItem({ m }: { m: MatchRow }) {
         </h3>
         <p className="num mt-0.5 flex flex-wrap items-baseline gap-x-2 text-sm">
           <span className="font-semibold">{formatTl(m.matchedPrice)}</span>
-          {discount && <span className="text-xs font-medium text-positive-text">{discount}</span>}
+          {m.analysis.confidence === 'INSUFFICIENT' ? (
+            discount && <span className="text-xs text-muted">{`${discount} (zayıf tahmin)`}</span>
+          ) : (
+            <DiscountText pct={m.analysis.discountPct} />
+          )}
           <span className="text-xs text-muted">{[formatKm(l.km), l.city].filter(Boolean).join(' · ')}</span>
         </p>
         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -118,7 +123,7 @@ export default function MatchesPage() {
             <Skeleton key={i} className="h-24 rounded-lg" />
           ))}
         </div>
-      ) : q.isError ? (
+      ) : q.isError && !q.data ? (
         <EmptyState
           title="Eşleşmeler yüklenemedi"
           description={apiErrorMessage(q.error)}
@@ -148,10 +153,15 @@ export default function MatchesPage() {
               <MatchItem key={m.id} m={m} />
             ))}
           </ul>
+          {q.isFetchNextPageError && (
+            <p role="alert" className="text-center text-sm text-danger-text">
+              {NEXT_PAGE_ERROR}
+            </p>
+          )}
           {q.hasNextPage && (
             <div className="flex justify-center">
               <Button variant="secondary" onClick={() => void q.fetchNextPage()} disabled={q.isFetchingNextPage}>
-                {q.isFetchingNextPage ? 'Yükleniyor…' : 'Daha fazla yükle'}
+                {q.isFetchingNextPage ? 'Yükleniyor…' : q.isFetchNextPageError ? 'Tekrar dene' : 'Daha fazla yükle'}
               </Button>
             </div>
           )}

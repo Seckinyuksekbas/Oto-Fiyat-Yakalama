@@ -46,23 +46,30 @@ export function FilterSelect({
   );
 }
 
-/** Değer dışarıdan değişince yerel taslağı eşitler; yazma durunca `delay` ms sonra bildirir. */
-function useDebouncedDraft(value: string, commit: (v: string) => void, delay = 400) {
+/**
+ * Yazma durunca `delay` ms sonra bildirir. Dışarıdan gelen değer, taslağın normalize hâliyle aynıysa
+ * taslak korunur (sondaki boşluk yazarken silinmez).
+ */
+function useDebouncedDraft(value: string, commit: (v: string) => void, normalize: (v: string) => string = (v) => v, delay = 400) {
   const [draft, setDraft] = useState(value);
   const commitRef = useRef(commit);
   commitRef.current = commit;
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
   const last = useRef(value);
   useEffect(() => {
     last.current = value;
-    setDraft(value);
+    if (normalize(draftRef.current) !== value) setDraft(value);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
   useEffect(() => {
-    if (draft === last.current) return;
+    if (normalize(draft) === last.current) return;
     const t = setTimeout(() => {
-      last.current = draft;
+      last.current = normalize(draft);
       commitRef.current(draft);
     }, delay);
     return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft, delay]);
   return [draft, setDraft] as const;
 }
@@ -82,7 +89,11 @@ export interface FiltersBarProps {
 export function FiltersBar({ value, onChange, onReset }: FiltersBarProps) {
   const makes = useCatalogMakes();
   const models = useCatalogModels(value.make);
-  const [city, setCity] = useDebouncedDraft(value.city ?? '', (v) => onChange({ city: v.trim() || undefined }));
+  const [city, setCity] = useDebouncedDraft(
+    value.city ?? '',
+    (v) => onChange({ city: v.trim() || undefined }),
+    (v) => v.trim(),
+  );
   const [maxPrice, setMaxPrice] = useDebouncedDraft(value.maxPrice ?? '', (v) =>
     onChange({ maxPrice: v.replace(/\D/g, '') || undefined }),
   );

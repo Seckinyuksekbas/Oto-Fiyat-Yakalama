@@ -1,17 +1,18 @@
 'use client';
 import Link from 'next/link';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Heart, Pencil } from 'lucide-react';
 import { toast } from 'sonner';
 import type { FavoriteItem } from '@oto/shared';
 import { EmptyState } from '@/components/empty-state';
+import { FAVORITE_CACHE_ROOTS } from '@/components/favorite-button';
 import { ListingCardView } from '@/components/listing-card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { apiFetch } from '@/lib/api';
 import { apiErrorMessage } from '@/lib/messages';
-import { panelKeys, useFavorites } from '@/lib/panel-queries';
+import { NEXT_PAGE_ERROR, panelKeys, useFavorites } from '@/lib/panel-queries';
 
 const MAX_NOTE = 280;
 
@@ -28,12 +29,25 @@ function NoteEditor({ id, note }: { id: number; note: string | null }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(note ?? '');
   const save = useSaveNote();
+  const editBtn = useRef<HTMLButtonElement>(null);
+  const restoreFocus = useRef(false);
+  useEffect(() => {
+    if (!editing && restoreFocus.current) {
+      restoreFocus.current = false;
+      editBtn.current?.focus();
+    }
+  }, [editing]);
+  const close = (refocus: boolean) => {
+    restoreFocus.current = refocus;
+    setEditing(false);
+  };
 
   if (!editing) {
     return (
       <div className="flex items-start justify-between gap-2 rounded-md bg-surface-2 px-3 py-2 text-sm">
         {note ? <p className="min-w-0 whitespace-pre-wrap break-words">{note}</p> : <p className="text-muted">Not eklenmemiş</p>}
         <button
+          ref={editBtn}
           type="button"
           onClick={() => {
             setDraft(note ?? '');
@@ -51,13 +65,19 @@ function NoteEditor({ id, note }: { id: number; note: string | null }) {
   return (
     <form
       className="flex flex-col gap-2"
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          e.stopPropagation();
+          close(true);
+        }
+      }}
       onSubmit={(e) => {
         e.preventDefault();
         save.mutate(
           { id, note: draft.trim() || null },
           {
             onSuccess: () => {
-              setEditing(false);
+              close(true);
               toast.success('Not kaydedildi');
             },
             onError: (err) => toast.error(apiErrorMessage(err)),
@@ -81,7 +101,7 @@ function NoteEditor({ id, note }: { id: number; note: string | null }) {
       <div className="flex items-center justify-between gap-2">
         <span className="num text-xs text-muted" aria-live="polite">{`${draft.length}/${MAX_NOTE}`}</span>
         <span className="flex gap-2">
-          <Button variant="ghost" size="sm" onClick={() => setEditing(false)}>
+          <Button variant="ghost" size="sm" onClick={() => close(true)}>
             Vazgeç
           </Button>
           <Button type="submit" size="sm" disabled={save.isPending}>
@@ -121,14 +141,23 @@ export default function FavoritesPage() {
       return next;
     });
 
-  /** Kalp, FavoriteButton içinde DELETE/PUT yapar; sayfa kartı gizler ve geri alma teklif eder. */
-  function onToggle(item: FavoriteItem, next: boolean) {
+  const refreshCaches = () => Promise.all(FAVORITE_CACHE_ROOTS.map((root) => qc.invalidateQueries({ queryKey: [root] })));
+
+  /**
+   * Kaldırma ve geri alma sırası sayfada yönetilir: kart gizlenir, DELETE tamamlanınca "Geri al" sunulur
+   * (böylece PUT, DELETE'ten önce çalışamaz). Karttaki kalp tıklaması bu akışa yönlendirilir.
+   */
+  async function remove(item: FavoriteItem) {
     const id = item.listing.id;
-    if (next) {
+    setHide(id, true);
+    try {
+      await apiFetch<void>(`/me/favorites/${id}`, { method: 'DELETE' });
+    } catch (err) {
       setHide(id, false);
+      toast.error(apiErrorMessage(err));
       return;
     }
-    setHide(id, true);
+    void refreshCaches();
     toast('Favorilerden çıkarıldı', {
       action: {
         label: 'Geri al',
@@ -136,7 +165,7 @@ export default function FavoritesPage() {
           apiFetch(`/me/favorites/${id}`, { method: 'PUT', json: { note: item.note } })
             .then(() => {
               setHide(id, false);
-              return qc.invalidateQueries({ queryKey: panelKeys.favorites() });
+              return refreshCaches();
             })
             .catch((err: unknown) => toast.error(apiErrorMessage(err)));
         },
@@ -157,7 +186,7 @@ export default function FavoritesPage() {
             <Skeleton key={i} className="h-[300px] rounded-lg" />
           ))}
         </div>
-      ) : q.isError ? (
+      ) : q.isError && !q.data ? (
         <EmptyState
           title="Favoriler yüklenemedi"
           description={apiErrorMessage(q.error)}
@@ -178,16 +207,31 @@ export default function FavoritesPage() {
         <>
           <ul className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {visible.map((it) => (
-              <li key={it.listing.id} className="flex flex-col gap-2">
-                <ListingCardView card={it.listing} onToggleFavorite={(next) => onToggle(it, next)} />
+              <li
+                key={it.listing.id}
+                className="flex flex-col gap-2"
+                onClickCapture={(e) => {
+                  const btn = (e.target as HTMLElement).closest('button[aria-pressed]');
+                  if (!btn || !e.currentTarget.contains(btn) || btn.closest('form')) return;
+                  e.stopPropagation();
+                  e.preventDefault();
+                  void remove(it);
+                }}
+              >
+                <ListingCardView card={it.listing} />
                 <NoteEditor key={`${it.listing.id}:${it.note ?? ''}`} id={it.listing.id} note={it.note} />
               </li>
             ))}
           </ul>
+          {q.isFetchNextPageError && (
+            <p role="alert" className="text-center text-sm text-danger-text">
+              {NEXT_PAGE_ERROR}
+            </p>
+          )}
           {q.hasNextPage && (
             <div className="flex justify-center">
               <Button variant="secondary" onClick={() => void q.fetchNextPage()} disabled={q.isFetchingNextPage}>
-                {q.isFetchingNextPage ? 'Yükleniyor…' : 'Daha fazla yükle'}
+                {q.isFetchingNextPage ? 'Yükleniyor…' : q.isFetchNextPageError ? 'Tekrar dene' : 'Daha fazla yükle'}
               </Button>
             </div>
           )}
