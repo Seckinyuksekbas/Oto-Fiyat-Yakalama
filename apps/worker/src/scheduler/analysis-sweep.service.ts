@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ISTANBUL_OFFSET_MS, MATCH_DISPATCH_MAX_ATTEMPTS, matchDispatchStuckFlagKey, startOfIstanbulDay } from '@oto/shared';
+import { ISTANBUL_OFFSET_MS, MATCH_DISPATCH_MAX_ATTEMPTS, MATCH_DISPATCH_STUCK_WHERE, matchDispatchStuckFlagKey, startOfIstanbulDay } from '@oto/shared';
 import { AlertService } from '../common/alert.service';
 import { MatchDispatcher } from '../analysis/match-dispatcher.service';
 import { PrismaService } from '../infra/prisma.service';
@@ -115,7 +115,7 @@ export class AnalysisSweepService {
    */
   private async alertStuck(): Promise<void> {
     const stuck = await this.prisma.listingAnalysis.findMany({
-      where: { matchEvent: { in: ['NEW', 'PRICE_DROP', 'RELIST'] }, matchQueuedAt: null, matchDispatchAttempts: { gte: MATCH_DISPATCH_MAX_ATTEMPTS } },
+      where: MATCH_DISPATCH_STUCK_WHERE,
       orderBy: { id: 'asc' },
       take: 50,
       select: { id: true, listingId: true },

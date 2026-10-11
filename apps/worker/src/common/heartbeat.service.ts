@@ -43,6 +43,11 @@ export class HeartbeatService implements OnModuleInit, OnModuleDestroy {
 
   private async beat(): Promise<void> {
     const value = JSON.stringify({ role: this.env.ROLE, pid: process.pid, host: hostname(), startedAt: this.startedAt, at: new Date().toISOString() });
-    await this.redis.multi().set(this.key, value, 'EX', HEARTBEAT_TTL_SEC).set(this.seenKey, value, 'EX', WORKER_SEEN_TTL_SEC).exec();
+    const results = await this.redis.multi().set(this.key, value, 'EX', HEARTBEAT_TTL_SEC).set(this.seenKey, value, 'EX', WORKER_SEEN_TTL_SEC).exec();
+    // MULTI komut başına hata döndürebilir (exec reddetmez): yutulmasın, günlüğe yazılsın.
+    for (const [err] of results ?? []) {
+      if (err) this.logger.warn(`Heartbeat komutu başarısız: ${err.message}`);
+    }
+    if (!results) this.logger.warn('Heartbeat MULTI iptal edildi');
   }
 }

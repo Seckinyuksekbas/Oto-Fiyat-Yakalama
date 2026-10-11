@@ -34,6 +34,19 @@ export const NOTIFY_JOB_OPTS = {
 
 /** Eşleştirme olayı yeniden gönderim sınırı: bu kadar başarısız denemeden sonra süpürme satırı atlar (admin sıfırlayabilir). */
 export const MATCH_DISPATCH_MAX_ATTEMPTS = 10;
+/**
+ * "Takılı" eşleştirme gönderimi (Prisma `ListingAnalysisWhereInput` ile yapısal uyumlu): olay var, kuyruğa alınmamış,
+ * deneme sınırına ulaşmış. Worker analiz süpürmesi (alarm) ve admin API (liste/sıfırlama) aynı tanımı kullanır.
+ */
+export const MATCH_DISPATCH_STUCK_WHERE: {
+  matchEvent: { in: Array<'NEW' | 'PRICE_DROP' | 'RELIST'> };
+  matchQueuedAt: null;
+  matchDispatchAttempts: { gte: number };
+} = {
+  matchEvent: { in: ['NEW', 'PRICE_DROP', 'RELIST'] },
+  matchQueuedAt: null,
+  matchDispatchAttempts: { gte: MATCH_DISPATCH_MAX_ATTEMPTS },
+};
 /** Takılı eşleştirme alarmının "bir kez" işareti (Redis); admin sayacı sıfırlayınca silinir ki yinelenirse yeniden alarm verilsin. */
 export function matchDispatchStuckFlagKey(analysisId: number): string {
   return `match-dispatch-stuck:alerted:${analysisId}`;

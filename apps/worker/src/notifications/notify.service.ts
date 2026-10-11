@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { resolveUserPlan } from '@oto/db';
+import { redactSecrets } from '@oto/server-common';
 import { userEventChannel, type UserEvent } from '@oto/shared';
 import { PrismaService } from '../infra/prisma.service';
 import { RedisService } from '../infra/redis.service';
@@ -17,7 +18,8 @@ export type NotifyResult =
   | { kind: 'RETRY'; error: string; retryAfterMs?: number }
   | { kind: 'THROTTLED'; retryAfterMs: number };
 
-const short = (s: string) => s.slice(0, 500);
+/** Kalıcılaştırılan hata metinleri: bot token / URL kimlik bilgisi / sorgu dizisi ayıklanır, 500 karakter. */
+const short = (s: string) => redactSecrets(s).slice(0, 500);
 
 @Injectable()
 export class NotifyService {
@@ -75,7 +77,7 @@ export class NotifyService {
 
   /** İşlenmeyen beklenmedik hata: deneme sayılır; son denemede satır FAILED olur (PENDING'de takılı kalmaz). */
   async recordUnexpectedFailure(id: number, err: unknown, attempt: { attemptsMade: number; maxAttempts: number }): Promise<void> {
-    const msg = short((err instanceof Error ? err.message : String(err)).replace(/bot\d+:[\w-]+/g, 'bot[redacted]'));
+    const msg = short(err instanceof Error ? err.message : String(err));
     if (attempt.attemptsMade + 1 >= attempt.maxAttempts) {
       await this.prisma.notification.updateMany({ where: { id, status: 'PENDING' }, data: { status: 'FAILED', attempts: { increment: 1 }, lastError: msg } });
     } else {

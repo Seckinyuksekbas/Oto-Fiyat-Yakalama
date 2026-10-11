@@ -2,7 +2,7 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { notifyJobId } from '@oto/shared';
 import { Worker, type Queue } from 'bullmq';
 import IORedis from 'ioredis';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdminQueues, ADMIN_QUEUE_NAMES } from '../src/infra/admin-queues.service';
 import { PrismaService } from '../src/infra/prisma.service';
 import { RedisService } from '../src/infra/redis.service';
@@ -84,13 +84,15 @@ describe('POST /admin/queues/:name/retry-failed', () => {
     await failJobs(queues.match, [{}, {}, {}]);
     const res = await admin.post(api('/queues/match/retry-failed'));
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ retried: 3 });
+    expect(res.body).toEqual({ retried: 3, skipped: 0 });
     const counts = await queues.match.getJobCounts('failed', 'waiting');
     expect(counts).toMatchObject({ failed: 0, waiting: 3 });
+    // Tükenmiş işler tam deneme hakkıyla döner (sayaçlar sıfırlanır)
+    for (const j of await queues.match.getJobs(['waiting'])) expect(j.attemptsMade).toBe(0);
 
     const again = await admin.post(api('/queues/match/retry-failed'));
     expect(again.status).toBe(200);
-    expect(again.body).toEqual({ retried: 0 });
+    expect(again.body).toEqual({ retried: 0, skipped: 0 });
     const rows = await audits('queue.retry-failed');
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ targetType: 'Queue', targetId: 'match', after: { retried: 3 } });
@@ -101,6 +103,77 @@ describe('POST /admin/queues/:name/retry-failed', () => {
     const [a, b] = await Promise.all([admin.post(api('/queues/match/retry-failed')), admin.post(api('/queues/match/retry-failed'))]);
     expect(a.body.retried + b.body.retried).toBe(2);
     expect((await queues.match.getJobCounts('waiting')).waiting).toBe(2);
+  });
+
+  it('a retried exhausted job runs again with its full attempts', async () => {
+    await failJobs(queues.match, [{}]);
+    await admin.post(api('/queues/match/retry-failed')).expect(200);
+    const conn = new IORedis(process.env.REDIS_URL!, { maxRetriesPerRequest: null });
+    let seenAttempt = -1;
+    const worker = new Worker('match', async (job) => {
+      seenAttempt = job.attemptsMade;
+      throw new Error('boom again');
+    }, { connection: conn });
+    try {
+      const deadline = Date.now() + 10_000;
+      while ((await queues.match.getJobCounts('failed')).failed < 1) {
+        if (Date.now() > deadline) throw new Error('job did not fail again');
+        await new Promise((r) => setTimeout(r, 50));
+      }
+    } finally {
+      await worker.close();
+      await conn.quit();
+    }
+    expect(seenAttempt).toBe(0);
+    const [job] = await queues.match.getJobs(['failed']);
+    expect(job.attemptsMade).toBe(1);
+  });
+
+  it('notify queues map failed jobs to notification retry (DB reset + re-enqueue), audited by real DB count', async () => {
+    const u = await registerUser(app);
+    const ok = await seedNotif(u.user.id);
+    const inactive = await seedNotif(u.user.id, { lastError: 'USER_INACTIVE' });
+    await failJobs(queues.notify, [
+      { jobId: notifyJobId(ok.id), data: { notificationId: ok.id } },
+      { jobId: notifyJobId(inactive.id), data: { notificationId: inactive.id } },
+      { jobId: 'bogus-1', data: { nope: true } },
+    ]);
+    const res = await admin.post(api('/queues/notify/retry-failed'));
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ retried: 1, skipped: 2 });
+    expect(await prisma.notification.findUniqueOrThrow({ where: { id: ok.id } })).toMatchObject({ status: 'PENDING', attempts: 0 });
+    expect(await prisma.notification.findUniqueOrThrow({ where: { id: inactive.id } })).toMatchObject({ status: 'FAILED' });
+    expect(await (await queues.notify.getJob(notifyJobId(ok.id)))!.getState()).toBe('waiting');
+    const rows = await audits('queue.retry-failed');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ targetType: 'Queue', targetId: 'notify', after: { retried: 1, notificationIds: [ok.id] } });
+
+    const again = await admin.post(api('/queues/notify/retry-failed'));
+    expect(again.body).toEqual({ retried: 0, skipped: 2 });
+    expect(await audits('queue.retry-failed')).toHaveLength(1);
+  });
+
+  it('Redis failures -> 503 for list, retry-failed and clean', async () => {
+    const s1 = vi.spyOn(queues.scrape, 'getJobCounts').mockRejectedValueOnce(new Error('redis down'));
+    expect((await admin.get(api('/queues'))).status).toBe(503);
+    s1.mockRestore();
+    const s2 = vi.spyOn(queues.match, 'getJobs').mockRejectedValueOnce(new Error('redis down'));
+    expect((await admin.post(api('/queues/match/retry-failed'))).status).toBe(503);
+    s2.mockRestore();
+    const s3 = vi.spyOn(queues.analyze, 'clean').mockRejectedValueOnce(new Error('redis down'));
+    expect((await admin.post(api('/queues/analyze/clean')).send({ state: 'failed', olderThanSec: 3600 })).status).toBe(503);
+    s3.mockRestore();
+    expect(await prisma.auditLog.count({ where: { action: { startsWith: 'queue.' } } })).toBe(0);
+  });
+
+  it('audit failure after the Redis action still returns the result (action already happened)', async () => {
+    await failJobs(queues.match, [{}]);
+    const spy = vi.spyOn(prisma, '$transaction').mockRejectedValueOnce(new Error('db down'));
+    const res = await admin.post(api('/queues/match/retry-failed'));
+    spy.mockRestore();
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ retried: 1, skipped: 0 });
+    expect((await queues.match.getJobCounts('waiting')).waiting).toBe(1);
   });
 
   it('rejects unknown queue names with 400', async () => {
@@ -172,6 +245,8 @@ describe('GET /admin/workers', () => {
   });
 });
 
+const BOT_TOKEN = '123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawA';
+
 const matchPayload = (title: string, reason: 'NEW' | 'PRICE_DROP' | 'RELIST') => ({
   type: 'MATCH',
   reason,
@@ -199,7 +274,11 @@ describe('GET /admin/notifications', () => {
   it('lists with user email, payload summary and lastError; filters; never leaks payload/config/chatId', async () => {
     const u = await registerUser(app, { email: 'alici@test.com' });
     const other = await registerUser(app);
-    const a = await seedNotif(u.user.id, { channel: 'TELEGRAM', payload: matchPayload('Audi A4', 'PRICE_DROP') });
+    const a = await seedNotif(u.user.id, {
+      channel: 'TELEGRAM',
+      payload: matchPayload('Audi A4', 'PRICE_DROP'),
+      lastError: `fetch failed https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`,
+    });
     await seedNotif(u.user.id, { status: 'SENT', lastError: null, sentAt: new Date() });
     await seedNotif(other.user.id, { kind: 'SECURITY', payload: { type: 'TELEGRAM_LINKED' } });
 
@@ -214,11 +293,12 @@ describe('GET /admin/notifications', () => {
       channel: 'TELEGRAM',
       status: 'FAILED',
       attempts: 5,
-      lastError: 'telegram 500',
+      lastError: 'fetch failed https://api.telegram.org/bot[redacted]/sendMessage',
       title: 'Audi A4',
       reason: 'PRICE_DROP',
     });
     const dump = JSON.stringify(res.body);
+    expect(dump).not.toContain(BOT_TOKEN.split(':')[1]);
     expect(dump).not.toContain('999');
     expect(dump).not.toContain('secret');
     expect(res.body.items[0]).not.toHaveProperty('payload');
@@ -292,7 +372,30 @@ describe('POST /admin/notifications/retry', () => {
 
     const rows = await audits('notification.retry');
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ targetType: 'Notification', after: { ids: [inApp.id, tg.id] } });
+    expect(rows[0]).toMatchObject({ targetType: 'Notification', targetId: 'bulk:2', after: { ids: [inApp.id, tg.id] } });
+  });
+
+  it('skips rows older than 7 days (TOO_OLD) and rows whose job is still in flight (JOB_IN_FLIGHT)', async () => {
+    const u = await registerUser(app);
+    const old = await seedNotif(u.user.id, { createdAt: new Date(Date.now() - 8 * 86400_000) });
+    const inFlight = await seedNotif(u.user.id, { payload: matchPayload('f', 'NEW') });
+    await queues.notify.add('notify', { notificationId: inFlight.id }, { jobId: notifyJobId(inFlight.id), delay: 60_000 });
+    const res = await admin.post(api('/notifications/retry')).send({ ids: [old.id, inFlight.id] });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ retried: [], skipped: [{ id: old.id, reason: 'TOO_OLD' }, { id: inFlight.id, reason: 'JOB_IN_FLIGHT' }] });
+    expect(await prisma.notification.count({ where: { id: { in: [old.id, inFlight.id] }, status: 'FAILED' } })).toBe(2);
+    expect(await audits('notification.retry')).toHaveLength(0);
+  });
+
+  it('Redis down -> 503 before any DB change, no audit', async () => {
+    const u = await registerUser(app);
+    const n = await seedNotif(u.user.id);
+    const spy = vi.spyOn(queues.notify, 'getJob').mockRejectedValueOnce(new Error('redis down'));
+    const res = await admin.post(api('/notifications/retry')).send({ ids: [n.id] });
+    spy.mockRestore();
+    expect(res.status).toBe(503);
+    expect(await prisma.notification.findUniqueOrThrow({ where: { id: n.id } })).toMatchObject({ status: 'FAILED' });
+    expect(await audits('notification.retry')).toHaveLength(0);
   });
 
   it('concurrent double click retries each row exactly once', async () => {
@@ -379,12 +482,14 @@ describe('match dispatches', () => {
   it('POST reset zeroes the counter, clears the alarm flag, audits once; repeat and non-stuck are no-ops', async () => {
     const stuck = await seedDispatch(12);
     await redis.set(`match-dispatch-stuck:alerted:${stuck.analysisId}`, '1');
+    await redis.set(`alert:match-dispatch-stuck:${stuck.analysisId}`, '1', 'EX', 1800);
     const res = await admin.post(api(`/match-dispatches/${stuck.analysisId}/reset`));
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ analysisId: stuck.analysisId, matchDispatchAttempts: 0 });
     const row = await prisma.listingAnalysis.findUniqueOrThrow({ where: { id: stuck.analysisId } });
     expect(row.matchDispatchAttempts).toBe(0);
     expect(await redis.exists(`match-dispatch-stuck:alerted:${stuck.analysisId}`)).toBe(0);
+    expect(await redis.exists(`alert:match-dispatch-stuck:${stuck.analysisId}`)).toBe(0);
 
     const again = await admin.post(api(`/match-dispatches/${stuck.analysisId}/reset`));
     expect(again.status).toBe(200);

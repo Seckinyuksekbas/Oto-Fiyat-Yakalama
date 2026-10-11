@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@oto/db';
+import { redactSecrets } from '@oto/server-common';
 import {
   ErrorCode,
   NOTIFY_JOB_OPTS,
@@ -10,12 +11,12 @@ import {
 } from '@oto/shared';
 import type { Queue } from 'bullmq';
 import type { AuditCtx } from '../../common/audit/audit-ctx.decorator';
-import { AuditService } from '../../common/audit/audit.service';
+import { AuditService, type AuditTarget } from '../../common/audit/audit.service';
 import { AppError } from '../../common/errors/app-error';
 import { AdminQueues } from '../../infra/admin-queues.service';
 import { PrismaService } from '../../infra/prisma.service';
 
-export type RetrySkipReason = 'NOT_FOUND' | 'NOT_FAILED' | 'USER_INACTIVE' | 'UNSUPPORTED_CHANNEL';
+export type RetrySkipReason = 'NOT_FOUND' | 'NOT_FAILED' | 'USER_INACTIVE' | 'UNSUPPORTED_CHANNEL' | 'TOO_OLD' | 'JOB_IN_FLIGHT';
 export interface RetryResult {
   retried: number[];
   skipped: Array<{ id: number; reason: RetrySkipReason }>;
@@ -39,8 +40,8 @@ const CHANNELS = ['IN_APP', 'TELEGRAM', 'EMAIL'] as const;
 /** Kuyruk işçisi olan kanallar (EMAIL için işçi yok). */
 const DISPATCHABLE = new Set(['IN_APP', 'TELEGRAM']);
 const TITLE_MAX = 200;
-/** Telegram bot token biçimi (`123456:ABC…`): hata metinlerinde sızmasın. */
-const BOT_TOKEN_RE = /\b\d{5,}:[A-Za-z0-9_-]{20,}\b/g;
+/** Bu yaştan eski bildirim yeniden denenmez (NOTIFY_JOB_OPTS.removeOnFail penceresi; olay artık bayat). */
+export const RETRY_MAX_AGE_MS = NOTIFY_JOB_OPTS.removeOnFail.age * 1000;
 
 const unavailable = () => new AppError(ErrorCode.INTERNAL, 503, 'Bildirim kuyruğuna şu anda erişilemiyor');
 
@@ -83,7 +84,7 @@ export class AdminNotificationsService {
         channel: n.channel,
         status: n.status,
         attempts: n.attempts,
-        lastError: n.lastError === null ? null : n.lastError.replace(BOT_TOKEN_RE, '***'),
+        lastError: n.lastError === null ? null : redactSecrets(n.lastError),
         ...summarize(n.kind, n.payload),
         createdAt: n.createdAt.toISOString(),
         queuedAt: n.queuedAt?.toISOString() ?? null,
@@ -94,19 +95,23 @@ export class AdminNotificationsService {
   }
 
   /**
-   * Yalnızca FAILED, `USER_INACTIVE` olmayan, kullanıcısı ACTIVE olan ve kuyruk kanalındaki (IN_APP/TELEGRAM) satırlar.
-   * 1) Eski bitmiş iş (`notify-<id>`, removeOnFail 7 gün) kaldırılır — yoksa aynı jobId ile ekleme sessizce yok sayılır.
+   * Yalnızca FAILED, `USER_INACTIVE` olmayan, kullanıcısı ACTIVE olan, kuyruk kanalındaki (IN_APP/TELEGRAM) ve 7 günden
+   * yeni (removeOnFail penceresi; daha eski olay bayattır → `TOO_OLD`) satırlar.
+   * 1) `notify-<id>` işinin durumu okunur: bitmiş (failed/completed) iş kaldırılır — yoksa aynı jobId ile ekleme sessizce
+   *    yok sayılır; bekleyen/aktif/gecikmeli iş varsa satır `JOB_IN_FLIGHT` atlanır (o iş satırı zaten işleyebilir).
    *    Redis kapalıysa burada 503 (DB'ye dokunulmadan).
    * 2) Tek transaction'da koşullu `UPDATE … RETURNING` (status = FAILED koşulu): eşzamanlı ikinci tıklama satırı
-   *    bulamaz ve `NOT_FAILED` atlar — çift gönderim yok. Denetim aynı transaction'da, yalnızca değişen satırlar için.
+   *    bulamaz ve `NOT_FAILED` atlar — çift gönderim yok. Denetim aynı transaction'da, yalnızca değişen satırlar için
+   *    (`auditTarget` verilirse onun hedefiyle — kuyruk düzeyi retry-failed bunu kullanır).
    * 3) Commit sonrası `notify-<id>` jobId'siyle eklenir (idempotent) ve queuedAt yazılır. Ekleme başarısızsa satırlar
    *    PENDING/queuedAt=null kalır; scheduler bildirim süpürmesi onları yeniden kuyruğa alır.
    */
-  async retry(ctx: AuditCtx, ids: number[]): Promise<RetryResult> {
+  async retry(ctx: AuditCtx, ids: number[], auditTarget?: (changedIds: number[]) => AuditTarget): Promise<RetryResult> {
     const order = [...new Set(ids)];
+    const minCreatedAt = new Date(Date.now() - RETRY_MAX_AGE_MS);
     const rows = await this.prisma.notification.findMany({
       where: { id: { in: order } },
-      select: { id: true, status: true, channel: true, lastError: true, user: { select: { status: true } } },
+      select: { id: true, status: true, channel: true, lastError: true, createdAt: true, user: { select: { status: true } } },
     });
     const byId = new Map(rows.map((r) => [r.id, r]));
     const skipped = new Map<number, RetrySkipReason>();
@@ -117,39 +122,49 @@ export class AdminNotificationsService {
       else if (r.status !== 'FAILED') skipped.set(id, 'NOT_FAILED');
       else if (r.lastError === 'USER_INACTIVE' || r.user.status !== 'ACTIVE') skipped.set(id, 'USER_INACTIVE');
       else if (!DISPATCHABLE.has(r.channel)) skipped.set(id, 'UNSUPPORTED_CHANNEL');
+      else if (r.createdAt < minCreatedAt) skipped.set(id, 'TOO_OLD');
       else candidates.push({ id, channel: r.channel });
     }
 
-    if (candidates.length > 0) {
-      for (const c of candidates) await this.removeFinishedJob(this.queueFor(c.channel), c.id);
+    const ready: Array<{ id: number; channel: string }> = [];
+    for (const c of candidates) {
+      if ((await this.clearFinishedJob(this.queueFor(c.channel), c.id)) === 'in-flight') skipped.set(c.id, 'JOB_IN_FLIGHT');
+      else ready.push(c);
+    }
 
+    if (ready.length > 0) {
       const reset = await this.prisma.$transaction(async (tx) => {
         const updated = await tx.$queryRaw<Array<{ id: number }>>`
           UPDATE "Notification" n
           SET status = 'PENDING', attempts = 0, "lastError" = NULL, "queuedAt" = NULL
           FROM "User" u
-          WHERE n.id = ANY(${candidates.map((c) => c.id)}::int[])
+          WHERE n.id = ANY(${ready.map((c) => c.id)}::int[])
             AND n."userId" = u.id
             AND u.status = 'ACTIVE'
             AND n.status = 'FAILED'
             AND n."lastError" IS DISTINCT FROM 'USER_INACTIVE'
             AND n.channel IN ('IN_APP', 'TELEGRAM')
+            AND n."createdAt" >= ${minCreatedAt}
           RETURNING n.id`;
         const changed = new Set(updated.map((u) => u.id));
         const changedIds = order.filter((id) => changed.has(id));
         if (changedIds.length > 0) {
-          await this.audit.recordInTx(tx, ctx, {
-            targetType: 'Notification',
-            targetId: changedIds.join(','),
-            before: { status: 'FAILED' },
-            after: { ids: changedIds, status: 'PENDING' },
-          });
+          await this.audit.recordInTx(
+            tx,
+            ctx,
+            auditTarget?.(changedIds) ?? {
+              targetType: 'Notification',
+              targetId: `bulk:${changedIds.length}`,
+              before: { status: 'FAILED' },
+              after: { ids: changedIds, status: 'PENDING' },
+            },
+          );
         }
         return changed;
       });
 
-      for (const c of candidates) if (!reset.has(c.id)) skipped.set(c.id, 'NOT_FAILED');
-      await this.enqueue(candidates.filter((c) => reset.has(c.id)));
+      for (const c of ready) if (!reset.has(c.id)) skipped.set(c.id, 'NOT_FAILED');
+      await this.enqueue(ready.filter((c) => reset.has(c.id)));
     }
 
     const retried = order.filter((id) => !skipped.has(id));
@@ -173,13 +188,17 @@ export class AdminNotificationsService {
     return channel === 'TELEGRAM' ? this.queues.notifyTelegram : this.queues.notify;
   }
 
-  /** failed/completed durumdaki eski işi siler; bekleyen/aktif işe dokunmaz (o iş satırı zaten işleyecek). */
-  private async removeFinishedJob(queue: Queue<NotifyJobData>, id: number): Promise<void> {
+  /**
+   * `notify-<id>` işi: yoksa 'none'; failed/completed ise silinir ve 'none'; bekleyen/aktif/gecikmeli/öncelikli ise
+   * 'in-flight' (dokunulmaz, satır atlanır). Redis hatası 503.
+   */
+  private async clearFinishedJob(queue: Queue<NotifyJobData>, id: number): Promise<'none' | 'in-flight'> {
     try {
       const job = await queue.getJob(notifyJobId(id));
-      if (!job) return;
+      if (!job) return 'none';
       const state = await job.getState();
-      if (state !== 'failed' && state !== 'completed') return;
+      if (state === 'unknown') return 'none';
+      if (state !== 'failed' && state !== 'completed') return 'in-flight';
       try {
         await job.remove();
       } catch {
@@ -187,6 +206,7 @@ export class AdminNotificationsService {
         const still = await queue.getJob(notifyJobId(id));
         if (still && ['failed', 'completed'].includes(await still.getState())) throw unavailable();
       }
+      return 'none';
     } catch (err) {
       if (err instanceof AppError) throw err;
       throw unavailable();

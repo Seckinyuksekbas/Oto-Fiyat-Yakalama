@@ -1,18 +1,13 @@
 import { Injectable, Logger } from '@nestjs/common';
-import type { Prisma } from '@oto/db';
-import { MATCH_DISPATCH_MAX_ATTEMPTS, matchDispatchStuckFlagKey, type AdminStuckDispatchesQuery } from '@oto/shared';
+import { MATCH_DISPATCH_STUCK_WHERE as STUCK, matchDispatchStuckFlagKey, type AdminStuckDispatchesQuery } from '@oto/shared';
 import type { AuditCtx } from '../../common/audit/audit-ctx.decorator';
 import { AuditService } from '../../common/audit/audit.service';
 import { Errors } from '../../common/errors/app-error';
 import { PrismaService } from '../../infra/prisma.service';
 import { RedisService } from '../../infra/redis.service';
 
-/** Worker analiz süpürmesiyle aynı tanım: olay var, kuyruğa alınmamış ve deneme sınırına ulaşmış. */
-const STUCK: Prisma.ListingAnalysisWhereInput = {
-  matchEvent: { in: ['NEW', 'PRICE_DROP', 'RELIST'] },
-  matchQueuedAt: null,
-  matchDispatchAttempts: { gte: MATCH_DISPATCH_MAX_ATTEMPTS },
-};
+/** Worker AlertService susturma anahtarı (`alert:<alert.key>`, 30 dk); alarm anahtarı `match-dispatch-stuck:<id>`. */
+const alertSilenceKey = (analysisId: number) => `alert:match-dispatch-stuck:${analysisId}`;
 
 @Injectable()
 export class AdminMatchDispatchesService {
@@ -51,7 +46,7 @@ export class AdminMatchDispatchesService {
   /**
    * Sayaç 0'a çekilir; scheduler bir sonraki süpürmede olayı yeniden gönderir. Koşullu `updateMany` (hâlâ takılı mı)
    * eşzamanlı ikinci isteği no-op yapar (denetim tek kayıt). Takılı olmayan satır: değişiklik yok, mevcut sayaç döner.
-   * Commit sonrası "bir kez alarm" işareti silinir ki satır yeniden takılırsa alarm tekrar verilsin.
+   * Commit sonrası "bir kez alarm" işareti ve AlertService susturma anahtarı silinir ki satır yeniden takılırsa alarm tekrar verilsin.
    */
   async reset(ctx: AuditCtx, analysisId: number): Promise<{ analysisId: number; matchDispatchAttempts: number }> {
     const result = await this.prisma.$transaction(async (tx) => {
@@ -71,7 +66,10 @@ export class AdminMatchDispatchesService {
       return { changed: true, attempts: 0 };
     });
     if (result.changed) {
-      await this.redis.del(matchDispatchStuckFlagKey(analysisId)).catch((err: unknown) => {
+      // Kalan küçük yarış: süpürme, commit'ten ÖNCE bu satırı takılı okuyup alarmı commit+del'den SONRA verirse işaret
+      // yeniden konur; satır tekrar takılırsa (≥10 deneme daha) o analiz için ikinci alarm 30 gün boyunca bastırılır.
+      // Liste ucu (/admin/match-dispatches/stuck) her durumda gerçeği gösterir.
+      await this.redis.del(matchDispatchStuckFlagKey(analysisId), alertSilenceKey(analysisId)).catch((err: unknown) => {
         this.logger.warn(`Takılı eşleştirme alarm işareti silinemedi (analiz ${analysisId}): ${err instanceof Error ? err.message : String(err)}`);
       });
     }
