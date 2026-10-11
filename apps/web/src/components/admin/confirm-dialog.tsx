@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -32,6 +32,11 @@ export interface ConfirmDialogProps {
   onConfirm(): unknown;
   /** Hata → mesaj (varsayılan `adminErrorMessage`). */
   errorMessage?(err: unknown): string;
+  /**
+   * Kapanınca odaklanacak öğe. Tetikleyici eylem sonrası başka bir düğmeyle değişiyorsa (Askıya al → Etkinleştir)
+   * kararlı bir öğeye ref verin; verilmezse Radix odağı açılıştaki öğeye döndürür.
+   */
+  returnFocusRef?: RefObject<HTMLElement | null>;
 }
 
 /**
@@ -52,6 +57,7 @@ export function ConfirmDialog({
   confirmTextLabel,
   onConfirm,
   errorMessage = adminErrorMessage,
+  returnFocusRef,
 }: ConfirmDialogProps) {
   const [typed, setTyped] = useState('');
   const [pending, setPending] = useState(false);
@@ -89,6 +95,12 @@ export function ConfirmDialog({
       <DialogContent
         onEscapeKeyDown={(e) => pending && e.preventDefault()}
         onInteractOutside={(e) => pending && e.preventDefault()}
+        onCloseAutoFocus={(e) => {
+          const el = returnFocusRef?.current;
+          if (!el) return;
+          e.preventDefault();
+          el.focus();
+        }}
         {...(description ? {} : { 'aria-describedby': undefined })}
       >
         <DialogHeader className="pr-6">

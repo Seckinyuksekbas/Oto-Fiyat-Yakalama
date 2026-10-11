@@ -7,6 +7,7 @@ import { refreshSessionDetailed } from './api';
 import type { AdminKpi, AdminOverview } from './admin-api';
 import { adminKeys, alertId, prependLiveAlert, type AlertItem } from './admin-queries';
 import { formatDateTime } from './format';
+import { queryKeys } from './queries';
 import { onLoggedOut } from './session';
 import { backoffDelay, type StreamStatus } from './sse';
 
@@ -27,6 +28,11 @@ export interface AdminStreamOptions {
   onJob?(j: AdminJobEvent): void;
   onKpi?(k: AdminKpi): void;
   onStatus?(s: StreamStatus): void;
+  /**
+   * Bağlantı "şüpheli" koptu: `ready` sonrası hata (sunucu oturum/rol geçersizse akışı bitirir) ya da `ready` görmeden
+   * art arda 2+ hata. Hook bunu `['me']` geçersiz kılmaya bağlar: rol düştüyse kapı 404 verir ve akış kapanır.
+   */
+  onTrouble?(): void;
   eventSourceFactory?: (url: string) => EventSource;
   refresh?: () => Promise<boolean | 'ok' | 'expired' | 'transient'>;
   random?: () => number;
@@ -36,6 +42,12 @@ export const ADMIN_STREAM_URL = '/api/v1/admin/stream';
 const PROACTIVE_MS = 14 * 60_000 + 30_000;
 const STALL_MS = 60_000;
 const MAX_SEEN = 500;
+/** `ready` sonrası bu süreden kısa yaşayan bağlantı "kısa ömürlü" sayılır. */
+export const STABLE_MS = 60_000;
+/** Art arda bu kadar kısa ömürlü bağlantıdan sonra `ready` geri çekilmeyi sıfırlamaz (sıcak döngü olmasın). */
+const SHORT_LIVED_LIMIT = 3;
+/** Kararlı bir bağlantı kurulamadan art arda bu kadar yeniden bağlanma denemesinden sonra akış durur. */
+export const MAX_RECONNECTS = 12;
 
 const defaultFactory = (url: string): EventSource => new EventSource(url, { withCredentials: true });
 
@@ -49,11 +61,26 @@ function parseJson(e: Event): unknown {
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
+/**
+ * Yeniden bağlanma politikası:
+ * - Hata sonrası üstel geri çekilme; `ready` geri çekilmeyi sıfırlar, ama art arda 3 kısa ömürlü (< 60 sn) bağlantıdan
+ *   sonra sıfırlamaz.
+ * - Oturum yenileme her yeniden bağlanmada DEĞİL, yalnızca `ready` görmeden art arda 2+ hatada ve proaktif yenilemede
+ *   (15 dk sınırından önce) yapılır; erişim token'ı tazeyken gereksiz `/auth/refresh` yok.
+ * - Kararlı bağlantı kurulamadan 12 deneme → akış durur (`closed`).
+ */
 export function createAdminStream(opts: AdminStreamOptions): { close(): void } {
   const factory = opts.eventSourceFactory ?? defaultFactory;
   let es: EventSource | null = null;
   let closed = false;
+  /** geri çekilme basamağı */
   let attempt = 0;
+  /** `ready` görmeden art arda hata */
+  let fails = 0;
+  /** kararlı bağlantı olmadan art arda yeniden bağlanma */
+  let reconnects = 0;
+  let shortLived = 0;
+  let readyAt: number | null = null;
   const seenAlerts = new Set<string>();
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let proactiveTimer: ReturnType<typeof setTimeout> | undefined;
@@ -77,8 +104,8 @@ export function createAdminStream(opts: AdminStreamOptions): { close(): void } {
     opts.onStatus?.('closed');
   };
 
-  const refreshThenConnect = async () => {
-    if (opts.refresh) {
+  const connectWith = async (withRefresh: boolean) => {
+    if (withRefresh && opts.refresh) {
       let res: boolean | 'ok' | 'expired' | 'transient';
       try {
         res = await opts.refresh();
@@ -90,32 +117,59 @@ export function createAdminStream(opts: AdminStreamOptions): { close(): void } {
         return;
       }
       if (res === 'transient') {
-        if (!closed) reconnect(backoffDelay(attempt++, opts.random));
+        if (!closed) scheduleReconnect();
         return;
       }
     }
     if (!closed && !es) connect();
   };
 
-  const reconnect = (delay: number) => {
+  const scheduleReconnect = () => {
+    if (closed) return;
+    reconnects += 1;
+    if (reconnects > MAX_RECONNECTS) {
+      stop();
+      return;
+    }
+    const delay = backoffDelay(attempt++, opts.random);
     clearTimeout(retryTimer);
     retryTimer = setTimeout(() => {
       retryTimer = undefined;
-      void refreshThenConnect();
+      void connectWith(fails >= 2);
     }, delay);
+  };
+
+  /** Bağlantı koptu (hata ya da watchdog): şüpheliyse `onTrouble`, sonra geri çekilmeli yeniden bağlanma. */
+  const lost = () => {
+    if (readyAt !== null) {
+      const lived = Date.now() - readyAt;
+      shortLived = lived < STABLE_MS ? shortLived + 1 : 0;
+      if (lived >= STABLE_MS) {
+        reconnects = 0;
+        attempt = 0;
+      }
+      readyAt = null;
+      opts.onTrouble?.();
+    } else {
+      fails += 1;
+      if (fails >= 2) opts.onTrouble?.();
+    }
+    scheduleReconnect();
   };
 
   const connect = () => {
     opts.onStatus?.('connecting');
     const source = factory(ADMIN_STREAM_URL);
     es = source;
+    readyAt = null;
     const alive = () => {
       clearTimeout(watchdogTimer);
       watchdogTimer = setTimeout(() => {
         if (closed || es !== source) return;
         dropSource();
         clearTimeout(proactiveTimer);
-        void refreshThenConnect();
+        opts.onStatus?.('connecting');
+        lost();
       }, STALL_MS);
     };
     alive();
@@ -128,7 +182,9 @@ export function createAdminStream(opts: AdminStreamOptions): { close(): void } {
       alive();
       const data = parseJson(e);
       if (!isObject(data)) return;
-      attempt = 0;
+      readyAt = Date.now();
+      fails = 0;
+      if (shortLived < SHORT_LIVED_LIMIT) attempt = 0;
       opts.onStatus?.('open');
       opts.onReady(data as unknown as AdminOverview);
     });
@@ -158,14 +214,17 @@ export function createAdminStream(opts: AdminStreamOptions): { close(): void } {
       clearTimeout(proactiveTimer);
       clearTimeout(watchdogTimer);
       opts.onStatus?.('connecting');
-      reconnect(backoffDelay(attempt++, opts.random));
+      lost();
     });
     clearTimeout(proactiveTimer);
     proactiveTimer = setTimeout(() => {
       if (closed) return;
       dropSource();
       clearTimeout(watchdogTimer);
-      void refreshThenConnect();
+      // Planlı kopuş: şüpheli değil, geri çekilme yok; token sınırına yakın olduğundan yenilenir.
+      readyAt = null;
+      reconnects = 0;
+      void connectWith(true);
     }, PROACTIVE_MS);
   };
 
@@ -235,9 +294,11 @@ export function useAdminStream(enabled = true): void {
       onStatus: setStatus,
       onReady: (o) => {
         qc.setQueryData(adminKeys.overview(), o);
-        // Kopukluk sırasında kaçırılan alarmlar SystemLog'dan yeniden çekilir.
-        void qc.invalidateQueries({ queryKey: ['admin', 'system-logs'] });
+        // Kopukluk sırasında kaçırılan alarmlar SystemLog'dan yeniden çekilir (yalnızca "Son alarmlar").
+        void qc.invalidateQueries({ queryKey: adminKeys.recentAlertsRoot() });
       },
+      // Rol düşürüldü / oturum iptal edildi mi? `/me` yeniden okunur; admin değilse kapı 404 verir ve akış kapanır.
+      onTrouble: () => void qc.invalidateQueries({ queryKey: queryKeys.me }),
       onAlert: (a) => {
         qc.setQueryData<AlertItem[]>(adminKeys.liveAlerts(), (prev) => prependLiveAlert(prev, a));
         showAlertToast(a);

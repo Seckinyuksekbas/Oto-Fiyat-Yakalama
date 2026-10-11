@@ -10,15 +10,10 @@ import { Input } from '@/components/ui/input';
 import { ADMIN_PAGE_SIZE, type AdminRole, type AdminUserRow, type AdminUserStatus, type AdminUsersQuery } from '@/lib/admin-api';
 import { useAdminPlans, useAdminUsers } from '@/lib/admin-queries';
 import { formatDateTime, formatRelative } from '@/lib/format';
+import { useDebounced } from '@/lib/use-debounced';
 
-export function useDebounced<T>(value: T, ms = 300): T {
-  const [v, setV] = useState(value);
-  useEffect(() => {
-    const t = setTimeout(() => setV(value), ms);
-    return () => clearTimeout(t);
-  }, [value, ms]);
-  return v;
-}
+/** Geriye uyumluluk: Task 12 buradan içe aktarıyor; yeni kod `@/lib/use-debounced` kullanmalı. */
+export { useDebounced };
 
 const columns: DataColumn<AdminUserRow>[] = [
   {
@@ -60,13 +55,17 @@ type Filters = Omit<AdminUsersQuery, 'page' | 'pageSize'>;
 
 export function AdminUsersView() {
   const [text, setText] = useState('');
-  const q = useDebounced(text.trim(), 300);
+  const debounced = useDebounced(text.trim(), 300);
+  // Uygulanan arama ve sayfa tek durumda: arama değişince sayfa aynı güncellemede 1'e döner (tek istek).
+  const [view, setView] = useState<{ q: string; page: number }>({ q: '', page: 1 });
   const [filters, setFilters] = useState<Filters>({});
-  const [page, setPage] = useState(1);
   const plans = useAdminPlans();
+  const { q, page } = view;
+  const setPage = (p: number) => setView((v) => ({ ...v, page: p }));
 
-  // Arama metni değişince ilk sayfaya dönülür.
-  useEffect(() => setPage(1), [q]);
+  useEffect(() => {
+    setView((v) => (v.q === debounced ? v : { q: debounced, page: 1 }));
+  }, [debounced]);
 
   const query: AdminUsersQuery = { ...filters, ...(q ? { q } : {}), page, pageSize: ADMIN_PAGE_SIZE };
   const users = useAdminUsers(query);
@@ -133,7 +132,7 @@ export function AdminUsersView() {
             onClick={() => {
               setText('');
               setFilters({});
-              setPage(1);
+              setView({ q: '', page: 1 });
             }}
           >
             Süzgeçleri temizle

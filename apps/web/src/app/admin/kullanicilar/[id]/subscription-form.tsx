@@ -1,5 +1,5 @@
 'use client';
-import { useId, useState, type ReactNode } from 'react';
+import { useId, useRef, useState, type ReactNode } from 'react';
 import { Loader2, Lock } from 'lucide-react';
 import { toast } from 'sonner';
 import { adminSubscriptionSchema, type AdminSubscription, type PlanLimits } from '@oto/shared';
@@ -26,6 +26,7 @@ const NUMERIC_FIELDS = [
 type NumericKey = (typeof NUMERIC_FIELDS)[number]['key'];
 
 const INT_MESSAGE = '0 veya daha büyük bir tam sayı girin';
+const EXPIRED_MESSAGE = 'Mevcut bitiş tarihi geçmiş. Yeni bir tarih seçin ya da süresiz için boş bırakın.';
 
 /** "YYYY-MM-DD" (İstanbul günü) ↔ ISO. Bitiş, seçilen günün sonudur. */
 const dayFmt = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' });
@@ -57,10 +58,15 @@ interface Props {
 export function SubscriptionForm({ userId, detail, plans, lockedReason }: Props) {
   const formId = useId();
   const current = plans.find((p) => p.code === (detail.subscription?.planCode ?? 'FREE'));
+  // Pasif paket seçilemez: önceden seçili gelmez, yeni bir paket seçilmesi gerekir (API `planId` zorunlu, pasife 409).
+  const currentInactive = current !== undefined && !current.isActive;
   const initialOverrides = detail.subscription?.limitOverrides ?? null;
+  const originalEndsAt = detail.subscription?.endsAt ?? null;
+  const initialDay = isoToIstanbulDay(originalEndsAt);
+  const originalExpired = originalEndsAt !== null && Date.parse(originalEndsAt) <= Date.now();
 
-  const [planId, setPlanId] = useState(current?.id ?? '');
-  const [endsDay, setEndsDay] = useState(isoToIstanbulDay(detail.subscription?.endsAt ?? null));
+  const [planId, setPlanId] = useState(current && current.isActive ? current.id : '');
+  const [endsDay, setEndsDay] = useState(initialDay);
   const [overrideOn, setOverrideOn] = useState(initialOverrides !== null && Object.keys(initialOverrides).length > 0);
   const [nums, setNums] = useState<Record<NumericKey, string>>(() => ({
     maxSearchProfiles: initialOverrides?.maxSearchProfiles?.toString() ?? '',
@@ -71,6 +77,7 @@ export function SubscriptionForm({ userId, detail, plans, lockedReason }: Props)
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const save = useAdminSetSubscription(userId);
+  const busy = useRef(false);
 
   const plan = plans.find((p) => p.id === planId);
   const planChannels = plan?.limits.channels ?? ['IN_APP'];
@@ -87,7 +94,11 @@ export function SubscriptionForm({ userId, detail, plans, lockedReason }: Props)
     const errs: Record<string, string> = {};
     if (!planId) errs.planId = 'Paket seçin';
     let endsAt: string | null = null;
-    if (endsDay) {
+    if (endsDay && endsDay === initialDay) {
+      // Gün düzenlenmedi: özgün değer aynen gönderilir (saat/dakika korunur).
+      endsAt = originalEndsAt;
+      if (originalExpired) errs.endsAt = EXPIRED_MESSAGE;
+    } else if (endsDay) {
       endsAt = istanbulDayToIso(endsDay);
       if (Date.parse(endsAt) <= Date.now()) errs.endsAt = 'Bitiş tarihi gelecekte olmalı';
     }
@@ -117,11 +128,12 @@ export function SubscriptionForm({ userId, detail, plans, lockedReason }: Props)
   };
 
   const submit = async () => {
-    if (locked || save.isPending) return;
+    if (locked || busy.current) return;
     setFormError(null);
     const { body, errors: errs } = build();
     setErrors(errs);
     if (!body) return;
+    busy.current = true;
     try {
       const res = await save.mutateAsync(body);
       toast.success('Abonelik güncellendi', {
@@ -139,6 +151,8 @@ export function SubscriptionForm({ userId, detail, plans, lockedReason }: Props)
       } else {
         setFormError(adminErrorMessage(err));
       }
+    } finally {
+      busy.current = false;
     }
   };
 
@@ -199,7 +213,12 @@ export function SubscriptionForm({ userId, detail, plans, lockedReason }: Props)
                 </option>
               ))}
             </select>
-            {fieldError('planId')}
+            {fieldError('planId') ??
+              (currentInactive && planId === '' ? (
+                <p className="text-[13px] text-warning-text">
+                  Mevcut paket ({current?.name}) pasif. Kaydetmek için etkin bir paket seçin.
+                </p>
+              ) : null)}
           </div>
           <div className="flex flex-col gap-1.5">
             <label htmlFor={`${formId}-ends`} className="text-sm font-medium">
@@ -213,11 +232,16 @@ export function SubscriptionForm({ userId, detail, plans, lockedReason }: Props)
               {...a11y('endsAt')}
               aria-describedby={errors.endsAt ? errId('endsAt') : `${formId}-ends-hint`}
             />
-            {fieldError('endsAt') ?? (
-              <p id={`${formId}-ends-hint`} className="text-[13px] text-muted">
-                Boş bırakılırsa süresiz. Seçilen günün sonunda (İstanbul) biter.
-              </p>
-            )}
+            {fieldError('endsAt') ??
+              (originalExpired && endsDay === initialDay ? (
+                <p id={`${formId}-ends-hint`} className="text-[13px] text-warning-text">
+                  {EXPIRED_MESSAGE}
+                </p>
+              ) : (
+                <p id={`${formId}-ends-hint`} className="text-[13px] text-muted">
+                  Boş bırakılırsa süresiz. Seçilen günün sonunda (İstanbul) biter.
+                </p>
+              ))}
           </div>
         </div>
 

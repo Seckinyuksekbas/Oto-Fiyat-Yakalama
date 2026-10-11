@@ -1,5 +1,5 @@
 'use client';
-import { Suspense, type ReactNode } from 'react';
+import { Suspense, useEffect, useState, type ReactNode } from 'react';
 import { EmptyState } from '@/components/empty-state';
 import { NotFoundView } from '@/components/not-found-view';
 import { Button } from '@/components/ui/button';
@@ -54,22 +54,42 @@ function AdminWorkspace({ children }: { children: ReactNode }) {
   );
 }
 
+/** 401 sonrası yenileme geçici hatayla düştüyse (yönlendirme olmaz) bu süreden sonra yeniden dene düğmesi gösterilir. */
+export const ME_401_GRACE_MS = 4_000;
+
+function useElapsed(active: boolean, ms: number): boolean {
+  const [elapsed, setElapsed] = useState(false);
+  useEffect(() => {
+    if (!active) {
+      setElapsed(false);
+      return;
+    }
+    const t = setTimeout(() => setElapsed(true), ms);
+    return () => clearTimeout(t);
+  }, [active, ms]);
+  return elapsed;
+}
+
 /**
  * `/admin` düzeninin istemci kapısı. Middleware yalnızca çerez varlığına bakar; rol burada `/me`'den okunur.
  * ADMIN/SUPER_ADMIN değilse gerçek 404 ile aynı görünüm verilir (403 değil: `/admin` varlığı sızmasın) ve ne kabuk ne
  * akış açılır. Asıl yetki API'dedir: her `/admin` ucu USER'a 403 döner.
+ *
+ * Karar önce `me.data`'dan verilir: veri varken arka plan yenilemesinin hatası çalışma alanını sökmez (form durumu
+ * korunur). Rol düşerse (`useAdminStream` → `['me']` geçersiz kılınır) yeni veri 404'e çevirir. Hata/iskelet yalnızca
+ * veri yokken gösterilir; 401'de oturum yenileme geçici hatayla düşerse süre sonunda "Yeniden dene" çıkar.
  */
 export function AdminLayoutClient({ children }: { children: ReactNode }) {
   const me = useMe();
-  const { isPending, isAdmin } = useAdminRole();
-  if (isPending) return <NeutralSkeleton />;
-  if (me.isError) {
-    // 401: apiFetch oturum yenilemeyi dener, olmazsa girişe yönlendirir; bu arada nötr iskelet kalır.
-    if (me.error instanceof ApiError && me.error.status === 401) return <NeutralSkeleton />;
-    return <MeError onRetry={() => void me.refetch()} />;
-  }
-  if (!isAdmin) return <NotFoundView resetTitle />;
-  return <AdminWorkspace>{children}</AdminWorkspace>;
+  const { isAdmin } = useAdminRole();
+  const unauth = !me.data && me.isError && me.error instanceof ApiError && me.error.status === 401;
+  const graceOver = useElapsed(unauth, ME_401_GRACE_MS);
+
+  if (me.data) return isAdmin ? <AdminWorkspace>{children}</AdminWorkspace> : <NotFoundView resetTitle />;
+  if (me.isPending) return <NeutralSkeleton />;
+  // 401: apiFetch oturumu yenilemeyi dener; süresi dolduysa girişe yönlendirir. Bu arada nötr iskelet kalır.
+  if (unauth && !graceOver) return <NeutralSkeleton />;
+  return <MeError onRetry={() => void me.refetch()} />;
 }
 
 /**

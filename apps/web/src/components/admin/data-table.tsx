@@ -120,7 +120,7 @@ export function DataTable<T, K extends string | number = string | number>(props:
     );
   }
 
-  if (data.items.length === 0) {
+  if (data.items.length === 0 && !isError) {
     const e = props.empty ?? { title: 'Kayıt yok' };
     return (
       <>
@@ -132,8 +132,26 @@ export function DataTable<T, K extends string | number = string | number>(props:
 
   return (
     <div className={cn('flex flex-col gap-3 transition-opacity', props.isFetching && 'opacity-70')} aria-busy={props.isFetching || undefined}>
+      {isError ? <InlineError onRetry={props.onRetry} /> : null}
       {wide ? <TableView {...props} data={data} /> : <CardView {...props} data={data} />}
       <Pagination page={page} pageSize={pageSize} total={data.total} onPageChange={onPageChange} />
+    </div>
+  );
+}
+
+/** Önceki sayfa ekrandayken yeni istek düştü (ör. sayfa değişimi): satırlar kalır, üstte uyarı + yeniden dene. */
+function InlineError({ onRetry }: { onRetry?: () => void }) {
+  return (
+    <div
+      role="alert"
+      className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger-text"
+    >
+      <span>Bu sayfa yüklenemedi. Gösterilen kayıtlar güncel olmayabilir.</span>
+      {onRetry ? (
+        <Button variant="secondary" size="sm" onClick={onRetry}>
+          Yeniden dene
+        </Button>
+      ) : null}
     </div>
   );
 }

@@ -1,5 +1,5 @@
 'use client';
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
@@ -78,6 +78,10 @@ export function adminPageTitle(pathname: string): string {
   return item.label;
 }
 
+export function adminDocumentTitle(pageTitle: string): string {
+  return `${pageTitle} · Yönetim · Oto Fırsat`;
+}
+
 const STATUS_TEXT = { open: 'Canlı', connecting: 'Bağlanıyor', closed: 'Canlı akış kapalı' } as const;
 
 /** Başlık çubuğunda canlı akış durumu: nokta + metin (renk tek başına anlam taşımaz). */
@@ -122,11 +126,16 @@ function AdminBrand() {
 export function AdminShell({ children }: { children: ReactNode }) {
   const pathname = usePathname() ?? '/admin';
   const { isSuperAdmin } = useAdminRole();
+  const title = adminPageTitle(pathname);
+  // Sunucu metadata'sı nötr ("Oto Fırsat"); yönetim başlığı yalnızca kapı geçildikten sonra istemcide yazılır.
+  useEffect(() => {
+    document.title = adminDocumentTitle(title);
+  }, [title]);
   return (
     <ShellFrame
       groups={adminNavFor(isSuperAdmin)}
       navLabel="Yönetim menüsü"
-      title={adminPageTitle(pathname)}
+      title={title}
       brand={<AdminBrand />}
       actions={
         <>

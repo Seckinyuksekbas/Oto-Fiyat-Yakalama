@@ -24,6 +24,9 @@ export const adminKeys = {
   overview: () => ['admin', 'overview'] as const,
   /** Akıştan gelen canlı alarmlar (yalnızca istemci önbelleği). */
   liveAlerts: () => ['admin', 'alerts', 'live'] as const,
+  /** Genel bakıştaki "Son alarmlar" SystemLog tohumu; `ready` olayında yalnızca bu kök geçersiz kılınır. */
+  recentAlertsRoot: () => ['admin', 'alerts', 'recent'] as const,
+  recentAlerts: (limit: number) => ['admin', 'alerts', 'recent', limit] as const,
   systemLogs: (q: object) => ['admin', 'system-logs', q] as const,
   plans: () => ['admin', 'plans'] as const,
   users: {
@@ -112,7 +115,7 @@ export function mergeAlerts(live: AlertItem[], logs: SystemLogItem[], limit: num
 /** Genel bakıştaki "Son alarmlar": son SystemLog kayıtlarıyla tohumlanır, akıştan gelen alarmlar anında başa eklenir. */
 export function useRecentAlerts(limit = 8) {
   const q = { page: 1, pageSize: limit };
-  const logs = useQuery({ queryKey: adminKeys.systemLogs(q), queryFn: () => adminApi.systemLogs(q), staleTime: 60_000 });
+  const logs = useQuery({ queryKey: adminKeys.recentAlerts(limit), queryFn: () => adminApi.systemLogs(q), staleTime: 60_000 });
   const live = useQuery<AlertItem[]>({
     queryKey: adminKeys.liveAlerts(),
     queryFn: () => [],

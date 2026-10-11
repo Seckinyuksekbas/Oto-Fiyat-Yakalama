@@ -102,6 +102,87 @@ describe('admin guard', () => {
   });
 });
 
+describe('admin session changes', () => {
+  it('role revoked mid-session: error after ready re-checks /me, shows 404, closes the stream and stops reconnecting', async () => {
+    let role: 'ADMIN' | 'USER' = 'ADMIN';
+    server.use(http.get('*/api/v1/me', () => HttpResponse.json({ user: { id: 'me-1', email: 'a@b.c', name: 'Deniz', role, status: 'ACTIVE' } })));
+    renderWithClient(
+      <AdminLayoutClient>
+        <p>içerik</p>
+      </AdminLayoutClient>,
+    );
+    await screen.findByText('içerik');
+    const es = FakeES.last();
+    es.emit('ready', overviewFixture());
+    role = 'USER'; // sunucu rolü düşürdü ve akışı bitirdi
+    es.emit('error', {});
+    expect(await screen.findByRole('heading', { name: 'Bu sayfa bulunamadı' })).toBeInTheDocument();
+    expect(screen.queryByText('içerik')).not.toBeInTheDocument();
+    expect(es.closed).toBe(true);
+    await new Promise((r) => setTimeout(r, 1_500)); // geri çekilme süresi (≤ 1,2 sn) geçti
+    expect(FakeES.instances).toHaveLength(1);
+    expect(document.title).toBe('Oto Fırsat');
+  });
+
+  it('a failed background /me refetch keeps the workspace mounted and form state intact', async () => {
+    let fail = false;
+    server.use(
+      http.get('*/api/v1/me', () =>
+        fail
+          ? HttpResponse.json({ error: { code: 'INTERNAL', message: 'x' } }, { status: 500 })
+          : HttpResponse.json({ user: { id: 'me-1', email: 'a@b.c', name: 'Deniz', role: 'ADMIN', status: 'ACTIVE' } }),
+      ),
+    );
+    const { client } = renderWithClient(
+      <AdminLayoutClient>
+        <input aria-label="Taslak" />
+      </AdminLayoutClient>,
+    );
+    const input = await screen.findByLabelText('Taslak');
+    await userEvent.type(input, 'yarım kalan not');
+    fail = true;
+    await client.invalidateQueries({ queryKey: ['me'] });
+    await waitFor(() => expect(client.getQueryState(['me'])?.status).toBe('error'));
+    expect(screen.getByLabelText('Taslak')).toBe(input);
+    expect(input).toHaveValue('yarım kalan not');
+    expect(screen.getByRole('navigation', { name: 'Yönetim menüsü' })).toBeInTheDocument();
+  });
+
+  it('401 with a transient refresh failure shows a retry after the grace period', async () => {
+    let ok = false;
+    server.use(
+      http.get('*/api/v1/me', () =>
+        ok
+          ? HttpResponse.json({ user: { id: 'me-1', email: 'a@b.c', name: 'Deniz', role: 'ADMIN', status: 'ACTIVE' } })
+          : HttpResponse.json({ error: { code: 'UNAUTHENTICATED', message: 'x' } }, { status: 401 }),
+      ),
+      http.post('*/api/v1/auth/refresh', () => HttpResponse.json({ error: { code: 'INTERNAL', message: 'x' } }, { status: 503 })),
+    );
+    renderWithClient(
+      <AdminLayoutClient>
+        <p>içerik</p>
+      </AdminLayoutClient>,
+    );
+    const retry = await screen.findByRole('button', { name: 'Yeniden dene' }, { timeout: 6_000 });
+    ok = true;
+    await userEvent.click(retry);
+    expect(await screen.findByText('içerik')).toBeInTheDocument();
+  }, 10_000);
+
+  it('sets the admin document title only after the gate passes', async () => {
+    document.title = 'Oto Fırsat';
+    server.use(meHandler('ADMIN'));
+    nav.pathname = '/admin/kullanicilar';
+    renderWithClient(
+      <AdminLayoutClient>
+        <p>içerik</p>
+      </AdminLayoutClient>,
+    );
+    await screen.findByText('içerik');
+    expect(document.title).toBe('Kullanıcılar · Yönetim · Oto Fırsat');
+  });
+});
+
 describe('admin overview', () => {
   it('renders KPIs and shows "—" with a hint when Redis-backed fields are null', async () => {
     server.use(meHandler('ADMIN'), overviewHandler({ queues: null, workers: null }), logsHandler());

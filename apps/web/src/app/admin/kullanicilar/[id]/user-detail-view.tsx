@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, Lock } from 'lucide-react';
@@ -219,12 +219,20 @@ function AccountActions({ d, isSelf, locked }: { d: AdminUserDetail; isSelf: boo
   const suspended = u.status === 'SUSPENDED';
   const disabled = isSelf || locked !== null;
 
+  const accessBtn = useRef<HTMLButtonElement>(null);
+  const busy = useRef(false);
+
   const activate = async () => {
+    if (busy.current) return;
+    busy.current = true;
     try {
       await action.mutateAsync({ kind: 'activate' });
       toast.success('Kullanıcı etkinleştirildi');
+      accessBtn.current?.focus();
     } catch (err) {
       toast.error(adminErrorMessage(err));
+    } finally {
+      busy.current = false;
     }
   };
 
@@ -247,15 +255,17 @@ function AccountActions({ d, isSelf, locked }: { d: AdminUserDetail; isSelf: boo
             ? 'Hesap askıda: giriş yapamaz, bildirim almaz. Etkinleştirince eski oturumlar geri gelmez.'
             : 'Askıya alınan kullanıcı tüm oturumlarından çıkarılır ve bekleyen bildirimleri iptal edilir.'}
         </p>
-        {suspended ? (
-          <Button variant="secondary" className="w-fit" disabled={disabled || action.isPending} onClick={() => void activate()}>
-            Etkinleştir
-          </Button>
-        ) : (
-          <Button variant="danger" className="w-fit" disabled={disabled} onClick={() => setDialog('suspend')}>
-            Askıya al
-          </Button>
-        )}
+        {/* Tek, kararlı düğme: durum değişince etiketi değişir ama DOM öğesi aynı kalır, odak kaybolmaz. */}
+        <Button
+          ref={accessBtn}
+          variant={suspended ? 'secondary' : 'danger'}
+          className="w-fit"
+          disabled={disabled}
+          aria-busy={(suspended && action.isPending) || undefined}
+          onClick={() => (suspended ? void activate() : setDialog('suspend'))}
+        >
+          {suspended ? 'Etkinleştir' : 'Askıya al'}
+        </Button>
         {isSelf ? <p className="text-[13px] text-muted">Kendi hesabınızda bu işlemler kapalıdır.</p> : null}
       </div>
 
@@ -298,6 +308,7 @@ function AccountActions({ d, isSelf, locked }: { d: AdminUserDetail; isSelf: boo
         description={`${u.name} tüm oturumlarından çıkarılır ve bekleyen bildirimleri iptal edilir. Daha sonra yeniden etkinleştirebilirsiniz.`}
         confirmLabel="Askıya al"
         tone="danger"
+        returnFocusRef={accessBtn}
         onConfirm={async () => {
           await action.mutateAsync({ kind: 'suspend' });
           toast.success('Kullanıcı askıya alındı');

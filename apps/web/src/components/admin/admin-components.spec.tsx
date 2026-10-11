@@ -102,6 +102,19 @@ describe('DataTable', () => {
     expect(retry).toHaveBeenCalled();
   });
 
+  it('keeps rows and shows an inline error with retry when a refetch fails while data is shown', async () => {
+    setWide(true);
+    const retry = vi.fn();
+    render(
+      <DataTable caption="D" columns={columns} rowKey={(r) => r.id} data={{ items: rows, total: 2 }} isError onRetry={retry} page={1} pageSize={20} onPageChange={vi.fn()} />,
+    );
+    expect(screen.getByRole('table', { name: 'D' })).toBeInTheDocument();
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('Bu sayfa yüklenemedi');
+    await userEvent.click(within(alert).getByRole('button', { name: 'Yeniden dene' }));
+    expect(retry).toHaveBeenCalled();
+  });
+
   it('supports row selection with a select-all checkbox', async () => {
     setWide(true);
     function Harness() {

@@ -24,6 +24,7 @@ vi.mock('next/link', () => ({
 
 import { AdminUsersView } from './users-view';
 import { AdminUserDetailView } from './[id]/user-detail-view';
+import { istanbulDayToIso, isoToIstanbulDay } from './[id]/subscription-form';
 
 beforeEach(() => {
   toastMock.mockClear();
@@ -75,6 +76,29 @@ describe('users table', () => {
     expect(last.get('status')).toBe('SUSPENDED');
     expect(last.get('role')).toBe('ADMIN');
     expect(last.get('page')).toBe('1');
+  });
+
+  it('a new search from page 2 sends exactly one request, already on page 1', async () => {
+    const seen: URLSearchParams[] = [];
+    server.use(
+      meHandler('ADMIN'),
+      http.get('*/api/v1/admin/plans', () => HttpResponse.json(plansFixture)),
+      http.get('*/api/v1/admin/users', ({ request }) => {
+        seen.push(new URL(request.url).searchParams);
+        return HttpResponse.json({ total: 45, items: [userRow()] });
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithClient(<AdminUsersView />);
+    await screen.findByText('Ayşe Kaya');
+    await user.click(screen.getByRole('button', { name: 'Sonraki sayfa' }));
+    await waitFor(() => expect(seen.at(-1)!.get('page')).toBe('2'));
+    seen.length = 0;
+    await user.type(screen.getByRole('searchbox', { name: 'Ad veya e-posta ara' }), 'kaya');
+    await waitFor(() => expect(seen.some((p) => p.get('q') === 'kaya')).toBe(true));
+    await new Promise((r) => setTimeout(r, 400));
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.get('page')).toBe('1');
   });
 
   it('shows an empty state for no results and an error state with retry', async () => {
@@ -152,6 +176,87 @@ describe('user detail', () => {
     expect(await within(again).findByRole('alert')).toHaveTextContent('Son süper admin askıya alınamaz');
     expect(calls).toBe(1);
     expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('after suspending, focus returns to the stable access button (now "Etkinleştir")', async () => {
+    let status = 'ACTIVE';
+    server.use(...detailHandlers());
+    server.use(
+      http.get('*/api/v1/admin/users/u1', () =>
+        HttpResponse.json({
+          user: userRow({ status }),
+          subscription: { planCode: 'PRO', planName: 'Pro', status: 'ACTIVE', endsAt: null, limitOverrides: null },
+          counts: { searchProfiles: 2, activeSessions: 1 },
+        }),
+      ),
+      http.post('*/api/v1/admin/users/u1/suspend', () => {
+        status = 'SUSPENDED';
+        return HttpResponse.json({ user: userRow({ status }) });
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithClient(<AdminUserDetailView id="u1" />);
+    const btn = await screen.findByRole('button', { name: 'Askıya al' });
+    await user.click(btn);
+    const dialog = await screen.findByRole('dialog', { name: 'Kullanıcı askıya alınsın mı?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Askıya al' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    const activate = await screen.findByRole('button', { name: 'Etkinleştir' });
+    expect(activate).toBe(btn);
+    expect(document.activeElement).toBe(activate);
+  });
+
+  it('inactive current plan is not preselected and must be replaced before saving', async () => {
+    let calls = 0;
+    server.use(
+      ...detailHandlers({ subscription: { planCode: 'LEGACY', planName: 'Eski paket', status: 'ACTIVE', endsAt: null, limitOverrides: null } }),
+      http.patch('*/api/v1/admin/users/u1/subscription', () => {
+        calls += 1;
+        return HttpResponse.json({ planCode: 'PRO', pausedProfiles: 0 });
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithClient(<AdminUserDetailView id="u1" />);
+    const form = await screen.findByRole('form', { name: 'Abonelik' });
+    expect(within(form).getByLabelText('Paket')).toHaveValue('');
+    expect(within(form).getByText(/Mevcut paket \(Eski paket\) pasif/)).toBeInTheDocument();
+    await user.click(within(form).getByRole('button', { name: 'Aboneliği kaydet' }));
+    expect(await within(form).findByText('Paket seçin', { selector: 'p' })).toBeInTheDocument();
+    expect(calls).toBe(0);
+  });
+
+  it('sends the original endsAt unchanged, and blocks an expired unchanged endsAt with a clear hint', async () => {
+    const future = '2099-05-01T09:30:00.000Z';
+    let body: { endsAt?: unknown } | undefined;
+    server.use(
+      ...detailHandlers({ subscription: { planCode: 'PRO', planName: 'Pro', status: 'ACTIVE', endsAt: future, limitOverrides: null } }),
+      http.patch('*/api/v1/admin/users/u1/subscription', async ({ request }) => {
+        body = (await request.json()) as { endsAt?: unknown };
+        return HttpResponse.json({ planCode: 'PRO', pausedProfiles: 0 });
+      }),
+    );
+    const user = userEvent.setup();
+    const { unmount } = renderWithClient(<AdminUserDetailView id="u1" />);
+    let form = await screen.findByRole('form', { name: 'Abonelik' });
+    await waitFor(() => expect(within(form).getByLabelText('Paket')).toHaveValue('p-pro'));
+    await user.click(within(form).getByRole('button', { name: 'Aboneliği kaydet' }));
+    await waitFor(() => expect(body?.endsAt).toBe(future));
+    unmount();
+
+    body = undefined;
+    server.use(
+      ...detailHandlers({ subscription: { planCode: 'PRO', planName: 'Pro', status: 'ACTIVE', endsAt: '2020-01-01T00:00:00.000Z', limitOverrides: null } }),
+    );
+    renderWithClient(<AdminUserDetailView id="u1" />);
+    form = await screen.findByRole('form', { name: 'Abonelik' });
+    await waitFor(() => expect(within(form).getByLabelText('Paket')).toHaveValue('p-pro'));
+    expect(within(form).getByText(/Mevcut bitiş tarihi geçmiş/)).toBeInTheDocument();
+    await user.click(within(form).getByRole('button', { name: 'Aboneliği kaydet' }));
+    await waitFor(() => expect(within(form).getByLabelText('Bitiş tarihi')).toHaveAttribute('aria-invalid', 'true'));
+    expect(body).toBeUndefined();
+    await user.clear(within(form).getByLabelText('Bitiş tarihi'));
+    await user.click(within(form).getByRole('button', { name: 'Aboneliği kaydet' }));
+    await waitFor(() => expect(body).toMatchObject({ endsAt: null }));
   });
 
   it('subscription form locks IN_APP, validates overrides client-side and sends a valid body', async () => {
@@ -276,5 +381,15 @@ describe('user detail', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Rol değiştirilsin mi?' });
     await user.click(within(dialog).getByRole('button', { name: 'Rolü değiştir' }));
     await waitFor(() => expect(body).toEqual({ role: 'ADMIN' }));
+  });
+});
+
+describe('Istanbul day conversion', () => {
+  it('maps ISO to the Istanbul calendar day and a day to its last second in Istanbul', () => {
+    expect(isoToIstanbulDay(null)).toBe('');
+    expect(isoToIstanbulDay('2026-10-11T20:59:59.000Z')).toBe('2026-10-11');
+    expect(isoToIstanbulDay('2026-10-11T21:00:00.000Z')).toBe('2026-10-12');
+    expect(istanbulDayToIso('2026-10-12')).toBe('2026-10-12T20:59:59.000Z');
+    expect(isoToIstanbulDay(istanbulDayToIso('2027-01-01'))).toBe('2027-01-01');
   });
 });

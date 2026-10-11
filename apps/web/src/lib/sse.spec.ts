@@ -80,6 +80,47 @@ describe('createNotificationStream', () => {
     expect(FakeES.instances).toHaveLength(3);
   });
 
+  it('server ending the stream right after ready (session revoked) does not hot-loop: backoff grows, /me is re-checked', async () => {
+    const onTrouble = vi.fn();
+    const refresh = vi.fn().mockResolvedValue('ok');
+    createNotificationStream({ onReady: vi.fn(), onNotification: vi.fn(), eventSourceFactory: factory, refresh, onTrouble });
+    const delays: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      const n = FakeES.instances.length;
+      FakeES.instances.at(-1)!.emit('ready', { unreadCount: 0, lastId: null });
+      FakeES.instances.at(-1)!.emit('error');
+      let waited = 0;
+      while (FakeES.instances.length === n && waited < 40_000) {
+        await vi.advanceTimersByTimeAsync(500);
+        waited += 500;
+      }
+      delays.push(waited);
+    }
+    expect(onTrouble).toHaveBeenCalledTimes(5);
+    expect(delays.slice(0, 3)).toEqual([1000, 1000, 1000]);
+    expect(delays[3]).toBe(2000);
+    expect(delays[4]).toBe(4000);
+    expect(refresh).toHaveBeenCalledTimes(5);
+  });
+
+  it('a long-lived connection resets the short-lived streak', async () => {
+    createNotificationStream({ onReady: vi.fn(), onNotification: vi.fn(), eventSourceFactory: factory });
+    for (let i = 0; i < 3; i++) {
+      FakeES.instances.at(-1)!.emit('ready', { unreadCount: 0, lastId: null });
+      FakeES.instances.at(-1)!.emit('error');
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+    expect(FakeES.instances).toHaveLength(4);
+    FakeES.instances.at(-1)!.emit('ready', { unreadCount: 0, lastId: null });
+    for (let i = 0; i < 3; i++) {
+      await vi.advanceTimersByTimeAsync(25_000);
+      FakeES.instances.at(-1)!.emit('ping');
+    }
+    FakeES.instances.at(-1)!.emit('error'); // 75 sn yaşadı
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(FakeES.instances).toHaveLength(5);
+  });
+
   it('proactively reconnects before the 15 minute server cutoff', async () => {
     createNotificationStream({ onReady: vi.fn(), onNotification: vi.fn(), eventSourceFactory: factory });
     // 25 sn'de bir ping: bekçi zamanlayıcısı devreye girmesin.

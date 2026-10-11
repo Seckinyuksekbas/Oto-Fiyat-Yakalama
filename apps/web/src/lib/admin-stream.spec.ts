@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeES } from '@/test/admin-fixtures';
 import { ApiError } from './api';
 import { adminErrorMessage, adminFieldErrors } from './admin-api';
-import { createAdminStream, mergeKpi } from './admin-stream';
+import { createAdminStream, MAX_RECONNECTS, mergeKpi } from './admin-stream';
 
 const factory = (url: string) => new FakeES(url) as unknown as EventSource;
 
@@ -38,24 +38,75 @@ describe('createAdminStream', () => {
     expect(es.closed).toBe(true);
   });
 
-  it('reconnects after an error with a refresh, and stops when the session expired', async () => {
-    const h = handlers();
+  it('does not refresh on the first reconnect; refreshes from the 2nd consecutive failure and stops when expired', async () => {
+    const h = { ...handlers(), onTrouble: vi.fn() };
     const refresh = vi.fn().mockResolvedValueOnce('ok').mockResolvedValueOnce('expired');
     createAdminStream({ ...h, refresh, eventSourceFactory: factory, random: () => 0.5 });
     FakeES.last().emit('error', {});
+    expect(h.onTrouble).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(refresh).not.toHaveBeenCalled(); // token taze: gereksiz /auth/refresh yok
     expect(FakeES.instances).toHaveLength(2);
-    FakeES.last().emit('error', {});
+
+    FakeES.last().emit('error', {}); // ready görmeden 2. hata
+    expect(h.onTrouble).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(2_000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(FakeES.instances).toHaveLength(3);
+
+    FakeES.last().emit('error', {});
+    await vi.advanceTimersByTimeAsync(4_000);
     expect(refresh).toHaveBeenCalledTimes(2);
-    expect(FakeES.instances).toHaveLength(2);
+    expect(FakeES.instances).toHaveLength(3);
     expect(h.onStatus).toHaveBeenLastCalledWith('closed');
+  });
+
+  it('an error right after ready signals trouble immediately (role may have been revoked)', async () => {
+    const h = { ...handlers(), onTrouble: vi.fn() };
+    createAdminStream({ ...h, eventSourceFactory: factory, random: () => 0.5 });
+    FakeES.last().emit('ready', { users: {} });
+    FakeES.last().emit('error', {});
+    expect(h.onTrouble).toHaveBeenCalledTimes(1);
+  });
+
+  it('short-lived ready connections stop resetting the backoff, and the loop is capped', async () => {
+    const h = handlers();
+    const refresh = vi.fn().mockResolvedValue('ok');
+    const first = createAdminStream({ ...h, refresh, eventSourceFactory: factory, random: () => 0.5 });
+    // sunucu her bağlantıyı ready'den hemen sonra bitiriyor
+    const delays: number[] = [];
+    for (let i = 0; i < 6; i++) {
+      const n = FakeES.instances.length;
+      FakeES.last().emit('ready', { users: {} });
+      FakeES.last().emit('error', {});
+      let waited = 0;
+      while (FakeES.instances.length === n && waited < 40_000) {
+        await vi.advanceTimersByTimeAsync(500);
+        waited += 500;
+      }
+      delays.push(waited);
+    }
+    expect(delays.slice(0, 3)).toEqual([1_000, 1_000, 1_000]);
+    expect(delays[3]).toBeGreaterThan(1_000);
+    expect(delays[5]).toBeGreaterThan(delays[3]!);
+
+    // hiç bağlanamıyor: en fazla MAX_RECONNECTS deneme, sonra kapanır
+    first.close();
+    FakeES.instances = [];
+    const h2 = handlers();
+    createAdminStream({ ...h2, refresh, eventSourceFactory: factory, random: () => 0.5 });
+    for (let i = 0; i < 30; i++) {
+      FakeES.last().emit('error', {});
+      await vi.advanceTimersByTimeAsync(31_000);
+    }
+    expect(FakeES.instances.length).toBe(MAX_RECONNECTS + 1);
+    expect(h2.onStatus).toHaveBeenLastCalledWith('closed');
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('watchdog reconnects after 60 s of silence', async () => {
     const h = handlers();
-    createAdminStream({ ...h, refresh: () => Promise.resolve('ok' as const), eventSourceFactory: factory });
+    createAdminStream({ ...h, refresh: () => Promise.resolve('ok' as const), eventSourceFactory: factory, random: () => 0.5 });
     await vi.advanceTimersByTimeAsync(59_000);
     expect(FakeES.instances).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(2_000);
