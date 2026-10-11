@@ -79,8 +79,8 @@ function DryRunPanel({ source }: { source: AdminSource }) {
             Test taraması (dry-run)
           </h2>
           <p className="text-[13px] text-muted">
-            En fazla 2 sayfa okur, ilk 20 ilanı normalize eder ve hiçbir şeyi kaydetmez. Kaynak etkin olmasa da çalışır. Kaynak başına dakikada bir
-            kez başlatılabilir.
+            En fazla 2 sayfa okur, ilk 20 ilanı normalize eder ve hiçbir şeyi kaydetmez. Etkin olmayan (duraklatılmamış) kaynakta da çalışır; engel
+            nedeniyle duraklatılmış kaynakta çalışmaz. Kaynak başına dakikada bir kez başlatılabilir.
           </p>
         </div>
         <Button variant="secondary" disabled={blocked !== null || scrape.isPending || running} onClick={() => void start()}>

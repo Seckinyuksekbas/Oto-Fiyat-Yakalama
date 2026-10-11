@@ -31,9 +31,9 @@ export function LatencyChart({ title, caption, groups }: { title: string; captio
       ) : (
         <div aria-hidden className="h-[170px] w-full">
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={data} layout="vertical" margin={{ top: 0, right: 12, bottom: 0, left: 0 }} barGap={2} barCategoryGap="28%">
+            <BarChart data={data} layout="vertical" margin={{ top: 0, right: 28, bottom: 0, left: 0 }} barGap={2} barCategoryGap="28%">
               <CartesianGrid stroke="var(--color-border)" horizontal={false} />
-              <XAxis type="number" tickFormatter={(v: number) => formatDurationMs(v)} tick={AXIS} stroke="var(--color-border-strong)" tickLine={false} />
+              <XAxis type="number" tickCount={4} minTickGap={12} interval="preserveStartEnd" tickFormatter={(v: number) => formatDurationMs(v)} tick={AXIS} stroke="var(--color-border-strong)" tickLine={false} />
               <YAxis type="category" dataKey="label" tick={LABEL} width={96} stroke="var(--color-border-strong)" tickLine={false} />
               <Tooltip
                 cursor={{ fill: 'var(--color-surface-2)' }}

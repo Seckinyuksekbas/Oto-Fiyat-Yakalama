@@ -66,6 +66,9 @@ Yöneticilerin kullanıcıları, abonelikleri, ilanları/analizleri, veri kaynak
   - `limitOverrides` `limitOverridesSchema` ile doğrulanır ve paketlerle aynı üst sınırlara (`PLAN_MAXIMA`, `@oto/shared`) tabidir.
   - Profil üst sınırı `maxSearchProfilesFor` ile hesaplanır: e-postası doğrulanmamış kullanıcı için en fazla 1.
 - **Süresi dolan abonelik:** scheduler'ın günlük süpürmesi ACTIVE abonelikleri `EXPIRED` yapar. Limiti aşan profiller PAUSED olur ve kullanıcıya IN_APP SYSTEM bildirimi gider (bkz. [analysis-engine.md](analysis-engine.md)).
+  - Süpürme başarısız olursa gün işareti silinmez, ömrü 10 dk'ya düşürülür: hata sürerken her tick'te yeniden denenmez (deneme başına bir log); 10 dk sonra yalnızca eksik kalanlar onarılır.
+- **Abonelik değişimi ile paket pasifleştirme yarışı:** abonelik değişimi paket satırını `FOR SHARE` ile kilitleyip `isActive`'i yeniden okur; paket güncellemesi `FOR NO KEY UPDATE` alır. Eşzamanlı pasifleştirilen pakete abonelik atanmaz (409).
+- **Kullanıcı detayı** (`GET /admin/users/:id`) listeyle aynı canlı abonelik tanımını kullanır: ACTIVE ve (`endsAt` boş ya da gelecekte), en yeni `startsAt`. Süresi geçmiş ama hâlâ ACTIVE satır gösterilmez.
 
 ## İlanlar ve analizler
 
@@ -73,6 +76,7 @@ Yöneticilerin kullanıcıları, abonelikleri, ilanları/analizleri, veri kaynak
 - **Yeniden analiz** (`POST /admin/listings/:id/reanalyze`):
   - `analyze` işini `reason: 'MANUAL'` ile ekler (jobId `analyze-manual-<id>-<ts>`). REMOVED ilan için 409 döner.
   - Redis `SET NX EX 60` ile 60 sn tekilleştirilir: bu süredeki yinelenen tıklamalar aynı jobId'yi alır ve yeniden denetlenmez.
+  - `listing.reanalyze` denetim kaydı ve kuyruğa ekleme aynı transaction'dadır: kuyruğa eklenemezse (503) denetim kaydı da yazılmaz. Ekleme başarılı ama commit başarısızsa iş kuyrukta kalır (MANUAL analiz idempotenttir) ve istek hata döner.
   - MANUAL analiz "maddi değişiklik" eşiğini atlar ve her zaman yeni satır yazar.
   - **Eşik altı değişiklik kullanıcı bildirimi doğurmaz:** "daha eşleşebilir" türevi `NEW` üretilmez. Gerçek `NEW`/`PRICE_DROP`/`RELIST` olayları her zamanki gibi yayılır (bkz. [analysis-engine.md](analysis-engine.md)).
   - Arayüz, `latestAnalysisId` değişene kadar ilanı yoklar.
@@ -88,13 +92,14 @@ Yöneticilerin kullanıcıları, abonelikleri, ilanları/analizleri, veri kaynak
    - `adapterKey` paylaşılan `ADAPTER_KEYS` listesinden olmalıdır.
    - Yanıtlarda `config.baseUrl`'in sorgu dizisi maskelenir.
 3. **Test taraması** (`POST /admin/sources/:id/test-scrape {dryRun}`): `CollectionJob(trigger MANUAL, dryRun)` ve `scrape` işi oluşturur. Kaynak başına dakikada 1 (429), kaynakta bekleyen/çalışan iş varsa 409.
+   - Dry-run etkin olmayan (duraklatılmamış) kaynakta da çalışır. Gerçek tarama (`dryRun: false`) yalnızca etkin kaynakta yapılabilir; etkin olmayan kaynakta 409 `INVALID_OPERATION`.
    - Dry-run gerçek taramayla **aynı nezaket ve robots kurallarına** uyar: robots.txt, paylaşılan hız limiti, `minRequestGapMs`, bot User-Agent.
    - Ingest, kaldırma işaretleme ve analiz yapmaz. En fazla 2 liste sayfası çekilir; ilk 20 normalize ilan ve sorun listesi `CollectionJob.dryRunResult` alanına yazılır.
    - **PAUSED kaynakta reddedilir** (409). Engel sinyalinin nedeni incelenmeden kaynağa istek atılmaz.
    - Dry-run sırasında engel sinyali (403/captcha) gelirse kaynak **PAUSED olur** ve alarm üretilir; gerçek taramadaki davranışın aynısıdır.
    - Dry-run zamanlayıcı aralığını **sıfırlamaz**: scheduler "son tarama" hesabında dry-run işlerini yok sayar.
 4. **Etkinleştir** (`POST /admin/sources/:id/activate`): `permissionVerifiedAt` zorunludur. PAUSED kaynakta health `HEALTHY` ve `consecutiveFailures=0` olur. İşlem kaynak satır kilidi (`FOR NO KEY UPDATE`) altında yapılır; scheduler da aynı kilidi alır ve uygunluğu kilit altında yeniden okur.
-5. **İzleme:** `GET /admin/sources/:id/stats` (iş/hata istatistikleri), `/admin/isler` (toplama işleri, hata özetleri). `ScrapeError.url` ve iş özetlerindeki URL'lerin sorgu dizisi `?…` olarak maskelenir; bu her şema için geçerlidir. Alarmlar için bkz. [Alarmlar ve eşikler](#alarmlar-ve-eşikler).
+5. **İzleme:** sağlık güncellemeleri (`SourceHealthService`) de aynı `FOR NO KEY UPDATE` satır kilidiyle oku-değiştir-yaz yapar; eşzamanlı bir admin `activate`/`pause` eski okunan durumla ezilmez. Hata metinleri (`ScrapeError.message`, `CollectionJob.errorSummary`, SystemLog bağlamı) yazım anında `redactSecrets` ile maskelenir (her `şema://` için kullanıcı bilgisi ve sorgu dizisi); okuma tarafındaki maskeleme ek savunmadır. `GET /admin/sources/:id/stats` (iş/hata istatistikleri), `/admin/isler` (toplama işleri, hata özetleri). `ScrapeError.url` ve iş özetlerindeki URL'lerin sorgu dizisi `?…` olarak maskelenir; bu her şema için geçerlidir. Alarmlar için bkz. [Alarmlar ve eşikler](#alarmlar-ve-eşikler).
 6. **Duraklat** (`POST /admin/sources/:id/pause`): `isActive=false`, `health=PAUSED`. Yöneticinin duraklattığı kaynak alarm üretmez; monitör yalnızca etkin olup DOWN/engel-PAUSED olan kaynakları raporlar.
 7. **Yeniden aç:** engelin nedeni ve izin kontrol edildikten sonra `activate`.
 
@@ -115,7 +120,8 @@ Kaynak `config.baseUrl` ve proxy URL'leri admin girdisidir. İki katmanda denetl
 2. **Çekim anında** (`PoliteHttpClient`, `blockPrivateAddresses` production'da açık):
    - Bağlantı yolunda `guardedLookup` çalışır: tüm adresler çözülür, biri bile özelse bağlantı reddedilir (`OTO_PRIVATE_ADDRESS`, yeniden denenmez). Bu, DNS rebinding'e karşı korur.
    - Proxy kullanıldığında guard proxy soketine de uygulanır (`ProxyAgent` `proxyTls` lookup'ı). undici, proxy bağlantısı için `connect` seçeneğini yok sayar; bu yüzden `proxyTls` kullanılır.
-   - Yönlendirmeler elle izlenir ve **her atlama** ayrıca denetlenir. IP sabit adreslerde undici lookup çağırmadığı için bu gereklidir.
+   - Yönlendirmeler elle izlenir ve **her atlama** (ilk istek dahil) ayrıca denetlenir. IP sabit adreslerde undici lookup çağırmadığı için bu gereklidir. Köşeli parantezli IPv6 sabit adresler (`[::1]`, `[::ffff:127.0.0.1]`, `[::ffff:a9fe:a9fe]`) parantezleri ayıklanarak denetlenir.
+   - IP sabit adres olarak verilmiş proxy de (lookup çağrılmadığından) her istekte ayrıca denetlenir.
 - **Dev/test:** `ALLOW_PRIVATE_URLS` (API'de bir DI token'ı, ortam değişkeni değil) `NODE_ENV !== 'production'` iken `true` olur. Worker'da `blockPrivateAddresses` yalnızca production'da açıktır. Böylece demo-site (`127.0.0.1:4000`) çalışır.
 - **Bilinen sınır:** istek proxy üzerinden gittiğinde hedef adı proxy çözer. Hedef ad için DNS denetimi istekten önce yapılır, ancak proxy tarafındaki DNS rebinding kapsanmaz.
 
@@ -138,6 +144,7 @@ Kaynak `config.baseUrl` ve proxy URL'leri admin girdisidir. İki katmanda denetl
   - Uçuştaki işler atlanır (`JOB_IN_FLIGHT`). `removeOnFail` penceresinden (7 gün) eski satırlar atlanır (`TOO_OLD`).
   - `NOTIFY_JOB_OPTS.removeOnFail` 7 gündür.
   - Hata metinleri kalıcılaştırılmadan önce `redactSecrets` ile temizlenir; `bot<token>` değerleri maskelenir.
+  - `SYSTEM_ALERT` satırları yalnızca hâlâ ADMIN/SUPER_ADMIN olan alıcıya gönderilir: kuyruktayken yetkisi alınan kullanıcının satırı `FAILED`/`NOT_ADMIN` olur (izleme hata oranına girmez); yeniden deneme bu satırları `NOT_ADMIN` ile atlar.
 
 ## Alarmlar ve eşikler
 
@@ -148,7 +155,7 @@ Kaynak `config.baseUrl` ve proxy URL'leri admin girdisidir. İki katmanda denetl
 | `source:<id>:down` | Etkin kaynak DOWN (6 ardışık hata) | ERROR (kalıcı) |
 | `source:<id>:blocked` | Etkin kaynak engel sinyaliyle PAUSED | ERROR (kalıcı) |
 | `source:<id>:degraded` | 3 ardışık hata (tarama sırasında) | WARN |
-| `source:<id>:parse-rate` | Son 1 saatte biten işlerde PARSE hatası / sayfa > `parserErrorRate` (en az 20 sayfa) | WARN |
+| `source:<id>:parse` | Monitör: son 1 saatte biten işlerde PARSE hatası / sayfa > `parserErrorRate` (en az 20 sayfa). Tarama yolu: tek işte ilanların > %20'si ayrıştırılamadı ya da sayfa yapısı tanınmadı. Aynı sorun (bozulan ayrıştırıcı) olduğundan iki yol tek anahtarı paylaşır | WARN |
 | `queue:notify:depth` | `notify` + `notify-telegram` bekleyen > `notifyQueueDepth` | WARN |
 | `notify:failure-rate` | Son 1 saatte MATCH bildirimleri ve dış kanal (TELEGRAM) alarm teslimleri için FAILED / (SENT+FAILED) > `notifyFailureRate` | ERROR |
 | `worker:<host>:<pid>:lost` | Görülmüş ama nabzı `heartbeatMissSec`'ten eski worker | ERROR |
@@ -157,7 +164,8 @@ Kaynak `config.baseUrl` ve proxy URL'leri admin girdisidir. İki katmanda denetl
 
 - **Varsayılan eşikler:** `{ notifyQueueDepth: 500, notifyFailureRate: 0.10, parserErrorRate: 0.2, heartbeatMissSec: 60 }`.
 - **Susturma:** anahtar başına 30 dk (`alert:<key>` NX). Koşul sürdükçe SystemLog satırı da çoğalmaz (`alert-log:<key>`).
-- **Kalıcı durumlar** (`blocked`/`down`) 6 saatte bir yeniden bildirilir. Engel sinyalini tarama yolu ve monitör aynı anahtarla bildirir: tek engel adminlere tek alarm bildirimi olarak gider (SystemLog'da her iki bileşenin satırı görünebilir).
+- **Kalıcı durumlar** (`blocked`/`down`) 6 saatte bir yeniden bildirilir (`PERSISTENT_ALERT_TTL_SEC`). Tarama yolu (`SourceHealthService`) ve monitör bu durumları aynı anahtar ve aynı 6 saatlik susturmayla bildirir: tek engel ya da tek DOWN, 6 saat boyunca adminlere tek alarm bildirimi olarak gider. Monitörün sonraki tick'leri (ör. 31 dk sonra) yeniden bildirmez. SystemLog'da her iki bileşenin satırı görünebilir.
+- **Ayrıştırma sorunu** için de tarama yolu ve monitör tek anahtar (`source:<id>:parse`) kullanır; susturma 30 dk'dır.
 - **Worker kaybı** bir kez bildirilir: aynı kayıp (aynı son nabız) için yinelenmez.
 - **Teslim** (`AlertService`):
   - SystemLog (ERROR/WARN) yazılır.
@@ -217,7 +225,7 @@ Saklama süreleri Plan 08'dedir (SystemLog/ScrapeError 30 gün, AuditLog 1 yıl,
 `SSE_RECHECK_MS` (30 sn) ve `ALLOW_PRIVATE_URLS` (`NODE_ENV !== 'production'`) ortam değişkeni değildir; Nest DI token'larıdır.
 
 **Migration'lar:**
-- `20261016000000_admin_ops`: `CollectionJob.dryRunResult`, `ListingAnalysis.matchDispatchAttempts`, abonelik durumları.
+- `20261016000000_admin_ops`: yalnızca iki sütun ekler: `CollectionJob.dryRunResult` (JSONB) ve `ListingAnalysis.matchDispatchAttempts` (INTEGER, varsayılan 0).
 - `20261017000000_monitor_indexes`: monitör sorguları için indeksler.
 
 ## Testler
