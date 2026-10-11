@@ -5,12 +5,14 @@ import type { Env } from '../config/env';
 import { InAppAdapter } from './in-app.adapter';
 import { NotifyService } from './notify.service';
 import { TELEGRAM_CLIENT, TelegramAdapter } from './telegram.adapter';
+import { TelegramStartupCheck } from './telegram-startup-check';
 
 @Module({
   providers: [
     InAppAdapter,
     TelegramAdapter,
     NotifyService,
+    TelegramStartupCheck,
     {
       provide: TELEGRAM_CLIENT,
       inject: [ENV],
