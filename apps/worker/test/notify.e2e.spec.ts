@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import type { TestingModule } from '@nestjs/testing';
 import { userEventSchema } from '@oto/shared';
 import { FakeTelegramApi } from '@oto/telegram';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PrismaService } from '../src/infra/prisma.service';
 import { RedisService } from '../src/infra/redis.service';
 import { MatchingModule } from '../src/matching/matching.module';
@@ -41,6 +41,10 @@ afterAll(async () => {
   await ref.get(NotifyWorkerHost).onModuleDestroy();
   await ref.close();
   await fake.close();
+});
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await ref.get(NotifyWorkerHost).onModuleDestroy();
 });
 beforeEach(async () => {
   await resetState(ref);
@@ -137,7 +141,10 @@ describe('NotifyService', () => {
     await clearChatGate();
     fake.respondNext('sendMessage', { status: 502, body: { ok: false, error_code: 502, description: 'Bad Gateway' } });
     expect(await notify.process(n.id, { attemptsMade: 4, maxAttempts: 5 })).toEqual({ kind: 'DONE', status: 'FAILED' });
-    expect((await prisma.notification.findUniqueOrThrow({ where: { id: n.id } })).status).toBe('FAILED');
+    const failed = await prisma.notification.findUniqueOrThrow({ where: { id: n.id } });
+    expect(failed.status).toBe('FAILED');
+    expect(failed.lastError).toContain('502');
+    expect(failed.attempts).toBe(2);
   });
 
   it('TELEGRAM 403 blocked: FAILED, channel disabled, SECURITY in-app warning published; other pending TELEGRAM fail as CHANNEL_UNAVAILABLE', async () => {
@@ -227,5 +234,49 @@ describe('NotifyService', () => {
     expect(row.lastError).toContain('502');
     const delayUntil = job.timestamp + (job.delay ?? 0);
     expect(delayUntil).toBeGreaterThan(Date.now());
+    expect(job.delay).toBeGreaterThanOrEqual(9_000);
+    expect(job.delay).toBeLessThanOrEqual(11_000);
+  });
+
+  it('host: two notifications for the same chat are throttled, both SENT, throttled job keeps attemptsMade 0', async () => {
+    const { u } = await setup(['TELEGRAM']);
+    ref.get(NotifyWorkerHost).start();
+    await makeMatch(u.id);
+    await makeMatch(u.id);
+    await waitFor(async () => (await prisma.notification.count({ where: { userId: u.id, channel: 'TELEGRAM', status: 'SENT' } })) === 2, 30_000);
+    const sends = fake.requests.filter((r) => r.method === 'sendMessage');
+    expect(sends).toHaveLength(2);
+    const rows = await rowFor(u.id, 'TELEGRAM');
+    expect(rows.every((r) => r.attempts === 1)).toBe(true);
+    const sentTimes = rows.map((r) => r.sentAt!.getTime()).sort();
+    expect(sentTimes[1] - sentTimes[0]).toBeGreaterThanOrEqual(900);
+  });
+
+  it('corrupt channel config fails permanently without retries', async () => {
+    const { u, ch } = await setup(['TELEGRAM']);
+    await makeMatch(u.id);
+    const [n] = await rowFor(u.id, 'TELEGRAM');
+    await prisma.notificationChannel.update({ where: { id: ch.id }, data: { config: 'v1:garbage:garbage:garbage' } });
+    expect(await notify.process(n.id, FIRST)).toEqual({ kind: 'DONE', status: 'FAILED' });
+    expect((await prisma.notification.findUniqueOrThrow({ where: { id: n.id } })).lastError).toBe('CHANNEL_CONFIG_INVALID');
+    expect(fake.requests).toHaveLength(0);
+  });
+
+  it('host safety net: unexpected error on the last attempt marks the row FAILED', async () => {
+    const { u } = await setup(['TELEGRAM']);
+    await makeMatch(u.id);
+    const [n] = await rowFor(u.id, 'TELEGRAM');
+    const queue = ref.get(QueueRegistry).notifyTelegram;
+    await queue.obliterate({ force: true });
+    vi.spyOn(notify, 'process').mockRejectedValue(new Error('boom bot123:SECRET-tok'));
+    ref.get(NotifyWorkerHost).start();
+    await queue.add('notify', { notificationId: n.id }, { jobId: `notify-${n.id}`, attempts: 1, backoff: { type: 'custom' } });
+    const row = await waitFor(async () => {
+      const r = await prisma.notification.findUniqueOrThrow({ where: { id: n.id } });
+      return r.status === 'FAILED' ? r : null;
+    });
+    expect(row.lastError).toContain('boom');
+    expect(row.lastError).not.toContain('SECRET');
+    expect(row.attempts).toBe(1);
   });
 });

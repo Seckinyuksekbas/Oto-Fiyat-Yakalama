@@ -53,11 +53,11 @@ export class NotifyService {
     if (result.kind === 'SENT') {
       const sentAt = new Date();
       const firstSeen = Date.parse((n.payload as { listing?: { firstSeenAt?: string } })?.listing?.firstSeenAt ?? '');
-      await this.prisma.notification.updateMany({
+      const upd = await this.prisma.notification.updateMany({
         where: { id: n.id, status: 'PENDING' },
         data: { status: 'SENT', sentAt, attempts: { increment: 1 }, lastError: null, latencyMs: Number.isFinite(firstSeen) ? sentAt.getTime() - firstSeen : null },
       });
-      return { kind: 'DONE', status: 'SENT' };
+      return { kind: 'DONE', status: upd.count > 0 ? 'SENT' : 'SKIPPED' };
     }
     if (result.kind === 'PERMANENT') {
       if (result.disableChannel) await this.disableTelegram(n.userId, result.error);
@@ -69,6 +69,16 @@ export class NotifyService {
     if (last) return this.fail(n.id, result.error);
     await this.prisma.notification.update({ where: { id: n.id }, data: { attempts: { increment: 1 }, lastError: short(result.error) } });
     return { kind: 'RETRY', error: result.error, retryAfterMs: result.retryAfterMs };
+  }
+
+  /** İşlenmeyen beklenmedik hata: deneme sayılır; son denemede satır FAILED olur (PENDING'de takılı kalmaz). */
+  async recordUnexpectedFailure(id: number, err: unknown, attempt: { attemptsMade: number; maxAttempts: number }): Promise<void> {
+    const msg = short((err instanceof Error ? err.message : String(err)).replace(/bot\d+:[\w-]+/g, 'bot[redacted]'));
+    if (attempt.attemptsMade + 1 >= attempt.maxAttempts) {
+      await this.prisma.notification.updateMany({ where: { id, status: 'PENDING' }, data: { status: 'FAILED', attempts: { increment: 1 }, lastError: msg } });
+    } else {
+      await this.prisma.notification.updateMany({ where: { id, status: 'PENDING' }, data: { attempts: { increment: 1 }, lastError: msg } });
+    }
   }
 
   private async fail(id: number, error: string): Promise<NotifyResult> {

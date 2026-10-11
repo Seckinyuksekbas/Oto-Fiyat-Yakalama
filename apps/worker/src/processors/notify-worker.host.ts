@@ -29,7 +29,14 @@ export class NotifyWorkerHost implements OnModuleInit, OnModuleDestroy {
     const processor = async (job: Job<NotifyJobData>, token?: string) => {
       const parsed = notifyJobSchema.safeParse(job.data);
       if (!parsed.success) throw new UnrecoverableError(`Geçersiz bildirim işi: ${parsed.error.message}`);
-      const r = await this.notify.process(parsed.data.notificationId, { attemptsMade: job.attemptsMade, maxAttempts: job.opts.attempts ?? 1 });
+      const attempt = { attemptsMade: job.attemptsMade, maxAttempts: job.opts.attempts ?? 1 };
+      let r;
+      try {
+        r = await this.notify.process(parsed.data.notificationId, attempt);
+      } catch (err) {
+        await this.notify.recordUnexpectedFailure(parsed.data.notificationId, err, attempt).catch((e: unknown) => this.logger.error(`Hata kaydedilemedi: ${String(e)}`));
+        throw err;
+      }
       if (r.kind === 'THROTTLED') {
         await job.moveToDelayed(Date.now() + r.retryAfterMs, token);
         throw new DelayedError();

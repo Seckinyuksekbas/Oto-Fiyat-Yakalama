@@ -50,7 +50,13 @@ describe('worker env', () => {
       expect(() => parseEnv({ ...prod, BOT_CONTACT_URL: 'http://127.0.0.1/bot' })).toThrow(/BOT_CONTACT_URL/);
     });
     it('accepts a real URL', () => {
-      expect(parseEnv({ ...prod, BOT_CONTACT_URL: 'https://oto.example/bot' }).BOT_CONTACT_URL).toBe('https://oto.example/bot');
+      expect(parseEnv({ ...prod, BOT_CONTACT_URL: 'https://oto.example/bot', PUBLIC_BASE_URL: 'https://oto.example' }).BOT_CONTACT_URL).toBe('https://oto.example/bot');
+    });
+    it('requires PUBLIC_BASE_URL explicitly and not localhost', () => {
+      const ok = { ...prod, BOT_CONTACT_URL: 'https://oto.example/bot' };
+      expect(() => parseEnv(ok)).toThrow(/PUBLIC_BASE_URL/);
+      expect(() => parseEnv({ ...ok, PUBLIC_BASE_URL: 'http://localhost:3000' })).toThrow(/PUBLIC_BASE_URL/);
+      expect(parseEnv({ ...ok, PUBLIC_BASE_URL: 'https://oto.example' }).PUBLIC_BASE_URL).toBe('https://oto.example');
     });
     it('still defaults in development', () => {
       expect(parseEnv({ ...base, NODE_ENV: 'development' }).BOT_CONTACT_URL).toBe('http://localhost:3000/bot');

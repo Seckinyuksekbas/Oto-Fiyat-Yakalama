@@ -22,12 +22,23 @@ export class TelegramAdapter {
 
   async send(n: Notification, channelConfig: string): Promise<SendResult> {
     if (!this.client) return { kind: 'PERMANENT', error: 'TELEGRAM_DISABLED' };
-    const { chatId } = this.encryptor.decryptJson<{ chatId: number }>(channelConfig);
+    let chatId: number;
+    try {
+      chatId = this.encryptor.decryptJson<{ chatId: number }>(channelConfig).chatId;
+      if (!Number.isFinite(chatId)) throw new Error('chatId yok');
+    } catch {
+      return { kind: 'PERMANENT', error: 'CHANNEL_CONFIG_INVALID' };
+    }
     const parsed = matchNotificationPayloadSchema.safeParse(n.payload);
     if (!parsed.success) return { kind: 'PERMANENT', error: 'INVALID_PAYLOAD' };
     // Sohbet başına 1 msj/sn (spec §5.4); kilit alınamazsa deneme hakkı yemeden ertele.
-    const gate = await this.redis.set(`tg:chat:${hashToken(String(chatId))}`, '1', 'PX', CHAT_GAP_MS, 'NX');
-    if (gate !== 'OK') return { kind: 'THROTTLED', retryAfterMs: CHAT_GAP_MS };
+    const gateKey = `tg:chat:${hashToken(String(chatId))}`;
+    const gate = await this.redis.set(gateKey, '1', 'PX', CHAT_GAP_MS, 'NX');
+    if (gate !== 'OK') {
+      const pttl = await this.redis.pttl(gateKey);
+      const jitter = Math.floor(Math.random() * 100);
+      return { kind: 'THROTTLED', retryAfterMs: pttl > 0 ? pttl + jitter : CHAT_GAP_MS };
+    }
     const msg = renderMatchMessage(parsed.data, { publicBaseUrl: this.env.PUBLIC_BASE_URL });
     try {
       if (msg.photoUrl) {
