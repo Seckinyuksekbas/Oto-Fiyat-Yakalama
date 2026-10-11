@@ -30,3 +30,25 @@ describe('parseEnv', () => {
     );
   });
 });
+
+describe('parseEnv telegram', () => {
+  it('defaults to polling with no token', () => {
+    const env = parseEnv(base);
+    expect(env.TELEGRAM_MODE).toBe('polling');
+    expect(env.TELEGRAM_BOT_TOKEN).toBeUndefined();
+    expect(env.TELEGRAM_API_BASE).toBe('https://api.telegram.org');
+  });
+
+  it('requires a bot username when a token is set', () => {
+    expect(() => parseEnv({ ...base, TELEGRAM_BOT_TOKEN: '1:abc' })).toThrow(/TELEGRAM_BOT_USERNAME/);
+    expect(parseEnv({ ...base, TELEGRAM_BOT_TOKEN: '1:abc', TELEGRAM_BOT_USERNAME: 'otofirsat_bot' }).TELEGRAM_MODE).toBe('polling');
+  });
+
+  it('requires a 32+ char secret in webhook mode with a token', () => {
+    const tg = { ...base, TELEGRAM_BOT_TOKEN: '1:abc', TELEGRAM_BOT_USERNAME: 'otofirsat_bot', TELEGRAM_MODE: 'webhook' };
+    expect(() => parseEnv(tg)).toThrow(/TELEGRAM_WEBHOOK_SECRET/);
+    expect(() => parseEnv({ ...tg, TELEGRAM_WEBHOOK_SECRET: 'short' })).toThrow(/TELEGRAM_WEBHOOK_SECRET/);
+    expect(parseEnv({ ...tg, TELEGRAM_WEBHOOK_SECRET: 'a'.repeat(32) }).TELEGRAM_WEBHOOK_SECRET).toBe('a'.repeat(32));
+    expect(parseEnv({ ...base, TELEGRAM_MODE: 'webhook' }).TELEGRAM_MODE).toBe('webhook');
+  });
+});

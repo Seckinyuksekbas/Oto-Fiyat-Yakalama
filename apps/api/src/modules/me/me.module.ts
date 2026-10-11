@@ -1,5 +1,9 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
+import { TelegramModule } from '../telegram/telegram.module';
+import { ChannelsController } from './channels.controller';
+import { ChannelsRepository } from './channels.repository';
+import { ChannelsService } from './channels.service';
 import { LimitsService } from './limits.service';
 import { MatchesController } from './matches.controller';
 import { MatchesRepository } from './matches.repository';
@@ -13,8 +17,8 @@ import { SearchProfilesRepository } from './search-profiles.repository';
 import { SearchProfilesService } from './search-profiles.service';
 
 @Module({
-  imports: [AuthModule],
-  controllers: [MeController, SearchProfilesController, MatchesController, NotificationsController],
-  providers: [MatchesRepository, NotificationsRepository, MeRepository, MeService, LimitsService, SearchProfilesRepository, SearchProfilesService],
+  imports: [AuthModule, TelegramModule],
+  controllers: [MeController, SearchProfilesController, MatchesController, NotificationsController, ChannelsController],
+  providers: [ChannelsRepository, ChannelsService, MatchesRepository, NotificationsRepository, MeRepository, MeService, LimitsService, SearchProfilesRepository, SearchProfilesService],
 })
 export class MeModule {}

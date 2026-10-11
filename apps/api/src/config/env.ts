@@ -6,7 +6,7 @@ const pem = z
   .min(1)
   .transform((v) => v.replace(/\\n/g, '\n'));
 
-export const envSchema = z.object({
+const baseSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().default(3001),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
@@ -24,6 +24,20 @@ export const envSchema = z.object({
   SMTP_PORT: z.coerce.number().int().default(1025),
   SMTP_FROM: z.string().default('Oto Fırsat <no-reply@localhost>'),
   HIBP_ENABLED: bool.default('false'),
+  TELEGRAM_BOT_TOKEN: z.string().min(1).optional(),
+  TELEGRAM_BOT_USERNAME: z.string().regex(/^[A-Za-z0-9_]{5,32}$/).optional(),
+  TELEGRAM_MODE: z.enum(['polling', 'webhook']).default('polling'),
+  TELEGRAM_WEBHOOK_SECRET: z.string().regex(/^[A-Za-z0-9_-]{32,256}$/).optional(),
+  TELEGRAM_API_BASE: z.string().url().default('https://api.telegram.org'),
+});
+
+export const envSchema = baseSchema.superRefine((env, ctx) => {
+  if (env.TELEGRAM_BOT_TOKEN && !env.TELEGRAM_BOT_USERNAME) {
+    ctx.addIssue({ code: 'custom', path: ['TELEGRAM_BOT_USERNAME'], message: 'TELEGRAM_BOT_TOKEN varken zorunlu' });
+  }
+  if (env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_MODE === 'webhook' && !env.TELEGRAM_WEBHOOK_SECRET) {
+    ctx.addIssue({ code: 'custom', path: ['TELEGRAM_WEBHOOK_SECRET'], message: 'webhook modunda zorunlu (32-256 karakter)' });
+  }
 });
 export type Env = z.infer<typeof envSchema>;
 

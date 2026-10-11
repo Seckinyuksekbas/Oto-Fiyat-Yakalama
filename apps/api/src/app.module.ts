@@ -21,6 +21,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { HealthModule } from './modules/health/health.module';
 import { MailModule } from './modules/mail/mail.module';
 import { MeModule } from './modules/me/me.module';
+import { TelegramModule } from './modules/telegram/telegram.module';
 
 @Module({
   imports: [
@@ -39,6 +40,7 @@ import { MeModule } from './modules/me/me.module';
     }),
     HealthModule,
     AuthModule,
+    TelegramModule,
     MeModule,
     AdminModule,
   ],
