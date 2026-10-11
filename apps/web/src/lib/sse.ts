@@ -25,6 +25,8 @@ const BASE_DELAY_MS = 1_000;
 const MAX_DELAY_MS = 30_000;
 /** Sunucu akışı 15 dk'da kapatır; kopuş yaşanmadan 30 sn önce yeniden bağlanılır. */
 const PROACTIVE_MS = 14 * 60_000 + 30_000;
+/** Sunucu 25 sn'de bir ping gönderir; 60 sn sessizlik takılı bağlantı sayılır. */
+const STALL_MS = 60_000;
 
 const defaultFactory = (url: string): EventSource => new EventSource(url, { withCredentials: true });
 
@@ -50,23 +52,39 @@ export function createNotificationStream(opts: NotificationStreamOptions): { clo
   const seen = new Set<number>();
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let proactiveTimer: ReturnType<typeof setTimeout> | undefined;
+  let watchdogTimer: ReturnType<typeof setTimeout> | undefined;
 
   const clearTimers = () => {
     clearTimeout(retryTimer);
     clearTimeout(proactiveTimer);
-    retryTimer = proactiveTimer = undefined;
+    clearTimeout(watchdogTimer);
+    retryTimer = proactiveTimer = watchdogTimer = undefined;
   };
   const dropSource = () => {
     es?.close();
     es = null;
   };
+  const stop = () => {
+    if (closed) return;
+    closed = true;
+    clearTimers();
+    dropSource();
+    opts.onStatus?.('closed');
+  };
 
+  /** false: oturum bitti, bağlanmayı bırak. Geçici hata (throw): üstel bekleme ile yeniden dene. */
   const refreshThenConnect = async () => {
     if (opts.refresh) {
+      let ok: boolean;
       try {
-        await opts.refresh();
+        ok = await opts.refresh();
       } catch {
-        /* geçici hata: yine de bağlanmayı dene */
+        if (!closed) reconnect(backoffDelay(attempt++));
+        return;
+      }
+      if (!ok) {
+        stop();
+        return;
       }
     }
     if (!closed && !es) connect();
@@ -84,18 +102,35 @@ export function createNotificationStream(opts: NotificationStreamOptions): { clo
     opts.onStatus?.('connecting');
     const source = factory(STREAM_URL);
     es = source;
-    source.addEventListener('open', () => opts.onStatus?.('open'));
+    const alive = () => {
+      clearTimeout(watchdogTimer);
+      watchdogTimer = setTimeout(() => {
+        if (closed || es !== source) return;
+        dropSource();
+        clearTimeout(proactiveTimer);
+        void refreshThenConnect();
+      }, STALL_MS);
+    };
+    alive();
+    source.addEventListener('open', () => {
+      alive();
+      opts.onStatus?.('open');
+    });
+    source.addEventListener('ping', alive);
     source.addEventListener('ready', (e) => {
+      alive();
       const r = parse<{ unreadCount: number; lastId: number | null }>(e);
       if (!r) return;
       attempt = 0;
       lastId = Math.max(lastId, r.lastId ?? 0);
+      for (const id of seen) if (id <= lastId) seen.delete(id);
       opts.onStatus?.('open');
       opts.onReady(r);
     });
     source.addEventListener('notification', (e) => {
+      alive();
       const n = parse<NotificationEvent>(e);
-      if (!n || typeof n.id !== 'number') return;
+      if (!n || typeof n.id !== 'number' || n.channel !== 'IN_APP') return;
       if (n.id <= lastId || seen.has(n.id)) return; // zaten unreadCount içinde ya da tekrar
       seen.add(n.id);
       opts.onNotification(n);
@@ -104,6 +139,7 @@ export function createNotificationStream(opts: NotificationStreamOptions): { clo
       if (closed || es !== source) return;
       dropSource();
       clearTimeout(proactiveTimer);
+      clearTimeout(watchdogTimer);
       opts.onStatus?.('connecting');
       reconnect(backoffDelay(attempt++));
     });
@@ -111,21 +147,14 @@ export function createNotificationStream(opts: NotificationStreamOptions): { clo
     proactiveTimer = setTimeout(() => {
       if (closed) return;
       dropSource();
+      clearTimeout(watchdogTimer);
       void refreshThenConnect();
     }, PROACTIVE_MS);
   };
 
   connect();
 
-  return {
-    close() {
-      if (closed) return;
-      closed = true;
-      clearTimers();
-      dropSource();
-      opts.onStatus?.('closed');
-    },
-  };
+  return { close: stop };
 }
 
 // ---------------------------------------------------------------- toast sınırlayıcı
@@ -197,7 +226,9 @@ export function useNotificationStream(): void {
       onNotification: (n) => {
         qc.setQueryData<number>(NOTIFICATION_KEYS.unread, (c) => (c ?? 0) + 1);
         void qc.invalidateQueries({ queryKey: NOTIFICATION_KEYS.list });
-        push(n);
+        // Güvenlik ve sistem bildirimleri eşleşme sınırlayıcısına takılmaz.
+        if (n.kind === 'MATCH') push(n);
+        else showToast(n);
       },
     });
     active = stream;

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createNotificationStream } from './sse';
+import { backoffDelay, createNotificationStream, createToastLimiter } from './sse';
 
 class FakeES {
   static instances: FakeES[] = [];
@@ -82,11 +82,59 @@ describe('createNotificationStream', () => {
 
   it('proactively reconnects before the 15 minute server cutoff', async () => {
     createNotificationStream({ onReady: vi.fn(), onNotification: vi.fn(), eventSourceFactory: factory });
-    await vi.advanceTimersByTimeAsync(14 * 60_000 + 29_000);
+    // 25 sn'de bir ping: bekçi zamanlayıcısı devreye girmesin.
+    for (let i = 0; i < 34; i++) {
+      await vi.advanceTimersByTimeAsync(25_000);
+      FakeES.instances.at(-1)!.emit('ping');
+    }
+    await vi.advanceTimersByTimeAsync(19_000); // 14 dk 29 sn
     expect(FakeES.instances).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(FakeES.instances).toHaveLength(2);
     expect(FakeES.instances[0]!.closed).toBe(true);
+  });
+
+  it('stops reconnecting and reports closed when refresh returns false (session over)', async () => {
+    const onStatus = vi.fn();
+    const refresh = vi.fn().mockResolvedValue(false);
+    createNotificationStream({ onReady: vi.fn(), onNotification: vi.fn(), onStatus, eventSourceFactory: factory, refresh });
+    FakeES.instances[0]!.emit('error');
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(FakeES.instances).toHaveLength(1);
+    expect(onStatus).toHaveBeenLastCalledWith('closed');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('keeps retrying with backoff when refresh throws a transient error', async () => {
+    const refresh = vi.fn().mockRejectedValueOnce(new Error('network')).mockResolvedValue(true);
+    createNotificationStream({ onReady: vi.fn(), onNotification: vi.fn(), eventSourceFactory: factory, refresh });
+    FakeES.instances[0]!.emit('error');
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(FakeES.instances).toHaveLength(1); // refresh patladı, bağlanılmadı
+    await vi.advanceTimersByTimeAsync(2000); // ikinci bekleme: 2 sn
+    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(FakeES.instances).toHaveLength(2);
+  });
+
+  it('reconnects when nothing (not even a ping) arrives for 60 seconds', async () => {
+    createNotificationStream({ onReady: vi.fn(), onNotification: vi.fn(), eventSourceFactory: factory });
+    await vi.advanceTimersByTimeAsync(59_000);
+    FakeES.instances[0]!.emit('ping');
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(FakeES.instances).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(FakeES.instances).toHaveLength(2);
+    expect(FakeES.instances[0]!.closed).toBe(true);
+  });
+
+  it('ignores non IN_APP notifications', () => {
+    const onNotification = vi.fn();
+    createNotificationStream({ onReady: vi.fn(), onNotification, eventSourceFactory: factory });
+    FakeES.instances[0]!.emit('ready', { unreadCount: 0, lastId: null });
+    FakeES.instances[0]!.emit('notification', { ...notif(5), channel: 'TELEGRAM' });
+    expect(onNotification).not.toHaveBeenCalled();
   });
 
   it('close() stops reconnecting', async () => {
@@ -96,5 +144,41 @@ describe('createNotificationStream', () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(FakeES.instances).toHaveLength(1);
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe('backoffDelay', () => {
+  it('doubles up to 30 s and stays within +-20% jitter', () => {
+    expect(backoffDelay(0, () => 0.5)).toBe(1000);
+    expect(backoffDelay(3, () => 0.5)).toBe(8000);
+    expect(backoffDelay(10, () => 0.5)).toBe(30_000);
+    expect(backoffDelay(0, () => 0)).toBe(800);
+    expect(backoffDelay(0, () => 1)).toBe(1200);
+    expect(backoffDelay(10, () => 1)).toBeLessThanOrEqual(36_000);
+  });
+});
+
+describe('createToastLimiter', () => {
+  const ev = (id: number) => notif(id) as never;
+  it('allows 3 per sliding 5 s window and collapses the rest', () => {
+    let t = 0;
+    const show = vi.fn();
+    const showOverflow = vi.fn();
+    const push = createToastLimiter({ show, showOverflow, now: () => t });
+    for (let i = 1; i <= 5; i++) push(ev(i));
+    expect(show).toHaveBeenCalledTimes(3);
+    expect(showOverflow).toHaveBeenLastCalledWith(2);
+    t = 4_999;
+    push(ev(6));
+    expect(show).toHaveBeenCalledTimes(3);
+    expect(showOverflow).toHaveBeenLastCalledWith(3);
+    t = 5_000; // ilk üç toast penceresi doldu
+    push(ev(7));
+    expect(show).toHaveBeenCalledTimes(4);
+    push(ev(8));
+    push(ev(9));
+    push(ev(10));
+    expect(show).toHaveBeenCalledTimes(6);
+    expect(showOverflow).toHaveBeenLastCalledWith(1);
   });
 });

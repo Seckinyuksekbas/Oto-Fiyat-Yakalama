@@ -1,5 +1,6 @@
 'use client';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import { apiFetch } from './api';
 import type { NotificationView } from './notification-text';
 import { NOTIFICATION_KEYS } from './sse';
@@ -61,9 +62,21 @@ export function useMarkRead() {
   return useMutation({
     mutationFn: (input: MarkReadInput) =>
       apiFetch<{ updated: number }>('/me/notifications/read', { method: 'POST', json: input }),
-    onSuccess: (res, input) => {
+    onMutate: (input) => {
+      const prev = qc.getQueryData<number>(NOTIFICATION_KEYS.unread);
       if ('all' in input) qc.setQueryData<number>(NOTIFICATION_KEYS.unread, 0);
-      else qc.setQueryData<number>(NOTIFICATION_KEYS.unread, (c) => Math.max(0, (c ?? 0) - res.updated));
+      else qc.setQueryData<number>(NOTIFICATION_KEYS.unread, (c) => Math.max(0, (c ?? 0) - input.ids.length));
+      return { prev };
+    },
+    onError: (_err, _input, ctx) => {
+      qc.setQueryData<number | undefined>(NOTIFICATION_KEYS.unread, ctx?.prev);
+      toast.error('Okundu olarak işaretlenemedi. Bir süre sonra yeniden deneyin.');
+    },
+    onSuccess: (res, input, ctx) => {
+      if ('all' in input) qc.setQueryData<number>(NOTIFICATION_KEYS.unread, 0);
+      else if (ctx?.prev !== undefined) qc.setQueryData<number>(NOTIFICATION_KEYS.unread, Math.max(0, ctx.prev - res.updated));
+    },
+    onSettled: () => {
       void qc.invalidateQueries({ queryKey: NOTIFICATION_KEYS.list });
     },
   });

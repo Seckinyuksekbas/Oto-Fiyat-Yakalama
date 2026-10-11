@@ -17,9 +17,23 @@ import {
 const CHANNEL_LABEL: Record<string, string> = { IN_APP: 'Uygulama içi', TELEGRAM: 'Telegram', EMAIL: 'E-posta' };
 const STATUS_LABEL: Record<string, string> = { SENT: 'gönderildi', PENDING: 'bekliyor', SKIPPED_LIMIT: 'limit' };
 
+const ERROR_LABEL: Record<string, string> = {
+  CHANNEL_UNAVAILABLE: 'kanal kullanılamıyor',
+  TELEGRAM_DISABLED: 'Telegram bildirimleri durduruldu',
+  USER_INACTIVE: 'hesap etkin değil',
+  CHANNEL_CONFIG_INVALID: 'kanal ayarı geçersiz',
+  INVALID_PAYLOAD: 'bildirim içeriği geçersiz',
+};
+
+export function errorLabel(raw: string): string {
+  const key = Object.keys(ERROR_LABEL).find((k) => raw.startsWith(k));
+  if (key) return ERROR_LABEL[key]!;
+  return raw.length > 100 ? `${raw.slice(0, 100)}…` : raw;
+}
+
 export function deliveryLabel(n: NotificationView): string {
   const channel = CHANNEL_LABEL[n.channel] ?? n.channel;
-  if (n.status === 'FAILED') return `${channel} · başarısız${n.lastError ? `: ${n.lastError}` : ''}`;
+  if (n.status === 'FAILED') return `${channel} · başarısız${n.lastError ? `: ${errorLabel(n.lastError)}` : ''}`;
   return `${channel} · ${STATUS_LABEL[n.status] ?? n.status.toLowerCase()}`;
 }
 
@@ -59,45 +73,55 @@ export function NotificationItem({ n, onOpen, className }: NotificationItemProps
   if (match) {
     const l = match.listing;
     return (
-      <Link
-        href={`/app/ilan/${l.id}`}
-        onClick={() => onOpen?.(n)}
+      <div
         data-unread={unread || undefined}
-        className={row}
+        className={cn(
+          'flex items-start rounded-lg border border-border bg-surface transition-colors hover:bg-surface-2/60',
+          unread && 'border-l-2 border-l-accent',
+          className,
+        )}
       >
-        <Dot unread={unread} />
-        <span className="grid size-14 shrink-0 place-items-center overflow-hidden rounded-md bg-surface-2 text-border-strong">
-          {l.imageUrl ? (
-            <img src={l.imageUrl} alt="" loading="lazy" referrerPolicy="no-referrer" className="size-full object-cover" />
-          ) : (
-            <Car aria-hidden className="size-5" />
-          )}
-        </span>
-        <span className="flex min-w-0 flex-1 flex-col gap-1.5">
-          <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="truncate text-sm font-medium">{matchLabel(match)}</span>
-            <Badge tone={match.reason === 'PRICE_DROP' ? 'positive' : 'accent'}>{reasonBadge(match)}</Badge>
-            {match.limitExceeded ? (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span tabIndex={0} className="inline-flex rounded-full">
-                    <Badge tone="warning">Limit aşıldı</Badge>
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent>{LIMIT_HELP}</TooltipContent>
-              </Tooltip>
-            ) : null}
+        <Link
+          href={`/app/ilan/${l.id}`}
+          onClick={() => onOpen?.(n)}
+          className="flex min-w-0 flex-1 items-start gap-3 rounded-lg p-3.5 sm:p-4"
+        >
+          <Dot unread={unread} />
+          <span className="grid size-14 shrink-0 place-items-center overflow-hidden rounded-md bg-surface-2 text-border-strong">
+            {l.imageUrl ? (
+              <img src={l.imageUrl} alt="" loading="lazy" referrerPolicy="no-referrer" className="size-full object-cover" />
+            ) : (
+              <Car aria-hidden className="size-5" />
+            )}
           </span>
-          <span className="font-mono text-[15px] tabular-nums">{formatTl(l.price)}</span>
-          <span className="flex flex-wrap items-center gap-x-2 text-[13px] text-muted">
-            <span>{match.profile.name}</span>
-            <span aria-hidden>·</span>
-            <span>{deliveryLabel(n)}</span>
-            <span aria-hidden>·</span>
-            <time dateTime={n.createdAt}>{formatRelative(n.createdAt)}</time>
+          <span className="flex min-w-0 flex-1 flex-col gap-1.5">
+            <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="break-words text-sm font-medium">{matchLabel(match)}</span>
+              <Badge tone={match.reason === 'PRICE_DROP' ? 'positive' : 'accent'}>{reasonBadge(match)}</Badge>
+            </span>
+            <span className="font-mono text-[15px] tabular-nums">{formatTl(l.price)}</span>
+            <span className="flex flex-wrap items-center gap-x-2 break-words text-[13px] text-muted">
+              <span>{match.profile.name}</span>
+              <span aria-hidden>·</span>
+              <span className="break-words">{deliveryLabel(n)}</span>
+              <span aria-hidden>·</span>
+              <time dateTime={n.createdAt}>{formatRelative(n.createdAt)}</time>
+            </span>
           </span>
-        </span>
-      </Link>
+        </Link>
+        {match.limitExceeded ? (
+          <div className="shrink-0 py-3.5 pr-3.5 sm:py-4 sm:pr-4">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button type="button" className="inline-flex rounded-full" aria-label="Limit aşıldı: açıklama">
+                  <Badge tone="warning">Limit aşıldı</Badge>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>{LIMIT_HELP}</TooltipContent>
+            </Tooltip>
+          </div>
+        ) : null}
+      </div>
     );
   }
 
@@ -111,7 +135,7 @@ export function NotificationItem({ n, onOpen, className }: NotificationItemProps
       <span className="flex min-w-0 flex-1 flex-col gap-1.5">
         <span className="text-sm font-medium">{text}</span>
         <span className="flex flex-wrap items-center gap-x-2 text-[13px] text-muted">
-          <span>{deliveryLabel(n)}</span>
+          <span className="break-words">{deliveryLabel(n)}</span>
           <span aria-hidden>·</span>
           <time dateTime={n.createdAt}>{formatRelative(n.createdAt)}</time>
         </span>

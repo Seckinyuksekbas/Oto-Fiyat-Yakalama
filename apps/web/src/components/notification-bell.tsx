@@ -51,15 +51,36 @@ export function useCountUp(target: number): number {
   return shown;
 }
 
+/** Yalnızca artışları, ~1 sn gecikmeyle duyurur (art arda gelen olaylar tek duyuruda birleşir). */
+export function useUnreadAnnouncement(value: number | undefined, delayMs = 1000): string {
+  const [text, setText] = useState('');
+  const prev = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (value === undefined) return;
+    const before = prev.current;
+    prev.current = value;
+    if (before === undefined || value <= before) return;
+    const timer = setTimeout(() => setText(`${value} okunmamış bildirim`), delayMs);
+    return () => clearTimeout(timer);
+  }, [value, delayMs]);
+  return text;
+}
+
 export function NotificationBell() {
   const [open, setOpen] = useState(false);
-  const unread = useUnreadCount().data ?? 0;
+  const unreadData = useUnreadCount().data;
+  const unread = unreadData ?? 0;
+  const announcement = useUnreadAnnouncement(unreadData);
   const shown = useCountUp(unread);
   const recent = useRecentNotifications(open);
   const markRead = useMarkRead();
   const items = recent.data?.items ?? [];
 
   return (
+    <>
+    <span role="status" className="sr-only">
+      {announcement}
+    </span>
     <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger
         aria-label={unread > 0 ? `Bildirimler, ${unread} okunmamış` : 'Bildirimler'}
@@ -109,6 +130,7 @@ export function NotificationBell() {
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+    </>
   );
 }
 
