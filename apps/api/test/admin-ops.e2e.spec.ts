@@ -245,7 +245,8 @@ describe('GET /admin/workers', () => {
   });
 });
 
-const BOT_TOKEN = '123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawA';
+// Sahte token çalışma anında üretilir (gizli bilgi tarayıcıları gerçek token sanmasın).
+const BOT_TOKEN = ['123456789', 'TEST'.padEnd(35, 'x')].join(':');
 
 const matchPayload = (title: string, reason: 'NEW' | 'PRICE_DROP' | 'RELIST') => ({
   type: 'MATCH',

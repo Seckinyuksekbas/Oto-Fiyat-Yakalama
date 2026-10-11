@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { redactSecrets } from './redact-secrets';
 
-const TOKEN = '123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawA'; // 35 karakterlik gizli kısım
+// Sahte token çalışma anında üretilir (35 karakterlik gizli kısım; tarayıcılar gerçek token sanmasın).
+const TOKEN = ['123456789', 'TEST'.padEnd(35, 'x')].join(':');
 
 describe('redactSecrets', () => {
   it('masks a Telegram bot token in the bot<token> URL form', () => {
