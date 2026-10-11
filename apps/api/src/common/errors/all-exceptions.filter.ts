@@ -4,6 +4,28 @@ import { ErrorCode, type ApiErrorBody } from '@oto/shared';
 import type { Request, Response } from 'express';
 import { AppError } from './app-error';
 
+/** Geçici DB yoğunluğu: lock_timeout, statement_timeout (bkz. infra/tx-options). */
+const BUSY_PG_CODES = new Set(['55P03', '57014']);
+const BUSY_PG_MESSAGE = /code: [`"](55P03|57014)[`"]/i;
+const RETRY_AFTER_SEC = '5';
+
+/**
+ * Prisma'nın "sistem meşgul" hataları (gerçek biçimler Prisma 6.19 ile doğrulandı):
+ * - P2028: interaktif tx maxWait/timeout aşıldı.
+ * - P2024: havuzdan bağlantı alınamadı.
+ * - P2010 (ham sorgu) + meta.code 55P03/57014; meta yoksa mesajdaki `Code: \`55P03\``.
+ * - Model sorgusu: PrismaClientUnknownRequestError, PG kodu yalnız mesajda (`code: "55P03"`).
+ */
+export function isServiceBusy(e: unknown): boolean {
+  if (e instanceof Prisma.PrismaClientKnownRequestError) {
+    if (e.code === 'P2028' || e.code === 'P2024') return true;
+    if (e.code !== 'P2010') return false;
+    const pg = (e.meta as { code?: unknown } | undefined)?.code;
+    return typeof pg === 'string' ? BUSY_PG_CODES.has(pg) : BUSY_PG_MESSAGE.test(e.message);
+  }
+  return e instanceof Prisma.PrismaClientUnknownRequestError && BUSY_PG_MESSAGE.test(e.message);
+}
+
 const HTTP_CODE: Record<number, ErrorCode> = {
   400: ErrorCode.VALIDATION_FAILED,
   401: ErrorCode.UNAUTHENTICATED,
@@ -20,11 +42,13 @@ export class AllExceptionsFilter implements ExceptionFilter {
   catch(exception: unknown, host: ArgumentsHost): void {
     const res = host.switchToHttp().getResponse<Response>();
     const req = host.switchToHttp().getRequest<Request & { id?: unknown }>();
-    const { status, body } = this.toBody(exception, String(req.id ?? ''));
+    const route = `${req.method} ${(req.route as { path?: string } | undefined)?.path ?? req.path}`;
+    const { status, body } = this.toBody(exception, String(req.id ?? ''), route);
+    if (body.error.code === ErrorCode.SERVICE_BUSY) res.setHeader('Retry-After', RETRY_AFTER_SEC);
     res.status(status).json(body);
   }
 
-  private toBody(exception: unknown, requestId: string): { status: number; body: ApiErrorBody } {
+  private toBody(exception: unknown, requestId: string, route: string): { status: number; body: ApiErrorBody } {
     if (exception instanceof AppError) {
       const error: ApiErrorBody['error'] = { code: exception.code, message: exception.message };
       if (exception.details !== undefined) error.details = exception.details;
@@ -37,9 +61,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
         status >= 500 ? 'Beklenmeyen bir hata oluştu' : status === 404 ? 'Kayıt bulunamadı' : exception.message;
       return { status, body: { error: { code, message } } };
     }
-    if (exception instanceof Prisma.PrismaClientKnownRequestError && exception.code === 'P2028') {
-      // İnteraktif transaction maxWait/timeout aşıldı (ör. advisory kilit çekişmesi): geçici durum.
-      this.logger.warn({ requestId, prismaCode: exception.code }, 'Transaction timed out');
+    if (isServiceBusy(exception)) {
+      // Kilit/havuz/transaction zaman aşımı: geçici durum; iç ayrıntı yanıta yazılmaz.
+      const prismaCode = exception instanceof Prisma.PrismaClientKnownRequestError ? exception.code : 'UNKNOWN';
+      this.logger.warn({ requestId, route, prismaCode }, 'Service busy (DB lock/pool/tx timeout)');
       return {
         status: 503,
         body: { error: { code: ErrorCode.SERVICE_BUSY, message: 'Sistem şu anda yoğun, lütfen biraz sonra tekrar deneyin' } },

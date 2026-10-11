@@ -7,6 +7,7 @@ import { AppError, Errors } from '../../common/errors/app-error';
 import { assertPublicHttpUrl } from '../../common/security/ssrf';
 import { AdminQueues } from '../../infra/admin-queues.service';
 import { PrismaService } from '../../infra/prisma.service';
+import { boundLocks, LOCK_TX_OPTIONS } from '../../infra/tx-options';
 import { RedisService } from '../../infra/redis.service';
 import { ALLOW_PRIVATE_URLS } from './admin.tokens';
 
@@ -159,6 +160,7 @@ export class AdminSourcesService {
     await this.requireSource(id);
     await this.validateRefs(input);
     return this.prisma.$transaction(async (tx) => {
+      await boundLocks(tx);
       const [locked] = await tx.$queryRaw<{ id: number }[]>`SELECT id FROM "DataSource" WHERE id = ${id} FOR NO KEY UPDATE`;
       if (!locked) throw Errors.notFound();
       const before = await tx.dataSource.findUniqueOrThrow({ where: { id } });
@@ -186,11 +188,12 @@ export class AdminSourcesService {
         after: Object.fromEntries(keys.map((k) => [k, a[k]])),
       });
       return { source: toSourceView(after) };
-    });
+    }, LOCK_TX_OPTIONS);
   }
 
   async activate(ctx: AuditCtx, id: number) {
     return this.prisma.$transaction(async (tx) => {
+      await boundLocks(tx);
       const [locked] = await tx.$queryRaw<{ id: number }[]>`SELECT id FROM "DataSource" WHERE id = ${id} FOR NO KEY UPDATE`;
       if (!locked) throw Errors.notFound();
       const before = await tx.dataSource.findUniqueOrThrow({ where: { id } });
@@ -207,11 +210,12 @@ export class AdminSourcesService {
         after: { isActive: after.isActive, health: after.health, consecutiveFailures: after.consecutiveFailures },
       });
       return { source: toSourceView(after) };
-    });
+    }, LOCK_TX_OPTIONS);
   }
 
   async pause(ctx: AuditCtx, id: number) {
     return this.prisma.$transaction(async (tx) => {
+      await boundLocks(tx);
       const [locked] = await tx.$queryRaw<{ id: number }[]>`SELECT id FROM "DataSource" WHERE id = ${id} FOR NO KEY UPDATE`;
       if (!locked) throw Errors.notFound();
       const before = await tx.dataSource.findUniqueOrThrow({ where: { id } });
@@ -224,7 +228,7 @@ export class AdminSourcesService {
         after: { isActive: after.isActive, health: after.health },
       });
       return { source: toSourceView(after) };
-    });
+    }, LOCK_TX_OPTIONS);
   }
 
   /** Test taraması: kaynak başına dakikada 1 (Redis SET NX EX); aynı anda bekleyen/çalışan iş varsa 409. */
@@ -242,6 +246,7 @@ export class AdminSourcesService {
     let jobId: number;
     try {
       jobId = await this.prisma.$transaction(async (tx) => {
+        await boundLocks(tx);
         // Zamanlayıcı da aynı satır kilidini alır: iş oluşturma sıralanır.
         const [locked] = await tx.$queryRaw<{ id: number }[]>`SELECT id FROM "DataSource" WHERE id = ${id} FOR NO KEY UPDATE`;
         if (!locked) throw Errors.notFound();
@@ -253,7 +258,7 @@ export class AdminSourcesService {
         const job = await tx.collectionJob.create({ data: { sourceId: id, trigger: 'MANUAL', dryRun } });
         await this.audit.recordInTx(tx, ctx, { targetType: 'DataSource', targetId: String(id), before: null, after: { jobId: job.id, dryRun } });
         return job.id;
-      });
+      }, LOCK_TX_OPTIONS);
     } catch (err) {
       await this.redis.del(key).catch(() => undefined);
       throw err;

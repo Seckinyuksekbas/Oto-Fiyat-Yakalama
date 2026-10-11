@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -83,10 +84,8 @@ describe('password reset', () => {
     mail.outbox.length = 0;
     await http().post('/api/v1/auth/forgot-password').set(xhr).send({ email: 'two@test.com' });
     // E-posta başına 60 sn bekleme: ikinci isteği göndermeden önce bekleme anahtarını kaldır.
-    const redis = app.get(RedisService);
-    const cooldown = await redis.keys('auth:forgot:*');
-    expect(cooldown).toHaveLength(1);
-    await redis.del(...cooldown);
+    const cooldownKey = `auth:forgot:${createHash('sha256').update('two@test.com').digest('hex')}`;
+    expect(await app.get(RedisService).del(cooldownKey)).toBe(1);
     await http().post('/api/v1/auth/forgot-password').set(xhr).send({ email: 'two@test.com' });
     expect(mail.outbox).toHaveLength(2);
     const [first, second] = mail.outbox.map((m) => tokenFromMail(m.text));

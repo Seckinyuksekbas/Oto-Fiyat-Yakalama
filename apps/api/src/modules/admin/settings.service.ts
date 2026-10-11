@@ -15,7 +15,7 @@ import { AuditService } from '../../common/audit/audit.service';
 import { Errors } from '../../common/errors/app-error';
 import { PrismaService } from '../../infra/prisma.service';
 import { RedisService } from '../../infra/redis.service';
-import { LOCK_TX_OPTIONS } from '../../infra/tx-options';
+import { boundLocks, LOCK_TX_OPTIONS } from '../../infra/tx-options';
 
 /** Worker'lar (AnalysisSettingsService vb.) bu kanala abonedir; mesaj = değişen anahtar. */
 export { SETTINGS_CHANGED_CHANNEL };
@@ -88,6 +88,7 @@ export class AdminSettingsService {
     const unknown = Object.keys(patch).filter((k) => !allowed.has(k));
     if (unknown.length > 0) throw Errors.validation(unknown.map((k) => ({ path: `value.${k}`, message: 'Bilinmeyen alan' })));
     const out = await this.prisma.$transaction(async (tx) => {
+      await boundLocks(tx);
       // Okuma-birleştirme-yazma yarışını (eşzamanlı iki PATCH) anahtar başına danışma kilidiyle sıralar.
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`system-setting:${key}`}))`;
       const row = await tx.systemSetting.findUnique({ where: { key } });

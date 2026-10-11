@@ -13,6 +13,7 @@ import type { AuditCtx } from '../../common/audit/audit-ctx.decorator';
 import { AuditService } from '../../common/audit/audit.service';
 import { AppError, Errors } from '../../common/errors/app-error';
 import { PrismaService } from '../../infra/prisma.service';
+import { boundLocks, HEAVY_TX_OPTIONS, LOCK_TX_OPTIONS } from '../../infra/tx-options';
 import { RedisService } from '../../infra/redis.service';
 import type { AuthUser } from '../auth/auth-user';
 import { toPublicUser, type PublicUser } from '../auth/public-user';
@@ -121,17 +122,19 @@ export class AdminUsersService {
 
   async updateName(actor: AuthUser, ctx: AuditCtx, id: string, name: string): Promise<UserResult> {
     const updated = await this.prisma.$transaction(async (tx) => {
+      await boundLocks(tx);
       const { target } = await this.lock(tx, actor, id);
       if (target.name === name) return target;
       const after = await tx.user.update({ where: { id }, data: { name } });
       await this.audit.recordInTx(tx, ctx, { targetType: 'User', targetId: id, before: { name: target.name }, after: { name: after.name } });
       return after;
-    });
+    }, LOCK_TX_OPTIONS);
     return { user: toPublicUser(updated) };
   }
 
   async suspend(actor: AuthUser, ctx: AuditCtx, id: string): Promise<UserResult> {
     const updated = await this.prisma.$transaction(async (tx) => {
+      await boundLocks(tx);
       const { target, activeSupers } = await this.lock(tx, actor, id);
       if (target.id === actor.id) throw conflict('Kendi hesabınızı askıya alamazsınız');
       if (target.status === 'SUSPENDED') return target;
@@ -142,7 +145,7 @@ export class AdminUsersService {
       await tx.notification.updateMany({ where: { userId: id, status: 'PENDING' }, data: { status: 'FAILED', lastError: 'USER_INACTIVE' } });
       await this.audit.recordInTx(tx, ctx, { targetType: 'User', targetId: id, before: { status: target.status }, after: { status: after.status } });
       return after;
-    });
+    }, LOCK_TX_OPTIONS);
     // Oturum iptali commit sonrası ve no-op yolunda da çalışır (idempotent; başarısız iptal yeniden denenebilir).
     await this.sessions.revokeAllForUser(id).catch((err: unknown) => {
       this.logger.error(`Askıya alınan kullanıcının oturumları iptal edilemedi (${id}): ${err instanceof Error ? err.message : String(err)}`);
@@ -152,17 +155,19 @@ export class AdminUsersService {
 
   async activate(actor: AuthUser, ctx: AuditCtx, id: string): Promise<UserResult> {
     const updated = await this.prisma.$transaction(async (tx) => {
+      await boundLocks(tx);
       const { target } = await this.lock(tx, actor, id);
       if (target.status === 'ACTIVE') return target;
       const after = await tx.user.update({ where: { id }, data: { status: 'ACTIVE' } });
       await this.audit.recordInTx(tx, ctx, { targetType: 'User', targetId: id, before: { status: target.status }, after: { status: after.status } });
       return after;
-    });
+    }, LOCK_TX_OPTIONS);
     return { user: toPublicUser(updated) };
   }
 
   async changeRole(actor: AuthUser, ctx: AuditCtx, id: string, role: Role): Promise<UserResult> {
     const updated = await this.prisma.$transaction(async (tx) => {
+      await boundLocks(tx);
       const { target, activeSupers } = await this.lock(tx, actor, id);
       if (target.role === role) return target;
       if (target.id === actor.id) throw conflict('Kendi rolünüzü değiştiremezsiniz');
@@ -172,12 +177,13 @@ export class AdminUsersService {
       const after = await tx.user.update({ where: { id }, data: { role } });
       await this.audit.recordInTx(tx, ctx, { targetType: 'User', targetId: id, before: { role: target.role }, after: { role: after.role } });
       return after;
-    });
+    }, LOCK_TX_OPTIONS);
     return { user: toPublicUser(updated) };
   }
 
   async remove(actor: AuthUser, ctx: AuditCtx, id: string): Promise<UserResult> {
     const deleted = await this.prisma.$transaction(async (tx) => {
+      await boundLocks(tx, 'heavy');
       const { target, activeSupers } = await this.lock(tx, actor, id);
       if (target.id === actor.id) throw conflict('Kendi hesabınızı silemezsiniz');
       if (isLastActiveSuperAdmin(target, activeSupers)) {
@@ -192,7 +198,7 @@ export class AdminUsersService {
         after: { status: after.status },
       });
       return after;
-    });
+    }, HEAVY_TX_OPTIONS);
     return { user: toPublicUser(deleted) };
   }
 
@@ -245,6 +251,7 @@ export class AdminUsersService {
     const now = new Date();
     if (endsAt && endsAt <= now) throw Errors.validation([{ path: ['endsAt'], message: 'Bitiş tarihi gelecekte olmalı' }]);
     const out = await this.prisma.$transaction(async (tx) => {
+      await boundLocks(tx);
       const { target } = await this.lock(tx, actor, id);
       if (target.id === actor.id) throw conflict('Kendi aboneliğinizi değiştiremezsiniz');
       // Paket satırı FOR SHARE ile kilitlenir: eşzamanlı pasifleştirme (plans.update, FOR NO KEY UPDATE) ya önce commit
@@ -290,7 +297,7 @@ export class AdminUsersService {
         after: { planCode: after.planCode, status: after.status, endsAt, limitOverrides: input.limitOverrides, pausedProfiles: excess.length },
       });
       return { event, paused: excess.length, planCode: after.planCode };
-    });
+    }, LOCK_TX_OPTIONS);
     if (out.event) {
       await this.redis.publish(userEventChannel(id), JSON.stringify(out.event)).catch((err: unknown) => {
         this.logger.warn(`Bildirim yayınlanamadı: ${String(err)}`);

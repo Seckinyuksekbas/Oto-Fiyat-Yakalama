@@ -32,10 +32,16 @@ export class PasswordResetService {
   /**
    * Kullanıcının var olup olmadığını dışarı sızdırmaz; e-posta başına 60 sn'de bir gönderir.
    * Bekleme anahtarı e-postanın sha256'sıdır (Redis'te e-posta düz yazılmaz); bekleme sırasında da yanıt 204'tür.
+   * Redis hatasında fail-open: uyarı loglanır, mail yine gönderilir.
    */
   async request(email: string): Promise<void> {
     const key = `auth:forgot:${createHash('sha256').update(email.trim().toLowerCase()).digest('hex')}`;
-    if ((await this.redis.set(key, '1', 'EX', FORGOT_COOLDOWN_SEC, 'NX')) !== 'OK') return;
+    // Redis erişilemezse fail-open: bekleme uygulanmaz ama kullanıcı sıfırlama mailini yine alır (IP throttle sürer).
+    const acquired = await this.redis.set(key, '1', 'EX', FORGOT_COOLDOWN_SEC, 'NX').catch((err: unknown) => {
+      this.logger.warn(`Forgot-password cooldown unavailable, continuing: ${String(err)}`);
+      return 'OK' as const;
+    });
+    if (acquired !== 'OK') return;
     const user = await this.prisma.user.findUnique({ where: { email } });
     if (!user || user.status !== 'ACTIVE') return;
     const token = generateToken();

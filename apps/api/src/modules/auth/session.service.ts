@@ -62,7 +62,8 @@ export class SessionService {
     const now = new Date();
     const rotated = await this.prisma.$transaction(async (tx) => {
       const updated = await tx.session.updateMany({
-        where: { id: row.id, rotatedAt: null, revokedAt: null },
+        // Mutlak ömür burada da korunur (okuma ile rotasyon arasındaki pencere için).
+        where: { id: row.id, rotatedAt: null, revokedAt: null, familyStartedAt: { gt: new Date(now.getTime() - REFRESH_FAMILY_MAX_MS) } },
         data: { rotatedAt: now, revokedAt: now },
       });
       if (updated.count !== 1) return false;

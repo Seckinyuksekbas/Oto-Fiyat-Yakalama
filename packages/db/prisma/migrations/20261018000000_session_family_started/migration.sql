@@ -1,9 +1,11 @@
 -- Refresh ailesinin mutlak ömrü: ailenin başlangıcı rotasyonda taşınır.
 ALTER TABLE "Session" ADD COLUMN "familyStartedAt" TIMESTAMP(3);
 
--- Mevcut satırlar: ailenin en eski oturumunun createdAt değeri.
+-- Mevcut satırlar: ailenin en eski oturumunun createdAt değeri (küme tabanlı, aile başına tek MIN).
 UPDATE "Session" s
-SET "familyStartedAt" = (SELECT MIN(f."createdAt") FROM "Session" f WHERE f."familyId" = s."familyId");
+SET "familyStartedAt" = f."startedAt"
+FROM (SELECT "familyId", MIN("createdAt") AS "startedAt" FROM "Session" GROUP BY 1) f
+WHERE s."familyId" = f."familyId";
 
 ALTER TABLE "Session" ALTER COLUMN "familyStartedAt" SET NOT NULL,
 ALTER COLUMN "familyStartedAt" SET DEFAULT CURRENT_TIMESTAMP;
