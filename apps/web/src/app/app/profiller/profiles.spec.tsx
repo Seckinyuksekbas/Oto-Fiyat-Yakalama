@@ -1,4 +1,5 @@
-import { http, HttpResponse } from 'msw';
+import { delay, http, HttpResponse } from 'msw';
+import { previewSearchProfileSchema } from '@oto/shared';
 import userEvent from '@testing-library/user-event';
 import { screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -64,6 +65,7 @@ interface Setup {
 let previewBodies: unknown[] = [];
 let postBodies: unknown[] = [];
 let patchBodies: unknown[] = [];
+let previewInvalid: unknown[] = [];
 
 function mockApi(s: Setup = {}) {
   const { verified = true, max = 3, planChannels = ['IN_APP', 'TELEGRAM'], telegramLinked = true, telegramAvailable = true } = s;
@@ -88,7 +90,12 @@ function mockApi(s: Setup = {}) {
     http.get('*/api/v1/catalog/makes', () => HttpResponse.json({ items: [{ make: 'BMW', count: 10 }, { make: 'Audi', count: 4 }] })),
     http.get('*/api/v1/catalog/makes/:make/models', () => HttpResponse.json({ items: [{ model: '3 Serisi', count: 6 }] })),
     http.post('*/api/v1/me/search-profiles/preview', async ({ request }) => {
-      previewBodies.push(await request.json());
+      const body = await request.json();
+      previewBodies.push(body);
+      if (!previewSearchProfileSchema.safeParse(body).success) {
+        previewInvalid.push(body);
+        return HttpResponse.json({ error: { code: 'VALIDATION_FAILED', message: 'x' } }, { status: 400 });
+      }
       return HttpResponse.json({
         estimatedDailyMatches: 2.4,
         items: [
@@ -111,6 +118,7 @@ beforeEach(() => {
   previewBodies = [];
   postBodies = [];
   patchBodies = [];
+  previewInvalid = [];
   params = { id: 'p1' };
 });
 
@@ -157,6 +165,7 @@ describe('wizard: oluşturma', () => {
     await new Promise((r) => setTimeout(r, 700));
     expect(previewBodies).toHaveLength(2);
     expect(previewBodies[1]).toMatchObject({ kmMax: 123 });
+    expect(previewInvalid).toEqual([]);
   });
 
   it('LIMIT_REACHED (e-posta doğrulanmamış) uyarı gösterir ve form verisini korur', async () => {
@@ -223,7 +232,192 @@ describe('wizard: oluşturma', () => {
   });
 });
 
+describe('wizard: ek davranışlar', () => {
+  it('"Tüm yeni ilanlar" önizleme gövdesinde minConfidence göndermez', async () => {
+    mockApi();
+    const u = user();
+    renderWithClient(<NewProfilePage />);
+    await goStep(u, 2);
+    await u.click(await screen.findByRole('radio', { name: /tüm yeni ilanlar/i }));
+    await waitFor(() => expect(previewBodies.some((b) => (b as { minDiscountPct: number }).minDiscountPct === 0)).toBe(true), { timeout: 3000 });
+    const last = previewBodies[previewBodies.length - 1] as Record<string, unknown>;
+    expect(last).not.toHaveProperty('minConfidence');
+    expect(previewInvalid).toEqual([]);
+  });
+
+  it('adım değişince canlı bölgede duyurur ve başlığa odaklanır', async () => {
+    mockApi();
+    const u = user();
+    renderWithClient(<NewProfilePage />);
+    await u.click(await screen.findByRole('button', { name: /^devam$/i }));
+    expect(await screen.findByText('Adım 2/3: Fırsat ölçütü')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2, name: 'Fırsat ölçütü' })).toHaveFocus();
+  });
+
+  it('alan hatalarını canlı gösterir ve önizlemede aynı sebebi listeler', async () => {
+    mockApi();
+    const u = user();
+    renderWithClient(<NewProfilePage />);
+    const year = await screen.findByLabelText('En eski model yılı');
+    await u.type(year, '1900');
+    expect(await screen.findAllByText('Yıl 1950 ile 2100 arasında olmalı')).toHaveLength(2);
+    expect(year).toHaveAttribute('aria-describedby', 'pf-year-min-err');
+    expect(screen.getByText(/önizleme için işaretli alanları düzeltin/i)).toBeInTheDocument();
+  });
+
+  it('şehir taslağı alandan çıkınca eklenir', async () => {
+    mockApi();
+    server.use(
+      http.post('*/api/v1/me/search-profiles', async ({ request }) => {
+        postBodies.push(await request.json());
+        return HttpResponse.json(profile(), { status: 201 });
+      }),
+    );
+    const u = user();
+    renderWithClient(<NewProfilePage />);
+    await u.type(await screen.findByLabelText('Şehirler'), 'Ankara');
+    await goStep(u, 3);
+    await u.type(await screen.findByLabelText('Profil adı'), 'Şehirli');
+    await u.click(screen.getByRole('button', { name: /profili oluştur/i }));
+    await waitFor(() => expect(postBodies).toHaveLength(1));
+    expect(postBodies[0]).toMatchObject({ cities: ['Ankara'] });
+  });
+
+  it('fiyat düşüşü kapalıyken geçersiz eşik kaydı engellemez ve gönderilmez', async () => {
+    mockApi({ profiles: [profile()] });
+    server.use(
+      http.get('*/api/v1/me/search-profiles/p1', () => HttpResponse.json(profile())),
+      http.patch('*/api/v1/me/search-profiles/p1', async ({ request }) => {
+        patchBodies.push(await request.json());
+        return HttpResponse.json(profile({ notifyOnPriceDrop: false }));
+      }),
+    );
+    const u = user();
+    renderWithClient(<EditProfilePage />);
+    await goStep(u, 2);
+    const pct = await screen.findByLabelText('Düşüş eşiği (%)');
+    await u.clear(pct);
+    expect(await screen.findByText('Düşüş eşiği %1 ile %50 arasında olmalı')).toBeInTheDocument();
+    await u.click(screen.getByRole('switch', { name: /fiyat düşüşünde haber ver/i }));
+    expect(screen.queryByText('Düşüş eşiği %1 ile %50 arasında olmalı')).not.toBeInTheDocument();
+    await goStep(u, 2);
+    await u.click(await screen.findByRole('button', { name: /değişiklikleri kaydet/i }));
+    await waitFor(() => expect(patchBodies).toHaveLength(1));
+    expect(patchBodies[0]).toEqual({ notifyOnPriceDrop: false });
+  });
+
+  it('LIMIT_REACHED PLAN uyarısı yükseltme bağlantısı verir', async () => {
+    mockApi();
+    server.use(
+      http.post('*/api/v1/me/search-profiles', () =>
+        HttpResponse.json({ error: { code: 'LIMIT_REACHED', message: 'x', details: { limit: 3, reason: 'PLAN' } } }, { status: 403 }),
+      ),
+    );
+    const u = user();
+    renderWithClient(<NewProfilePage />);
+    await goStep(u, 3);
+    await u.type(await screen.findByLabelText('Profil adı'), 'X');
+    await u.click(screen.getByRole('button', { name: /profili oluştur/i }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/sınırına ulaştınız/i);
+    expect(within(alert).getByRole('link', { name: /planları gör/i })).toHaveAttribute('href', '/app/abonelik');
+    expect(screen.getByLabelText('Profil adı')).toHaveValue('X');
+  });
+
+  it('LIMIT_REACHED TELEGRAM kanal uyarısı gösterir', async () => {
+    mockApi();
+    server.use(
+      http.post('*/api/v1/me/search-profiles', () =>
+        HttpResponse.json({ error: { code: 'LIMIT_REACHED', message: 'x', details: { channel: 'TELEGRAM' } } }, { status: 403 }),
+      ),
+    );
+    const u = user();
+    renderWithClient(<NewProfilePage />);
+    await goStep(u, 3);
+    await u.type(await screen.findByLabelText('Profil adı'), 'X');
+    const tg = await screen.findByRole('switch', { name: /telegram/i });
+    await waitFor(() => expect(tg).toBeEnabled());
+    await u.click(tg);
+    await u.click(screen.getByRole('button', { name: /profili oluştur/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/telegram bildirimlerini içermiyor/i);
+    expect(screen.getByRole('switch', { name: /telegram/i })).toBeChecked();
+  });
+});
+
+describe('önizleme', () => {
+  it('hata olunca mesaj gösterir', async () => {
+    mockApi();
+    server.use(
+      http.post('*/api/v1/me/search-profiles/preview', () => HttpResponse.json({ error: { code: 'INTERNAL', message: 'x' } }, { status: 500 })),
+    );
+    renderWithClient(<NewProfilePage />);
+    expect(await screen.findByText(/bir sorun oluştu/i, undefined, { timeout: 3000 })).toBeInTheDocument();
+  });
+
+  it('sırasız dönen yanıt son ölçütün sonucunu ezmez', async () => {
+    mockApi();
+    let n = 0;
+    server.use(
+      http.post('*/api/v1/me/search-profiles/preview', async () => {
+        n++;
+        if (n === 1) {
+          await delay(1500);
+          return HttpResponse.json({ estimatedDailyMatches: 1.1, items: [] });
+        }
+        return HttpResponse.json({ estimatedDailyMatches: 9.9, items: [] });
+      }),
+    );
+    const u = user();
+    renderWithClient(<NewProfilePage />);
+    await u.type(await screen.findByLabelText('Azami km'), '5');
+    expect(await screen.findByText('~9,9', undefined, { timeout: 3000 })).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 1500));
+    expect(screen.getByText('~9,9')).toBeInTheDocument();
+    expect(screen.queryByText('~1,1')).not.toBeInTheDocument();
+  }, 10000);
+});
+
 describe('wizard: düzenleme', () => {
+  it('temizlenen alan için PATCH null gönderir', async () => {
+    mockApi({ profiles: [profile()] });
+    server.use(
+      http.get('*/api/v1/me/search-profiles/p1', () => HttpResponse.json(profile())),
+      http.patch('*/api/v1/me/search-profiles/p1', async ({ request }) => {
+        patchBodies.push(await request.json());
+        return HttpResponse.json(profile({ kmMax: null }));
+      }),
+    );
+    const u = user();
+    renderWithClient(<EditProfilePage />);
+    await u.clear(await screen.findByLabelText('Azami km'));
+    await goStep(u, 3);
+    await u.click(await screen.findByRole('button', { name: /değişiklikleri kaydet/i }));
+    await waitFor(() => expect(patchBodies).toHaveLength(1));
+    expect(patchBodies[0]).toEqual({ kmMax: null });
+  });
+
+  it('mod ve kanal değişimi yalnızca ilgili alanları gönderir', async () => {
+    mockApi({ profiles: [profile()] });
+    server.use(
+      http.get('*/api/v1/me/search-profiles/p1', () => HttpResponse.json(profile())),
+      http.patch('*/api/v1/me/search-profiles/p1', async ({ request }) => {
+        patchBodies.push(await request.json());
+        return HttpResponse.json(profile());
+      }),
+    );
+    const u = user();
+    renderWithClient(<EditProfilePage />);
+    await goStep(u, 2);
+    await u.click(await screen.findByRole('radio', { name: /tüm yeni ilanlar/i }));
+    await goStep(u, 2);
+    const tg = await screen.findByRole('switch', { name: /telegram/i });
+    await waitFor(() => expect(tg).toBeEnabled());
+    await u.click(tg);
+    await u.click(screen.getByRole('button', { name: /değişiklikleri kaydet/i }));
+    await waitFor(() => expect(patchBodies).toHaveLength(1));
+    expect(patchBodies[0]).toEqual({ minDiscountPct: 0, channels: ['IN_APP', 'TELEGRAM'] });
+  });
+
   it('PATCH yalnızca değişen alanları gönderir', async () => {
     mockApi({ profiles: [profile()] });
     server.use(
@@ -247,7 +441,7 @@ describe('wizard: düzenleme', () => {
 });
 
 describe('profil listesi', () => {
-  it('duraklatır ve sürdürme limiti dolunca mesaj gösterir', async () => {
+  it('duraklatır', async () => {
     mockApi({ profiles: [profile()] });
     const calls: string[] = [];
     server.use(

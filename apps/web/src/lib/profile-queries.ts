@@ -179,7 +179,7 @@ export function profileToForm(p: SearchProfile): ProfileFormState {
 
 /** Tam yük (oluşturma ve fark hesabı için). "Tüm yeni ilanlar" iken minDiscountPct = 0. */
 export function formToPayload(f: ProfileFormState): CreateSearchProfileInput {
-  return {
+  const out: CreateSearchProfileInput = {
     name: f.name.trim(),
     make: f.make.trim() || null,
     model: f.make.trim() ? f.model.trim() || null : null,
@@ -192,13 +192,15 @@ export function formToPayload(f: ProfileFormState): CreateSearchProfileInput {
     transmissions: f.transmissions,
     cities: f.cities,
     minDiscountPct: f.mode === 'ALL' ? 0 : fraction(f.discountPct),
-    minConfidence: f.minConfidence,
     excludeDamaged: f.excludeDamaged,
     notifyOnPriceDrop: f.notifyOnPriceDrop,
-    priceDropPct: fraction(f.priceDropPct),
     notifyOnRelist: f.notifyOnRelist,
     channels: f.telegram ? ['IN_APP', 'TELEGRAM'] : ['IN_APP'],
   };
+  // Güven yalnızca "Yalnızca fırsatlar" modunda anlamlı; eşik yalnızca düşüş bildirimi açıkken.
+  if (f.mode === 'DEALS') out.minConfidence = f.minConfidence;
+  if (f.notifyOnPriceDrop) out.priceDropPct = fraction(f.priceDropPct);
+  return out;
 }
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
@@ -232,7 +234,7 @@ export function formToPreview(f: ProfileFormState): PreviewSearchProfileInput {
     minDiscountPct: p.minDiscountPct,
     excludeDamaged: p.excludeDamaged,
   };
-  if (f.mode === 'DEALS') out.minConfidence = f.minConfidence;
+  if (p.minConfidence) out.minConfidence = p.minConfidence;
   return out;
 }
 
@@ -240,7 +242,27 @@ export function isPreviewable(p: PreviewSearchProfileInput): boolean {
   return previewSearchProfileSchema.safeParse(p).success;
 }
 
+/** Önizleme isteğini etkileyen alanlar (canlı hata listesi için). */
+export const PREVIEW_FIELDS = new Set([
+  'make', 'model', 'yearMin', 'yearMax', 'priceMin', 'priceMax', 'kmMax', 'fuels', 'transmissions', 'cities', 'minDiscountPct', 'minConfidence',
+]);
+
 export type FieldErrors = Partial<Record<string, string>>;
+
+const RANGE_MESSAGES: Record<string, string> = {
+  kmMax: 'Km 0 ile 2.000.000 arasında olmalı',
+  yearMin: 'Yıl 1950 ile 2100 arasında olmalı',
+  yearMax: 'Yıl 1950 ile 2100 arasında olmalı',
+  priceMin: 'Geçerli bir tutar girin',
+  priceMax: 'Geçerli bir tutar girin',
+  priceDropPct: 'Düşüş eşiği %1 ile %50 arasında olmalı',
+  minDiscountPct: 'İndirim %5 ile %50 arasında olmalı',
+};
+const CONSISTENCY_MESSAGES: Record<string, string> = {
+  model: 'Model seçmek için önce marka seçin',
+  yearMax: 'En yeni yıl, en eski yıldan küçük olamaz',
+  priceMax: 'En yüksek fiyat, en düşük fiyattan küçük olamaz',
+};
 
 /** İstemci tarafı tam doğrulama; sunucuyla aynı şema. */
 export function validatePayload(p: CreateSearchProfileInput): FieldErrors {
@@ -251,7 +273,8 @@ export function validatePayload(p: CreateSearchProfileInput): FieldErrors {
     for (const i of r.error.issues) {
       const key = String(i.path[0] ?? '');
       if (!key || key === 'name' || out[key]) continue;
-      out[key] = i.code === 'custom' ? i.message : 'Geçersiz değer';
+      out[key] =
+        i.code === 'custom' ? (CONSISTENCY_MESSAGES[key] ?? i.message) : (RANGE_MESSAGES[key] ?? 'Geçersiz değer');
     }
   }
   return out;
@@ -323,6 +346,7 @@ function useInvalidateProfiles() {
     void qc.invalidateQueries({ queryKey: profileKeys.all });
     void qc.invalidateQueries({ queryKey: ['search-profiles'] });
     void qc.invalidateQueries({ queryKey: queryKeys.me });
+    void qc.invalidateQueries({ queryKey: queryKeys.dashboard });
   };
 }
 

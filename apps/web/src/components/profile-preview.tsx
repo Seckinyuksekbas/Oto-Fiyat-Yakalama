@@ -34,10 +34,12 @@ function MiniCard({ item }: { item: PreviewItem }) {
 
 export interface ProfilePreviewProps {
   payload: PreviewSearchProfileInput;
+  /** Önizlemeyi engelleyen alan hataları (görünür alan hatalarıyla aynı metinler). */
+  problems?: string[];
   className?: string;
 }
 
-export function ProfilePreview({ payload, className }: ProfilePreviewProps) {
+export function ProfilePreview({ payload, problems = [], className }: ProfilePreviewProps) {
   const q = usePreview(payload);
   const data = q.data;
   const stale = q.settling || q.isFetching;
@@ -60,7 +62,16 @@ export function ProfilePreview({ payload, className }: ProfilePreviewProps) {
           ) : q.valid ? (
             <Skeleton className="h-8 w-40" />
           ) : (
-            <span className="text-sm text-warning-text">Önizleme için işaretli alanları düzeltin.</span>
+            <div className="text-sm text-warning-text">
+              <p>Önizleme için işaretli alanları düzeltin.</p>
+              {problems.length > 0 && (
+                <ul className="mt-1 list-disc pl-5">
+                  {problems.map((m) => (
+                    <li key={m}>{m}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
           )}
         </div>
         <p className="mt-3 text-xs leading-relaxed text-muted">
@@ -69,7 +80,7 @@ export function ProfilePreview({ payload, className }: ProfilePreviewProps) {
       </div>
 
       <div>
-        <h3 className="mb-2 text-sm font-medium">Son 20 eşleşecek ilan</h3>
+        <h2 className="mb-2 text-sm font-medium">Son 20 eşleşecek ilan</h2>
         {q.isError && !data ? (
           <p role="alert" className="text-sm text-danger-text">
             {apiErrorMessage(q.error)}

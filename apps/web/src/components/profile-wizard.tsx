@@ -1,5 +1,5 @@
 'use client';
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, ArrowRight, Check, TriangleAlert, X } from 'lucide-react';
@@ -23,6 +23,7 @@ import {
   formToPayload,
   formToPreview,
   limitNotice,
+  PREVIEW_FIELDS,
   profileToForm,
   useChannelsInfo,
   useCreateProfile,
@@ -44,6 +45,12 @@ const FIELD_STEP: Record<string, number> = {
 };
 
 const ANY = '__any';
+const FIELD_ID: Record<string, string> = {
+  make: 'pf-make', model: 'pf-model', yearMin: 'pf-year-min', yearMax: 'pf-year-max', kmMax: 'pf-km', cities: 'pf-city',
+  minDiscountPct: 'pf-discount', priceMin: 'pf-price-min', priceMax: 'pf-price-max', priceDropPct: 'pf-drop-pct', name: 'pf-name',
+};
+/** Hata varsa alanı hata metnine bağlar. */
+const dby = (id: string, error?: string) => (error ? { 'aria-describedby': `${id}-err`, 'aria-invalid': true as const } : {});
 const CONFIDENCE_OPTIONS = [
   ['LOW', 'Düşük'],
   ['MEDIUM', 'Orta'],
@@ -67,7 +74,7 @@ function Field({ label, htmlFor, error, hint, children, className }: {
       <Label htmlFor={htmlFor}>{label}</Label>
       {children}
       {error ? (
-        <p role="note" className="text-[13px] text-danger-text">{error}</p>
+        <p id={htmlFor ? `${htmlFor}-err` : undefined} aria-live="polite" className="text-[13px] text-danger-text">{error}</p>
       ) : hint ? (
         <p className="num text-xs text-muted">{hint}</p>
       ) : null}
@@ -126,6 +133,8 @@ function CityInput({ value, onChange, error }: { value: string[]; onChange: (v: 
           value={draft}
           placeholder="Örn. İstanbul"
           onChange={(e) => setDraft(e.target.value)}
+          onBlur={add}
+          {...dby('pf-city', error)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ',') {
               e.preventDefault();
@@ -232,7 +241,7 @@ function VehicleStep({ form, set, errors }: StepProps) {
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Marka" htmlFor="pf-make" error={errors.make}>
           <Select value={form.make || ANY} onValueChange={(v) => set({ make: v === ANY ? '' : v, model: '' })}>
-            <SelectTrigger id="pf-make" aria-invalid={!!errors.make}>
+            <SelectTrigger id="pf-make" {...dby('pf-make', errors.make)}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -245,7 +254,7 @@ function VehicleStep({ form, set, errors }: StepProps) {
         </Field>
         <Field label="Model" htmlFor="pf-model" error={errors.model} hint={!form.make ? 'Önce marka seçin.' : undefined}>
           <Select value={form.model || ANY} onValueChange={(v) => set({ model: v === ANY ? '' : v })} disabled={!form.make}>
-            <SelectTrigger id="pf-model" aria-invalid={!!errors.model}>
+            <SelectTrigger id="pf-model" {...dby('pf-model', errors.model)}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -260,15 +269,15 @@ function VehicleStep({ form, set, errors }: StepProps) {
 
       <div className="grid gap-4 sm:grid-cols-3">
         <Field label="En eski model yılı" htmlFor="pf-year-min" error={errors.yearMin}>
-          <Input id="pf-year-min" inputMode="numeric" maxLength={4} placeholder="2015" value={form.yearMin} aria-invalid={!!errors.yearMin}
+          <Input id="pf-year-min" inputMode="numeric" maxLength={4} placeholder="2015" value={form.yearMin} {...dby('pf-year-min', errors.yearMin)}
             onChange={(e) => set({ yearMin: digits(e.target.value) })} className="num" />
         </Field>
         <Field label="En yeni model yılı" htmlFor="pf-year-max" error={errors.yearMax}>
-          <Input id="pf-year-max" inputMode="numeric" maxLength={4} placeholder="2024" value={form.yearMax} aria-invalid={!!errors.yearMax}
+          <Input id="pf-year-max" inputMode="numeric" maxLength={4} placeholder="2024" value={form.yearMax} {...dby('pf-year-max', errors.yearMax)}
             onChange={(e) => set({ yearMax: digits(e.target.value) })} className="num" />
         </Field>
         <Field label="Azami km" htmlFor="pf-km" error={errors.kmMax}>
-          <Input id="pf-km" inputMode="numeric" maxLength={7} placeholder="150000" value={form.kmMax} aria-invalid={!!errors.kmMax}
+          <Input id="pf-km" inputMode="numeric" maxLength={7} placeholder="150000" value={form.kmMax} {...dby('pf-km', errors.kmMax)}
             onChange={(e) => set({ kmMax: digits(e.target.value) })} className="num" />
         </Field>
       </div>
@@ -314,13 +323,17 @@ function CriteriaStep({ form, set, errors }: StepProps) {
                 min={5}
                 max={50}
                 step={1}
-                value={form.discountPct}
+                value={Math.min(50, Math.max(5, form.discountPct))}
                 onChange={(e) => set({ discountPct: Number(e.target.value) })}
                 aria-valuetext={`yüzde ${form.discountPct}`}
+                {...dby('pf-discount', errors.minDiscountPct)}
                 className="h-2 flex-1 cursor-pointer accent-[var(--color-accent)]"
               />
               <output htmlFor="pf-discount" className="num w-16 text-right text-lg font-semibold text-accent">%{form.discountPct}</output>
             </div>
+            {(form.discountPct < 5 || form.discountPct > 50) && (
+              <p className="text-xs text-muted">Kayıtlı değer %{form.discountPct}; kaydırıcı %5 ile %50 arasında çalışır. Değiştirirseniz bu aralığa alınır.</p>
+            )}
           </Field>
           <div className="flex flex-col gap-2">
             <span id="pf-conf-label" className="text-sm font-medium">Minimum güven</span>
@@ -349,11 +362,11 @@ function CriteriaStep({ form, set, errors }: StepProps) {
 
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="En düşük fiyat (₺)" htmlFor="pf-price-min" error={errors.priceMin} hint={form.priceMin ? formatTl(digits(form.priceMin) || '0') : undefined}>
-          <Input id="pf-price-min" inputMode="numeric" value={form.priceMin} aria-invalid={!!errors.priceMin} className="num"
+          <Input id="pf-price-min" inputMode="numeric" value={form.priceMin} {...dby('pf-price-min', errors.priceMin)} className="num"
             onChange={(e) => set({ priceMin: digits(e.target.value) })} />
         </Field>
         <Field label="En yüksek fiyat (₺)" htmlFor="pf-price-max" error={errors.priceMax} hint={form.priceMax ? formatTl(digits(form.priceMax) || '0') : undefined}>
-          <Input id="pf-price-max" inputMode="numeric" value={form.priceMax} aria-invalid={!!errors.priceMax} className="num"
+          <Input id="pf-price-max" inputMode="numeric" value={form.priceMax} {...dby('pf-price-max', errors.priceMax)} className="num"
             onChange={(e) => set({ priceMax: digits(e.target.value) })} />
         </Field>
       </div>
@@ -365,7 +378,7 @@ function CriteriaStep({ form, set, errors }: StepProps) {
           checked={form.notifyOnPriceDrop} onChange={(v) => set({ notifyOnPriceDrop: v })}>
           {form.notifyOnPriceDrop && (
             <Field label="Düşüş eşiği (%)" htmlFor="pf-drop-pct" error={errors.priceDropPct} className="max-w-[10rem]">
-              <Input id="pf-drop-pct" type="number" min={1} max={50} value={form.priceDropPct} aria-invalid={!!errors.priceDropPct} className="num"
+              <Input id="pf-drop-pct" type="number" min={1} max={50} value={form.priceDropPct} {...dby('pf-drop-pct', errors.priceDropPct)} className="num"
                 onChange={(e) => set({ priceDropPct: Number(e.target.value) })} />
             </Field>
           )}
@@ -404,7 +417,7 @@ function ChannelsStep({ form, set, errors }: StepProps) {
   return (
     <div className="flex flex-col gap-6">
       <Field label="Profil adı" htmlFor="pf-name" error={errors.name}>
-        <Input id="pf-name" value={form.name} maxLength={60} aria-invalid={!!errors.name} placeholder="Örn. İstanbul dizel BMW"
+        <Input id="pf-name" value={form.name} maxLength={60} {...dby('pf-name', errors.name)} placeholder="Örn. İstanbul dizel BMW"
           onChange={(e) => set({ name: e.target.value })} />
       </Field>
       <div className="divide-y divide-border rounded-lg border border-border bg-surface px-4">
@@ -433,6 +446,11 @@ export function ProfileWizard({ profile }: ProfileWizardProps) {
   const [errors, setErrors] = useState<FieldErrors>({});
   const [notice, setNotice] = useState<LimitNotice | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const alertRef = useRef<HTMLDivElement>(null);
+  const focusField = useRef<string | null>(null);
+  const [focusTick, setFocusTick] = useState(0);
+  const mounted = useRef(false);
 
   const create = useCreateProfile();
   const update = useUpdateProfile(profile?.id ?? '');
@@ -454,12 +472,39 @@ export function ProfileWizard({ profile }: ProfileWizardProps) {
 
   const goTo = (n: number) => {
     if (n === 2 && !form.name.trim() && form.make) {
-      setForm((f) => ({ ...f, name: `${f.make} ${f.model}`.trim() }));
+      setForm((f) => ({ ...f, name: `${f.make} ${f.model}`.trim().slice(0, 60) }));
     }
     setStep(n);
   };
 
   const preview = useMemo(() => formToPreview(form), [form]);
+  // Canlı doğrulama: ad hatası yalnızca gönderimde gösterilir.
+  const live = useMemo(() => {
+    const e = validatePayload(formToPayload(form));
+    delete e.name;
+    return e;
+  }, [form]);
+  const shown: FieldErrors = { ...live, ...errors };
+  const problems = Object.entries(live).filter(([k]) => PREVIEW_FIELDS.has(k)).map(([, m]) => m as string);
+
+  const requestFocus = (field?: string) => {
+    focusField.current = field ?? null;
+    setFocusTick((t) => t + 1);
+  };
+
+  // Adım değişince başlığa, hata varsa ilk geçersiz alana (yoksa uyarıya) odaklan.
+  useEffect(() => {
+    if (!mounted.current) {
+      mounted.current = true;
+      return;
+    }
+    const target = focusField.current;
+    focusField.current = null;
+    const el = target && FIELD_ID[target] ? document.getElementById(FIELD_ID[target]) : null;
+    if (el) el.focus();
+    else if (target && alertRef.current) alertRef.current.focus();
+    else headingRef.current?.focus();
+  }, [step, focusTick]);
 
   const fail = (err: unknown) => {
     setNotice(null);
@@ -470,14 +515,17 @@ export function ProfileWizard({ profile }: ProfileWizardProps) {
       const first = Object.keys(fe)[0];
       if (first !== undefined && FIELD_STEP[first] !== undefined) setStep(FIELD_STEP[first]);
       setFailure('Girdiğiniz bilgileri kontrol edin.');
+      requestFocus(first ?? '__alert');
       return;
     }
     const ln = limitNotice(err);
     if (ln) {
       setNotice(ln);
+      requestFocus('__alert');
       return;
     }
     setFailure(apiErrorMessage(err));
+    requestFocus('__alert');
   };
 
   const submit = () => {
@@ -487,9 +535,10 @@ export function ProfileWizard({ profile }: ProfileWizardProps) {
     const fe = validatePayload(payload);
     if (Object.keys(fe).length > 0) {
       setErrors(fe);
-      const first = Math.min(...Object.keys(fe).map((k) => FIELD_STEP[k] ?? 2));
-      setStep(first);
+      const firstKey = Object.keys(fe).sort((a, b) => (FIELD_STEP[a] ?? 2) - (FIELD_STEP[b] ?? 2))[0];
+      setStep(FIELD_STEP[firstKey ?? ''] ?? 2);
       setFailure('Girdiğiniz bilgileri kontrol edin.');
+      requestFocus(firstKey ?? '__alert');
       return;
     }
     if (profile) {
@@ -517,7 +566,7 @@ export function ProfileWizard({ profile }: ProfileWizardProps) {
     }
   };
 
-  const stepProps: StepProps = { form, set, errors };
+  const stepProps: StepProps = { form, set, errors: shown };
 
   return (
     <div className="mx-auto flex w-full max-w-[1180px] flex-col gap-6">
@@ -559,7 +608,7 @@ export function ProfileWizard({ profile }: ProfileWizardProps) {
           </ol>
 
           {notice && (
-            <div role="alert" className="flex items-start gap-3 rounded-lg border border-warning/50 bg-warning/10 p-4 text-sm">
+            <div ref={alertRef} tabIndex={-1} role="alert" className="flex items-start gap-3 rounded-lg border border-warning/50 bg-warning/10 p-4 text-sm">
               <TriangleAlert aria-hidden className="mt-0.5 size-4 shrink-0 text-warning-text" />
               <div className="flex min-w-0 flex-col gap-2">
                 <p>{notice.message}</p>
@@ -569,11 +618,13 @@ export function ProfileWizard({ profile }: ProfileWizardProps) {
             </div>
           )}
           {failure && !notice && (
-            <p role="alert" className="rounded-lg border border-danger/50 bg-danger/10 p-3 text-sm text-danger-text">{failure}</p>
+            <div ref={alertRef} tabIndex={-1} role="alert" className="rounded-lg border border-danger/50 bg-danger/10 p-3 text-sm text-danger-text">{failure}</div>
           )}
 
           <fieldset className="min-w-0 border-0 p-0">
             <legend className="sr-only">{STEPS[step]}</legend>
+            <h2 ref={headingRef} tabIndex={-1} className="mb-4 font-display text-lg font-semibold outline-offset-4">{STEPS[step]}</h2>
+            <p role="status" className="sr-only">{`Adım ${step + 1}/${STEPS.length}: ${STEPS[step]}`}</p>
             {step === 0 && <VehicleStep {...stepProps} />}
             {step === 1 && <CriteriaStep {...stepProps} />}
             {step === 2 && <ChannelsStep {...stepProps} />}
@@ -596,7 +647,7 @@ export function ProfileWizard({ profile }: ProfileWizardProps) {
         </form>
 
         <aside className="min-w-0 lg:sticky lg:top-6">
-          <ProfilePreview payload={preview} />
+          <ProfilePreview payload={preview} problems={problems} />
         </aside>
       </div>
     </div>

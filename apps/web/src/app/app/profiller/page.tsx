@@ -134,7 +134,7 @@ export default function ProfilesPage() {
   const { limits } = useProfileLimits();
   const setStatus = useSetProfileStatus();
   const del = useDeleteProfile();
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ message: string; href: string; cta: string } | null>(null);
   const [target, setTarget] = useState<SearchProfile | null>(null);
   const [pendingId, setPendingId] = useState<string | null>(null);
 
@@ -147,7 +147,8 @@ export default function ProfilesPage() {
       { id: p.id, active },
       {
         onSuccess: () => toast.success(active ? 'Profil sürdürüldü' : 'Profil duraklatıldı'),
-        onError: (err) => setNotice(limitNotice(err)?.message ?? apiErrorMessage(err)),
+        onError: (err) =>
+          setNotice(limitNotice(err) ?? { message: apiErrorMessage(err), href: '/app/abonelik', cta: 'Planları gör' }),
         onSettled: () => setPendingId(null),
       },
     );
@@ -168,8 +169,8 @@ export default function ProfilesPage() {
 
       {notice && (
         <p role="alert" className="rounded-lg border border-warning/50 bg-warning/10 p-3 text-sm">
-          {notice}{' '}
-          <Link href="/app/abonelik" className="font-medium text-accent underline underline-offset-2">Planları gör</Link>
+          {notice.message}{' '}
+          <Link href={notice.href} className="font-medium text-accent underline underline-offset-2">{notice.cta}</Link>
         </p>
       )}
 
@@ -194,7 +195,10 @@ export default function ProfilesPage() {
       ) : (
         <ul className="grid gap-3 md:grid-cols-2">
           {items.map((p) => (
-            <ProfileCard key={p.id} p={p} pending={pendingId === p.id} onToggle={(a) => toggle(p, a)} onDelete={() => setTarget(p)} />
+            <ProfileCard key={p.id} p={p} pending={pendingId === p.id} onToggle={(a) => toggle(p, a)} onDelete={() => {
+                del.reset();
+                setTarget(p);
+              }} />
           ))}
         </ul>
       )}
