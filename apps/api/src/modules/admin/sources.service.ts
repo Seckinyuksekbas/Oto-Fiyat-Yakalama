@@ -10,6 +10,7 @@ import { PrismaService } from '../../infra/prisma.service';
 import { boundLocks, LOCK_TX_OPTIONS } from '../../infra/tx-options';
 import { RedisService } from '../../infra/redis.service';
 import { ALLOW_PRIVATE_URLS } from './admin.tokens';
+import { MaskedSecretMissingError, maskConfigSecrets, mergeMaskedConfig } from './config-mask';
 
 export type StatsRange = '24h' | '7d' | '30d';
 const RANGE_MS: Record<StatsRange, number> = { '24h': 86_400_000, '7d': 7 * 86_400_000, '30d': 30 * 86_400_000 };
@@ -20,15 +21,27 @@ export { scrapeQueueJobId };
 
 const conflict = (msg: string) => new AppError(ErrorCode.INVALID_OPERATION, 409, msg);
 const badRequest = (msg: string) => new AppError(ErrorCode.VALIDATION_FAILED, 400, msg);
+const BLOCK_PAUSED_MSG = 'Kaynak engel sinyali nedeniyle duraklatılmış; önce nedeni inceleyip etkinleştirin';
+
+/** Anahtar sırasından bağımsız JSON eşitliği (jsonb anahtarları yeniden sıralar; sıra farkı değişiklik değildir). */
+const canonical = (v: unknown): string =>
+  JSON.stringify(v, (_k, x: unknown) =>
+    x && typeof x === 'object' && !Array.isArray(x) && !(x instanceof Date)
+      ? Object.fromEntries(Object.keys(x as object).sort().map((k) => [k, (x as Record<string, unknown>)[k]]))
+      : x,
+  );
+const sameJson = (a: unknown, b: unknown) => canonical(a) === canonical(b);
 
 const istanbulDay = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul' }).format(d);
 
-/** config.baseUrl sorgu dizisi (olası token) yanıt ve denetim kaydında maskelenir. */
+/**
+ * Yanıt ve denetim kaydı (before/after) için config maskesi: gizli adlı anahtarlar (`config-mask.ts`) `"***"`,
+ * `baseUrl`'in sorgu dizisi (olası token) `?…` olur.
+ */
 function maskConfig(config: unknown): unknown {
-  if (config && typeof config === 'object' && !Array.isArray(config) && typeof (config as { baseUrl?: unknown }).baseUrl === 'string') {
-    return { ...(config as Record<string, unknown>), baseUrl: maskUrlQuery((config as { baseUrl: string }).baseUrl) };
-  }
-  return config;
+  if (!config || typeof config !== 'object' || Array.isArray(config)) return config;
+  const masked = maskConfigSecrets(config as Record<string, unknown>);
+  return typeof masked.baseUrl === 'string' ? { ...masked, baseUrl: maskUrlQuery(masked.baseUrl) } : masked;
 }
 
 export function toSourceView(s: DataSource) {
@@ -165,10 +178,20 @@ export class AdminSourcesService {
       if (!locked) throw Errors.notFound();
       const before = await tx.dataSource.findUniqueOrThrow({ where: { id } });
       const { permissionVerified, ...rest } = input;
+      if (rest.config) {
+        // "***" gelen gizli alanlar saklı değeri korur; karşılığı yoksa 400.
+        try {
+          rest.config = mergeMaskedConfig(before.config, rest.config) as typeof rest.config;
+        } catch (err) {
+          if (err instanceof MaskedSecretMissingError) throw badRequest(err.message);
+          throw err;
+        }
+        if (Buffer.byteLength(JSON.stringify(rest.config)) > 4096) throw badRequest('config 4 KB sınırını aşıyor');
+      }
       const data: Prisma.DataSourceUncheckedUpdateInput = {};
       for (const [k, v] of Object.entries(rest)) {
         if (v === undefined) continue;
-        if (JSON.stringify((before as Record<string, unknown>)[k]) !== JSON.stringify(v)) (data as Record<string, unknown>)[k] = v;
+        if (!sameJson((before as Record<string, unknown>)[k], v)) (data as Record<string, unknown>)[k] = v;
       }
       if (permissionVerified === true && !before.permissionVerifiedAt) data.permissionVerifiedAt = new Date();
       if (permissionVerified === false && before.permissionVerifiedAt) {
@@ -180,7 +203,7 @@ export class AdminSourcesService {
       const after = await tx.dataSource.update({ where: { id }, data });
       const b = snap(toSourceView(before));
       const a = snap(toSourceView(after));
-      const keys = AUDIT_FIELDS.filter((k) => JSON.stringify((before as Record<string, unknown>)[k]) !== JSON.stringify((after as Record<string, unknown>)[k]));
+      const keys = AUDIT_FIELDS.filter((k) => !sameJson((before as Record<string, unknown>)[k], (after as Record<string, unknown>)[k]));
       await this.audit.recordInTx(tx, ctx, {
         targetType: 'DataSource',
         targetId: String(id),
@@ -219,8 +242,9 @@ export class AdminSourcesService {
       const [locked] = await tx.$queryRaw<{ id: number }[]>`SELECT id FROM "DataSource" WHERE id = ${id} FOR NO KEY UPDATE`;
       if (!locked) throw Errors.notFound();
       const before = await tx.dataSource.findUniqueOrThrow({ where: { id } });
-      if (!before.isActive && before.health === 'PAUSED') return { source: toSourceView(before) };
-      const after = await tx.dataSource.update({ where: { id }, data: { isActive: false, health: 'PAUSED' } });
+      // Yönetici duraklatması yalnızca zamanlamayı kapatır; sağlık (engel kaynaklı PAUSED dahil) olduğu gibi kalır.
+      if (!before.isActive) return { source: toSourceView(before) };
+      const after = await tx.dataSource.update({ where: { id }, data: { isActive: false } });
       await this.audit.recordInTx(tx, ctx, {
         targetType: 'DataSource',
         targetId: String(id),
@@ -236,8 +260,9 @@ export class AdminSourcesService {
     const source = await this.requireSource(id);
     if (!source.permissionVerifiedAt) throw conflict('İzin doğrulanmadan test taraması yapılamaz');
     if (!ADAPTER_KEYS.includes(source.adapterKey)) throw conflict(`Bilinmeyen adapter: ${source.adapterKey}`);
-    // Engel/duraklatma sinyali: dry-run bile olsa duraklatılmış kaynağa istek atılmaz (önce neden incelenip etkinleştirilmeli).
-    if (source.health === 'PAUSED') throw conflict('Kaynak engel/duraklatma nedeniyle durdurulmuş; önce nedeni inceleyip etkinleştirin');
+    // Engel sinyali (health=PAUSED): dry-run bile olsa kaynağa istek atılmaz (önce neden incelenip etkinleştirilmeli).
+    // Yönetici duraklatması (yalnız isActive=false) dry-run'ı engellemez.
+    if (source.health === 'PAUSED') throw conflict(BLOCK_PAUSED_MSG);
     // Gerçek (kayıt yazan) tarama yalnızca etkin kaynakta; etkin olmayan kaynakta yalnızca dry-run.
     if (!dryRun && !source.isActive) throw conflict('Etkin olmayan kaynakta yalnızca dry-run test taraması yapılabilir');
     const key = testScrapeKey(id);
@@ -251,7 +276,7 @@ export class AdminSourcesService {
         const [locked] = await tx.$queryRaw<{ id: number }[]>`SELECT id FROM "DataSource" WHERE id = ${id} FOR NO KEY UPDATE`;
         if (!locked) throw Errors.notFound();
         const fresh = await tx.dataSource.findUniqueOrThrow({ where: { id }, select: { isActive: true, health: true } });
-        if (fresh.health === 'PAUSED') throw conflict('Kaynak engel/duraklatma nedeniyle durdurulmuş; önce nedeni inceleyip etkinleştirin');
+        if (fresh.health === 'PAUSED') throw conflict(BLOCK_PAUSED_MSG);
         if (!dryRun && !fresh.isActive) throw conflict('Etkin olmayan kaynakta yalnızca dry-run test taraması yapılabilir');
         const busy = await tx.collectionJob.findFirst({ where: { sourceId: id, status: { in: ['QUEUED', 'RUNNING'] } }, select: { id: true } });
         if (busy) throw conflict('Bu kaynak için devam eden bir iş var');

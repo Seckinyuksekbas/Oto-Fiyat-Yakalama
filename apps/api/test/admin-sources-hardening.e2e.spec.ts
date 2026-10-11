@@ -1,5 +1,5 @@
 import { createServer, type Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import { connect, type AddressInfo, type Socket } from 'node:net';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { PrismaService } from '../src/infra/prisma.service';
@@ -94,6 +94,50 @@ describe('proxy hardening', () => {
     expect(again.body.error.code).toBe('RATE_LIMITED');
     expect((await agent.post(`${api}/proxies/${b}/check`)).status).toBe(200);
     expect(await audits('proxy.check')).toHaveLength(2);
+  });
+
+  it('a URL change while a check is in flight: the old URL result is not written and no proxy.check audit is created', async () => {
+    // Yavaş sahte CONNECT proxy: tüneli ancak `release()` sonrasında kurar (kontrol bu sırada sürüyor).
+    let connected!: () => void;
+    const gotConnect = new Promise<void>((r) => (connected = r));
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const slow = createServer((_q, res) => res.writeHead(405).end());
+    slow.on('connect', (req, client: Socket, head: Buffer) => {
+      connected();
+      void gate.then(() => {
+        const [host, p] = (req.url ?? '').split(':');
+        const up = connect(Number(p), host, () => {
+          client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+          if (head.length) up.write(head);
+          up.pipe(client);
+          client.pipe(up);
+        });
+        up.on('error', () => client.destroy());
+        client.on('error', () => up.destroy());
+      });
+    });
+    await new Promise<void>((r) => slow.listen(0, '127.0.0.1', r));
+    try {
+      const { agent } = await admin();
+      const created = await agent.post(`${api}/proxies`).send({ name: 'Yavaş', url: `http://127.0.0.1:${port(slow)}`, isEnabled: true });
+      const id = created.body.proxy.id as number;
+      const checking = agent.post(`${api}/proxies/${id}/check`).then((r) => r);
+      await gotConnect;
+      const patched = await agent.patch(`${api}/proxies/${id}`).send({ url: 'http://127.0.0.1:9' });
+      expect(patched.status).toBe(200);
+      release();
+      const res = await checking;
+      expect(res.status).toBe(200);
+      expect(res.body.proxy).toMatchObject({ lastCheckAt: null, lastLatencyMs: null, lastError: null });
+      expect(await prisma.proxyConfig.findUniqueOrThrow({ where: { id } })).toMatchObject({ lastCheckAt: null, lastLatencyMs: null, lastError: null });
+      expect(await audits('proxy.check')).toHaveLength(0);
+      expect(await audits('proxy.update')).toHaveLength(1);
+    } finally {
+      release();
+      slow.closeAllConnections();
+      await new Promise<void>((r) => slow.close(() => r()));
+    }
   });
 
   it('shows a placeholder when a stored proxy URL cannot be decrypted', async () => {

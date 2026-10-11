@@ -131,7 +131,7 @@ describe('GET /admin/overview', () => {
       opportunities: { count: 2 },
       notifications: { sentToday: 3, failedToday: 1, skippedLimitToday: 2 },
       queues: { scrape: 1, analyze: 0, match: 0, notify: 3, 'notify-telegram': 0 },
-      sources: [{ id: src.id, code: 'test-src', health: 'HEALTHY', lastSuccessAt: null }],
+      sources: [{ id: src.id, code: 'test-src', health: 'HEALTHY', isActive: false, lastSuccessAt: null }],
       workers: { alive: 1, dead: 1 },
       latency: { p50: 300, p95: 880 },
     });

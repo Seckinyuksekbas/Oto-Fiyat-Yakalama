@@ -203,6 +203,29 @@ describe('admin overview', () => {
     expect(within(health).getByText('Çalışmıyor')).toBeInTheDocument();
   });
 
+  it('source health tells an admin pause from a block pause', async () => {
+    server.use(
+      meHandler('ADMIN'),
+      overviewHandler({
+        sources: [
+          { id: 1, code: 'durdurulan', health: 'HEALTHY', isActive: false, lastSuccessAt: null },
+          { id: 2, code: 'engelli', health: 'PAUSED', isActive: true, lastSuccessAt: null },
+        ],
+      }),
+      logsHandler(),
+    );
+    renderWithClient(
+      <AdminLayoutClient>
+        <AdminOverviewView />
+      </AdminLayoutClient>,
+    );
+    const health = await screen.findByRole('region', { name: 'Kaynak sağlığı' });
+    const stopped = within(health).getByText('durdurulan').closest('li') as HTMLElement;
+    expect(within(stopped).getByText('Duraklatıldı (yönetici)')).toBeInTheDocument();
+    const blocked = within(health).getByText('engelli').closest('li') as HTMLElement;
+    expect(within(blocked).getByText('Engel nedeniyle duraklatıldı')).toBeInTheDocument();
+  });
+
   it('stream alert shows a toast and is prepended to the recent alerts list; kpi updates tiles', async () => {
     server.use(
       meHandler('ADMIN'),

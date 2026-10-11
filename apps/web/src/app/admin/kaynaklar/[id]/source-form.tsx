@@ -130,6 +130,22 @@ function Field({ id, label, error, hint, children, className }: { id: string; la
 const isMaskedConfig = (c: unknown) =>
   !!c && typeof c === 'object' && typeof (c as { baseUrl?: unknown }).baseUrl === 'string' && (c as { baseUrl: string }).baseUrl.includes(MASK_MARK);
 
+/**
+ * API, adı gizli görünen config anahtarlarını (key/token/secret/pass/auth) `"***"` olarak döndürür. `"***"` olduğu gibi
+ * geri gönderilebilir: sunucu saklı değeri korur. Yalnızca değiştirilecek gizli değer yeniden yazılır.
+ */
+export const SECRET_MASK = '***';
+export const MASKED_SECRET_HINT = '*** olarak görünen gizli değerleri değiştirmek için yeni değeri yazın';
+export const hasMaskedSecret = (c: unknown): boolean =>
+  c === SECRET_MASK || (!!c && typeof c === 'object' && Object.values(c as Record<string, unknown>).some(hasMaskedSecret));
+
+function configHint(config: unknown): string {
+  const base = isMaskedConfig(config)
+    ? 'Kayıtlı baseUrl’in sorgu dizisi (?…) güvenlik için gizli. Yapılandırmayı değiştirecekseniz tam adresi yeniden yazın; dokunmazsanız sunucudaki değer korunur.'
+    : 'baseUrl zorunlu, yalnızca http(s), en fazla 4 KB. Adresteki #parça yanıtta gösterilmez; yapılandırmayı değiştirirken varsa adresi #parçasıyla yeniden yazın.';
+  return hasMaskedSecret(config) ? `${base} ${MASKED_SECRET_HINT}; dokunmadığınız *** değerler sunucuda korunur.` : base;
+}
+
 /** Servis içi 400 (ayrıntısız) mesajını ilgili alana bağlar: adapter, proxy, aksi halde SSRF → config. */
 function serverFieldFor(message: string, body: AdminSourceUpdate): keyof FormState | null {
   if (message.startsWith('Bilinmeyen adapter')) return 'adapterKey';
@@ -316,11 +332,7 @@ export function SourceForm({ source, proxies, proxiesError = false, onSaved }: S
         id={fid('config')}
         label="Yapılandırma (JSON)"
         error={errors.config}
-        hint={
-          isMaskedConfig(source.config)
-            ? 'Kayıtlı baseUrl’in sorgu dizisi (?…) güvenlik için gizli. Yapılandırmayı değiştirecekseniz tam adresi yeniden yazın; dokunmazsanız sunucudaki değer korunur.'
-            : 'baseUrl zorunlu, yalnızca http(s), en fazla 4 KB. Adresteki #parça yanıtta gösterilmez; yapılandırmayı değiştirirken varsa adresi #parçasıyla yeniden yazın.'
-        }
+        hint={configHint(source.config)}
         className="border-t border-border pt-4"
       >
         <textarea

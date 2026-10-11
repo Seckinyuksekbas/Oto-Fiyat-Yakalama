@@ -10,7 +10,7 @@ import { useSourceAction } from '@/lib/admin/catalog-queries';
 
 export const PERMISSION_MISSING = 'İzin doğrulanmadı: kaynak, izin notu doğrulanıp kaydedilmeden etkinleştirilemez.';
 
-/** Kaynak duraklatılmış sayılır: zamanlayıcı dışı (`isActive=false`) ya da engel/duraklatma sağlığı. */
+/** Kaynak çalışmıyor sayılır: yönetici duraklatması (`isActive=false`) ya da engel (`health=PAUSED`); ikisinde de Etkinleştir gösterilir. */
 export function isRunning(s: Pick<AdminSource, 'isActive' | 'health'>): boolean {
   return s.isActive && s.health !== 'PAUSED';
 }
@@ -52,7 +52,7 @@ export function SourceToggle({ source, size = 'sm' }: { source: AdminSource; siz
         open={confirmPause}
         onOpenChange={setConfirmPause}
         title={`${source.name} duraklatılsın mı?`}
-        description="Zamanlanmış taramalar durur; mevcut ilanlar yerinde kalır. Yeniden etkinleştirince ardışık hata sayacı sıfırlanır."
+        description="Zamanlanmış taramalar durur; mevcut ilanlar ve kaynağın sağlık durumu olduğu gibi kalır. Duraklatılmış kaynakta test taraması (dry-run) yapılabilir."
         confirmLabel="Duraklat"
         onConfirm={async () => {
           await action.mutateAsync('pause');

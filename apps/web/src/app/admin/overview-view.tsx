@@ -1,8 +1,8 @@
 'use client';
 import Link from 'next/link';
 import { BellOff } from 'lucide-react';
+import { SourceStatusBadges } from '@/components/admin/catalog/source-status';
 import { KpiGrid, KpiTile, formatCount, formatDurationMs } from '@/components/admin/kpi-tile';
-import { StatusBadge } from '@/components/admin/status-badge';
 import { EmptyState } from '@/components/empty-state';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -68,7 +68,9 @@ function SourceCard({ s }: { s: AdminSourceHealth }) {
         <Link href={`/admin/kaynaklar/${s.id}`} className="min-w-0 truncate font-medium hover:text-accent">
           {s.code}
         </Link>
-        <StatusBadge status={s.health} />
+        <div className="flex flex-wrap justify-end gap-1.5">
+          <SourceStatusBadges source={s} />
+        </div>
       </div>
       <p className="text-[13px] text-muted">
         {s.lastSuccessAt ? (

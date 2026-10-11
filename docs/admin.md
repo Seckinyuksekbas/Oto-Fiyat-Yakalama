@@ -91,16 +91,20 @@ Yöneticilerin kullanıcıları, abonelikleri, ilanları/analizleri, veri kaynak
    - `config.baseUrl` kayıtta SSRF denetiminden geçer (bkz. [SSRF kuralları](#ssrf-kuralları)).
    - `adapterKey` paylaşılan `ADAPTER_KEYS` listesinden olmalıdır.
    - Yanıtlarda `config.baseUrl`'in sorgu dizisi maskelenir.
+   - **Gizli config anahtarları:** adı `/(key|token|secret|pass(word)?|auth)/i` ile eşleşen anahtarların string/sayı değerleri iç içe nesne ve dizilerde de liste/detay yanıtlarında ve denetim kaydının `before`/`after` alanlarında `"***"` olarak döner (`apps/api/src/modules/admin/config-mask.ts`). `PATCH` config'i bütün olarak değiştirir; gizli alanda `"***"` gönderilirse aynı yoldaki saklı değer korunur, yeni değer yazılırsa saklanır. Saklı karşılığı olmayan `"***"` 400 `VALIDATION_FAILED` döner. Anahtar sırası farkı değişiklik sayılmaz (no-op, denetim satırı yok). Panelde config düzenleyicisi `"***"` değerleri olduğu gibi geri gönderebilir: "*** olarak görünen gizli değerleri değiştirmek için yeni değeri yazın".
 3. **Test taraması** (`POST /admin/sources/:id/test-scrape {dryRun}`): `CollectionJob(trigger MANUAL, dryRun)` ve `scrape` işi oluşturur. Kaynak başına dakikada 1 (429), kaynakta bekleyen/çalışan iş varsa 409.
-   - Dry-run etkin olmayan (duraklatılmamış) kaynakta da çalışır. Gerçek tarama (`dryRun: false`) yalnızca etkin kaynakta yapılabilir; etkin olmayan kaynakta 409 `INVALID_OPERATION`.
+   - Dry-run etkin olmayan kaynakta da (yönetici duraklatması dahil) çalışır. Gerçek tarama (`dryRun: false`) yalnızca etkin kaynakta yapılabilir; etkin olmayan kaynakta 409 `INVALID_OPERATION`.
    - Dry-run gerçek taramayla **aynı nezaket ve robots kurallarına** uyar: robots.txt, paylaşılan hız limiti, `minRequestGapMs`, bot User-Agent.
    - Ingest, kaldırma işaretleme ve analiz yapmaz. En fazla 2 liste sayfası çekilir; ilk 20 normalize ilan ve sorun listesi `CollectionJob.dryRunResult` alanına yazılır.
-   - **PAUSED kaynakta reddedilir** (409). Engel sinyalinin nedeni incelenmeden kaynağa istek atılmaz.
+   - **Engel kaynaklı `health=PAUSED` kaynakta reddedilir** (API 409, worker işi FAILED). Engel sinyalinin nedeni incelenmeden kaynağa istek atılmaz.
    - Dry-run sırasında engel sinyali (403/captcha) gelirse kaynak **PAUSED olur** ve alarm üretilir; gerçek taramadaki davranışın aynısıdır.
    - Dry-run zamanlayıcı aralığını **sıfırlamaz**: scheduler "son tarama" hesabında dry-run işlerini yok sayar.
-4. **Etkinleştir** (`POST /admin/sources/:id/activate`): `permissionVerifiedAt` zorunludur. PAUSED kaynakta health `HEALTHY` ve `consecutiveFailures=0` olur. İşlem kaynak satır kilidi (`FOR NO KEY UPDATE`) altında yapılır; scheduler da aynı kilidi alır ve uygunluğu kilit altında yeniden okur.
+4. **Etkinleştir** (`POST /admin/sources/:id/activate`): `permissionVerifiedAt` zorunludur. Engel kaynaklı PAUSED kaynakta health `HEALTHY` ve `consecutiveFailures=0` olur; diğer sağlık değerleri (DEGRADED/DOWN) olduğu gibi kalır. İşlem kaynak satır kilidi (`FOR NO KEY UPDATE`) altında yapılır; scheduler da aynı kilidi alır ve uygunluğu kilit altında yeniden okur.
 5. **İzleme:** sağlık güncellemeleri (`SourceHealthService`) de aynı `FOR NO KEY UPDATE` satır kilidiyle oku-değiştir-yaz yapar; eşzamanlı bir admin `activate`/`pause` eski okunan durumla ezilmez. Hata metinleri (`ScrapeError.message`, `CollectionJob.errorSummary`, SystemLog bağlamı) yazım anında `redactSecrets` ile maskelenir (her `şema://` için kullanıcı bilgisi ve sorgu dizisi); okuma tarafındaki maskeleme ek savunmadır. `GET /admin/sources/:id/stats` (iş/hata istatistikleri), `/admin/isler` (toplama işleri, hata özetleri). `ScrapeError.url` ve iş özetlerindeki URL'lerin sorgu dizisi `?…` olarak maskelenir; bu her şema için geçerlidir. Alarmlar için bkz. [Alarmlar ve eşikler](#alarmlar-ve-eşikler).
-6. **Duraklat** (`POST /admin/sources/:id/pause`): `isActive=false`, `health=PAUSED`. Yöneticinin duraklattığı kaynak alarm üretmez; monitör yalnızca etkin olup DOWN/engel-PAUSED olan kaynakları raporlar.
+6. **Duraklat** (`POST /admin/sources/:id/pause`): yalnız `isActive=false` yazar; `health` ve `consecutiveFailures` **değişmez** (denetim `before`/`after`: `{isActive, health}`). Zaten etkin olmayan kaynakta no-op.
+   - **Yönetici duraklatması** (`isActive=false`, `health≠PAUSED`): scheduler atlar, dry-run çalışır, monitör alarm üretmez. Panel rozeti: "Duraklatıldı (yönetici)".
+   - **Engel** (`health=PAUSED`, `SourceHealthService` yazar): dry-run ve test taraması 409; kaynak etkinse monitör `source:<id>:blocked` alarmı verir. Panel rozeti: "Engel nedeniyle duraklatıldı". Engelli kaynağı duraklatmak engeli silmez; yalnız `activate` sıfırlar.
+   - **Plan 07 verisi:** Plan 07'de duraklat ayrıca `health=PAUSED` yazıyordu. `20261019000000_admin_pause_health_restore` göçü, son duraklat/etkinleştir denetim satırı `source.pause` olan, `before.health` değeri engel olmayan ve duraklatmadan sonra hata görmemiş (`lastErrorAt` ≤ denetim zamanı) etkin olmayan PAUSED kaynakları duraklatma öncesi sağlığa döndürür. Ayırt edilemeyen PAUSED satırlar (denetim satırı yok ya da sonradan hata var) engel kabul edilir ve olduğu gibi kalır; yönetici nedeni inceleyip `activate` ile açar.
 7. **Yeniden aç:** engelin nedeni ve izin kontrol edildikten sonra `activate`.
 
 ### Proxy'ler
@@ -153,7 +157,7 @@ Kaynak `config.baseUrl` ve proxy URL'leri admin girdisidir. İki katmanda denetl
 | Anahtar | Koşul | Seviye |
 |---|---|---|
 | `source:<id>:down` | Etkin kaynak DOWN (6 ardışık hata) | ERROR (kalıcı) |
-| `source:<id>:blocked` | Etkin kaynak engel sinyaliyle PAUSED | ERROR (kalıcı) |
+| `source:<id>:blocked` | Etkin kaynak engel sinyaliyle PAUSED (yönetici duraklattığı, `isActive=false` kaynaklar alarm üretmez) | ERROR (kalıcı) |
 | `source:<id>:degraded` | 3 ardışık hata (tarama sırasında) | WARN |
 | `source:<id>:parse` | Monitör: son 1 saatte biten işlerde PARSE hatası / sayfa > `parserErrorRate` (en az 20 sayfa). Tarama yolu: tek işte ilanların > %20'si ayrıştırılamadı ya da sayfa yapısı tanınmadı. Aynı sorun (bozulan ayrıştırıcı) olduğundan iki yol tek anahtarı paylaşır | WARN |
 | `queue:notify:depth` | `notify` + `notify-telegram` bekleyen > `notifyQueueDepth` | WARN |

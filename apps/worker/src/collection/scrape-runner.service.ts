@@ -252,7 +252,8 @@ export class ScrapeRunner {
   /**
    * Dry-run: liste sayfalarını aynı politika kurallarıyla (robots, aralık, proxy) çeker, ayrıştırıp normalize eder;
    * ingest, kaldırma, analiz, ScrapeError ve kaynak sağlığı DEĞİŞTİRİLMEZ. En fazla DRY_RUN_MAX_PAGES sayfa.
-   * Kaynak etkin olmasa da çalışır, ancak izin doğrulaması (permissionVerifiedAt) zorunludur.
+   * Kaynak etkin olmasa da (yönetici duraklatması yalnız isActive=false yazar) çalışır; izin doğrulaması (permissionVerifiedAt)
+   * zorunludur ve engel kaynaklı `health=PAUSED` reddedilir.
    */
   private async runDry(
     job: { id: number; sourceId: number },
