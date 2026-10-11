@@ -158,6 +158,8 @@ Kaynak `config.baseUrl` ve proxy URL'leri admin girdisidir. İki katmanda denetl
 
 ## Alarmlar ve eşikler
 
+Nöbetçi runbook'u (her alarm için müdahale adımları): [operations/alarms.md](operations/alarms.md).
+
 `MonitorService` scheduler adımı olarak en fazla `MONITOR_INTERVAL_MS` (varsayılan 60 sn) aralıkla çalışır. Eşikler `alerts.thresholds` ayarından **her monitör adımında** okunur; ayar değişikliği worker yeniden başlatılmadan etkili olur.
 
 | Anahtar | Koşul | Seviye |
@@ -171,6 +173,7 @@ Kaynak `config.baseUrl` ve proxy URL'leri admin girdisidir. İki katmanda denetl
 | `worker:<host>:<pid>:lost` | Görülmüş ama nabzı `heartbeatMissSec`'ten eski worker | ERROR |
 | `telegram:unauthorized` | Telegram Bot API 401 | ERROR |
 | `match-dispatch-stuck:<id>` | Analiz 10 denemede eşleştirme kuyruğuna alınamadı | ERROR |
+| `source:<id>:mass-removal` | Tam taramada kaldırma adayı sayısı güvenlik sınırını aştı; toplu kaldırma atlandı (tarama yolu) | WARN |
 
 - **Varsayılan eşikler:** `{ notifyQueueDepth: 500, notifyFailureRate: 0.10, parserErrorRate: 0.2, heartbeatMissSec: 60 }`.
 - **Susturma:** anahtar başına 30 dk (`alert:<key>` NX). Koşul sürdükçe SystemLog satırı da çoğalmaz (`alert-log:<key>`).
@@ -223,7 +226,7 @@ Kaynak `config.baseUrl` ve proxy URL'leri admin girdisidir. İki katmanda denetl
 - `GET /admin/audit-logs`: aktör, aksiyon, hedef ve tarih süzgeçleri.
 - `GET /admin/system-logs`: seviye, bileşen ve tarih süzgeçleri, sınırlı aralık.
 
-Saklama süreleri Plan 08'dedir (SystemLog/ScrapeError 30 gün, AuditLog 1 yıl, bildirimler 90 gün).
+Saklama süreleri (SystemLog/ScrapeError/ListingIssue 30 gün, AuditLog 1 yıl, bildirimler 90 gün, analizler 90 gün; eşleşmelerin referansladığı analizler korunur): [operations/security.md](operations/security.md#saklama-süreleri).
 
 ## Yapılandırma
 

@@ -76,13 +76,7 @@ Akış **15 dk sonra sunucu tarafından kapatılır**; istemci yeniden bağlanı
 1. Telegram'da **@BotFather** ile `/newbot`; bot token'ını ve kullanıcı adını alın.
 2. Ortam değişkenleri: `TELEGRAM_BOT_TOKEN` (API ve worker); API'de ayrıca `TELEGRAM_BOT_USERNAME` (token varken zorunlu), `TELEGRAM_MODE` (`polling` | `webhook`), `TELEGRAM_WEBHOOK_SECRET` (webhook modunda zorunlu, 32-256 karakter `[A-Za-z0-9_-]`), isteğe bağlı `TELEGRAM_API_BASE`. Token yoksa bağlama 503 döner ve TELEGRAM bildirimi planlanmaz. **Token hem API'de hem worker'da ayarlı olmalıdır:** worker'da yoksa planlayıcı TELEGRAM satırı üretmez (yalnızca IN_APP), API'de yoksa bağlama yapılamaz. Üretimde `TELEGRAM_API_BASE` (worker dahil) https olmalıdır.
 3. **Geliştirme:** `TELEGRAM_MODE=polling` — API içinde `getUpdates` döngüsü çalışır (409 çakışmasında 30 sn bekler).
-4. **Üretim:** `TELEGRAM_MODE=webhook` ve webhook'u bir kez kurun:
-
-```bash
-curl -X POST https://api.telegram.org/bot<TOKEN>/setWebhook \
-  -d url=https://<alan>/api/v1/telegram/webhook \
-  -d secret_token=<SECRET>
-```
+4. **Üretim:** `TELEGRAM_MODE=webhook` kullanın (production'da zorunludur) ve webhook'u `pnpm telegram:webhook set` (`scripts/telegram-webhook.mjs`) ile kurun. Script `allowed_updates` listesine `my_chat_member`'ı da ekler; bu güncelleme bot engellendiğinde kanalı kapatmak için gereklidir. Elle `curl setWebhook` çağrısı bu listeyi atlarsa engelleme algılanmaz. Kurulum, secret ve token rotasyonu ile hata davranışı: [operations/telegram-bot.md](operations/telegram-bot.md).
 
 Uç nokta `X-Telegram-Bot-Api-Secret-Token` başlığını sabit-zamanlı karşılaştırır; uyuşmazsa 401.
 

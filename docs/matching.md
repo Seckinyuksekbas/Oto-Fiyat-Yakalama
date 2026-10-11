@@ -94,7 +94,7 @@ Yalnızca kullanıcının kendi eşleşmeleri; en yeni önce (id azalan), cursor
 
 ## Çalıştırma
 
-`MatchWorkerHost` `ROLE=worker` süreçte `match` kuyruğunu `MATCH_CONCURRENCY` (varsayılan 4) paralellikle tüketir; bozuk payload `UnrecoverableError`dır. Her eşzamanlı iş bir transaction (bağlantı) tutar: `DATABASE_URL` içindeki `connection_limit`, `SCRAPE_CONCURRENCY + ANALYZE_CONCURRENCY + MATCH_CONCURRENCY` toplamından ve biraz payla büyük olmalıdır.
+`MatchWorkerHost` `ROLE=worker` süreçte `match` kuyruğunu `MATCH_CONCURRENCY` (varsayılan 4) paralellikle tüketir; bozuk payload `UnrecoverableError`dır. Her eşzamanlı iş bir transaction (bağlantı) tutar. Bu yüzden worker'da `DATABASE_URL` içindeki `connection_limit` en az `SCRAPE + ANALYZE + MATCH + NOTIFY_CONCURRENCY + 5 (notify-telegram) + 3` olmalıdır; varsayılanlarla bu değer 26'dır. Scheduler için en az 3 yeterlidir. Production'da değer eksik ya da düşükse süreç başlamaz. Postgres toplam bütçesi: [operations/deploy.md](operations/deploy.md#connection_limit-hesabı).
 
 ## Plan 05'e bırakılanlar
 
