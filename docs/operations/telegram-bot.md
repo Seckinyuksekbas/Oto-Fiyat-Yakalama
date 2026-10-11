@@ -10,9 +10,9 @@ Bildirim akışı, mesaj şablonu ve bağlama akışı [docs/notifications.md](.
 | `TELEGRAM_BOT_USERNAME` | token varken zorunlu (deep link) | — | — |
 | `TELEGRAM_MODE` | production'da `webhook` zorunlu | — | — |
 | `TELEGRAM_WEBHOOK_SECRET` | webhook modunda zorunlu | — | — |
-| `TELEGRAM_API_BASE` | isteğe bağlı, production'da https | isteğe bağlı, production'da https | — |
+| `TELEGRAM_API_BASE` | isteğe bağlı, production'da https | isteğe bağlı, production'da https | hayır (compose aktarmaz; varsayılanı vardır, kullanılmaz) |
 
-**Token hem api'de hem worker'da olmalıdır.** Compose ikisine de aynı `.env.prod` değerini aktarır; scheduler'a aktarmaz. Biri eksikse sorun sessizce ortaya çıkar:
+**Token hem api'de hem worker'da olmalıdır.** Compose ikisine de aynı `.env.prod` değerini (ve varsa `TELEGRAM_API_BASE`'i) aktarır; scheduler'a ikisini de aktarmaz. Biri eksikse sorun sessizce ortaya çıkar:
 
 - **api'de yoksa:** bağlama 503 `FEATURE_DISABLED` döner. Panelde `telegramAvailable=false` görünür.
 - **worker'da yoksa:** kullanıcılar bağlanabilir ama planlayıcı TELEGRAM satırı üretmez, yani yalnızca IN_APP bildirim gider. Gönderim anında token yoksa sonuç `FAILED (TELEGRAM_DISABLED)` olur. Production worker'ı bu durumda açılışta bir `warn` logu ve bir `SystemLog` WARN satırı (bileşen `telegram`) yazar. Bu satırı Admin → Sistem logları ekranında görebilirsiniz.
@@ -31,7 +31,7 @@ Bildirim akışı, mesaj şablonu ve bağlama akışı [docs/notifications.md](.
    Secret 32–256 karakter `[A-Za-z0-9_-]` olmalıdır. api ve script aynı kuralı uygular.
 3. api ve worker'ı yeniden oluşturun: `dc up -d --wait api worker`. `dc` takma adı için bkz. [deploy.md](deploy.md#kabuk-hijyeni-ve-sır-ifşası).
 4. Webhook'u kurun (aşağıya bakın).
-5. Doğrulama: panelde Ayarlar → "Telegram'ı bağla" adımını izleyin ve deep link ile `/start` gönderin. Bot "✅ … hesabı bağlandı" yanıtını vermelidir.
+5. Doğrulama: panelde Ayarlar → "Telegram'ı bağla" adımını izleyin ve deep link ile `/start` gönderin. Bot `✅ <maskelenmiş e-posta> hesabı bağlandı. Eşleşen fırsatlar artık buraya gelecek.` yanıtını vermelidir.
 
 ## Webhook yönetimi: `pnpm telegram:webhook set|info|delete`
 
@@ -68,7 +68,7 @@ Geliştirme makinesinde `pnpm telegram:webhook <komut>` aynı scripti çalışt�
 - **Bağlama (`/start <kod>`) hataları:**
   - **Geçici** DB hataları (bağlantı, zaman aşımı, kilit; Prisma `P1001`, `P1002`, `P1008`, `P1017`, `P2024`, `P2028`, `P2034`, başlatma hataları ve ağ kodları) yeniden fırlatılır. Webhook 500 döner, Telegram yeniden dener ve kullanıcıya "kod geçersiz" **denmez**.
   - **Kalıcı** hatalar (doğrulama hatası, diğer kodlar) bir kez loglanır. Kullanıcıya genel bir hata yanıtı verilir ve yeniden deneme zorlanmaz.
-  - Kod yok, kullanılmış ya da süresi dolmuşsa, ya da hesap aktif veya doğrulanmış değilse bot "Bağlantı kodu geçersiz veya süresi dolmuş" yanıtını verir.
+  - Kod yok, kullanılmış ya da süresi dolmuşsa, ya da hesap aktif veya doğrulanmış değilse bot `Bağlantı kodu geçersiz veya süresi dolmuş. Panelden yeni bir kod oluşturun.` yanıtını verir.
 - **Gönderim (worker):** 401 olursa `telegram:unauthorized` alarmı üretilir ([alarms.md](alarms.md)). 403 ya da "chat not found" durumunda kanal kapatılır ve kullanıcıya `TELEGRAM_DISABLED` güvenlik bildirimi gider. Ayrıntılar: [notifications.md](../notifications.md#kalıcı-hatalar-ve-kanal-kapatma).
 
 ## Webhook secret rotasyonu

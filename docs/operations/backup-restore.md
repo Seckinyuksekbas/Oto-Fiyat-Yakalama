@@ -22,7 +22,7 @@ dc() { env -i HOME="$HOME" PATH="$PATH" docker compose --env-file .env.prod "$@"
 
 ### Bir gecelik çalıştırmanın akışı (`backup.sh`)
 
-1. `/backups/.lock` üzerinde dışlayıcı bir `flock` alınır. Başka bir yedek ya da geri yükleme testi sürüyorsa çalıştırma **atlanır**: script çıkış 1 verir ve logda "bu çalıştırma atlandı" yazar. Bu durumda `.last-status` değişmez.
+1. `/backups/.lock` üzerinde dışlayıcı bir `flock` alınır. Başka bir yedek ya da geri yükleme testi sürüyorsa çalıştırma **atlanır**: script çıkış 1 verir ve logda `HATA: başka bir yedek ya da geri yükleme testi çalışıyor (/backups/.lock tutuluyor); bu çalıştırma atlandı` satırı görünür. Bu durumda `.last-status` değişmez.
 2. Tek bir `psql` oturumu `REPEATABLE READ` salt-okunur bir transaction açar, `pg_export_snapshot()` çağırır ve **aynı anlık görüntüde** sayımları okur. Okunan sayımlar `_prisma_migrations` (toplam ve bitmemiş), `User`, `Listing` ve `ListingAnalysis` tablolarınındır. `pg_dump --snapshot` tam olarak bu anlık görüntüden döker. Sonuçta `oto-<ts>.counts` manifesti dump ile birebir tutarlıdır.
 3. Dump `pg_dump -Fc` ile önce `.partial` dosyasına yazılır. Dosyanın boş olmadığı ve `pg_restore --list` ile okunabildiği doğrulanır. Ardından manifest ve dump atomik `mv` ile `daily/` altına taşınır.
 4. Haftalık gün ise dosyalar `weekly/` altına hardlink'lenir (hardlink olmazsa kopyalanır).
@@ -112,7 +112,7 @@ unset RESTORE_PGPASSWORD
 - Değersiz `-e RESTORE_PGPASSWORD` değeri compose'u çalıştıran süreçten alır. `dc` takma adı `env -i` ile ortamı temizlediği için parolayı yukarıdaki gibi açıkça aktarın. `RESTORE_PGHOST` verildiğinde kaynak sunucunun parolası test sunucusuna **gönderilmez**.
 - Test sunucusu `backup` konteynerinden erişilebilir olmalıdır. Konteyner yalnızca `backend` ağındadır, bu yüzden test sunucusunu da aynı ağda çalışan geçici bir konteyner olarak kurmak en kolay yoldur. Örnek: `docker run -d --rm --name restoredb --network <proje>_backend -e POSTGRES_PASSWORD=... postgres:16-alpine`, ardından `RESTORE_PGHOST=restoredb` kullanın. Bu yöntem `scripts/backup-restore-check.sh` ile aynıdır.
 - Hedef kaynakla aynı sunucuysa (bu `system_identifier` ile tespit edilir) script `RESTORE_TEST_ON_PROD=1` olmadan **çıkış 2** verir. Üretim sunucusunda test yalnızca yoğun olmayan saatte ve açık onayla yapılır: `dc exec -u postgres -e RESTORE_TEST_ON_PROD=1 backup restore-test.sh`.
-- **03:00 yedeğiyle çakıştırmayın.** Test sırasında yedek kilidi paylaşımlı tutulur. O sırada başlayan gece yedeği **atlanır**: çıkış 1 olur ve logda "atlandı" görünür. Test bittikten sonra `dc exec -u postgres backup backup.sh` ile eksik yedeği alın. Yedek sürerken başlatılan test ise kilidi en fazla `RESTORE_TEST_LOCK_WAIT` (600) sn bekler.
+- **03:00 yedeğiyle çakıştırmayın.** Test sırasında yedek kilidi paylaşımlı tutulur. O sırada başlayan gece yedeği **atlanır**: çıkış 1 olur ve logda `...; bu çalıştırma atlandı` ile biten `HATA:` satırı görünür. Test bittikten sonra `dc exec -u postgres backup backup.sh` ile eksik yedeği alın. Yedek sürerken başlatılan test ise kilidi en fazla `RESTORE_TEST_LOCK_WAIT` (600) sn bekler.
 - Çıkış kodları: `0` doğrulandı, `1` başarısız (boş, bozuk ya da kesik dump, geri yükleme hatası, manifest yok ya da sayılar uyuşmuyor), `2` hedef üretim sunucusu ve onay yok.
 - Manifesti olmayan eski dump'lar yalnızca `RESTORE_TEST_LIVE_COMPARE=1` ile canlı veritabanının o anki sayılarıyla karşılaştırılır. Bu karşılaştırma canlı yazmalar yüzünden yanlış alarm verebilir.
 

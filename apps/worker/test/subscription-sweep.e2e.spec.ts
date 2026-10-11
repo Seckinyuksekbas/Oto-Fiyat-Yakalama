@@ -6,6 +6,7 @@ import { RedisService } from '../src/infra/redis.service';
 import { maxSearchProfilesFor } from '@oto/db';
 import { SchedulerModule } from '../src/scheduler/scheduler.module';
 import { SUBSCRIPTION_SWEEP_RETRY_SEC, SubscriptionSweepService } from '../src/scheduler/subscription-sweep.service';
+import { LOCK_TX_OPTIONS } from '../src/infra/tx-options';
 import { createContext, createProfile, createUser, resetState } from './helpers';
 
 let ref: TestingModule;
@@ -152,6 +153,36 @@ describe('SubscriptionSweepService', () => {
     expect(await prisma.searchProfile.count({ where: { userId: bad.id, status: 'PAUSED' } })).toBe(2);
     expect(await prisma.notification.count({ where: { userId: good.id } })).toBe(1); // çift bildirim yok
   });
+
+  it('bounds the per-user transaction: LOCK_TX_OPTIONS + lock_timeout, so a held user row lock fails fast instead of hanging', async () => {
+    const u = await createUser(ref, { emailVerifiedAt: new Date('2026-01-01T00:00:00Z') });
+    await subscribe(u.id, 'PRO', new Date('2026-10-11T00:00:00Z'));
+    const txSpy = vi.spyOn(prisma, '$transaction');
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let locked!: () => void;
+    const isLocked = new Promise<void>((resolve) => (locked = resolve));
+    // Başka bir oturum kullanıcı satırını 15 sn tutar (ör. uzun süren profil oluşturma).
+    const holder = prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${u.id} FOR UPDATE`;
+        locked();
+        await Promise.race([released, new Promise((r) => setTimeout(r, 15_000))]);
+      },
+      { maxWait: 5_000, timeout: 30_000 },
+    );
+    await isLocked;
+    const started = Date.now();
+    try {
+      await expect(sweep.run(NOW)).rejects.toThrow('1 kullanıcıda');
+      expect(Date.now() - started).toBeLessThan(9_000); // lock_timeout 5 sn; sınırsız olsaydı tutucuyu (15 sn) beklerdi
+    } finally {
+      release();
+      await holder;
+    }
+    expect(txSpy).toHaveBeenCalledWith(expect.any(Function), LOCK_TX_OPTIONS);
+    expect(await prisma.userSubscription.count({ where: { userId: u.id, status: 'EXPIRED' } })).toBe(0); // geri alındı
+  }, 30_000);
 
   it('repairs a user whose subscription was already EXPIRED but whose profiles are still over the limit', async () => {
     const u = await createUser(ref, { emailVerifiedAt: new Date('2026-01-01T00:00:00Z') });

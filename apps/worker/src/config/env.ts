@@ -16,9 +16,10 @@ export const envSchema = z
     SCHEDULER_TICK_MS: z.coerce.number().int().min(1000).default(15_000),
     /**
      * Kapanışta aktif işlerin bitmesi için beklenen süre; aşılırsa worker zorla kapatılır.
-     * En fazla 40 sn: zorla kapatma payı (5 sn) eklenince compose `stop_grace_period: 45s` içinde kalır (aksi halde SIGKILL).
+     * En fazla 38 sn: zorla kapatma payı (5 sn) ve bağlantı kapatma (Redis/Prisma, ~2 sn) eklenince compose
+     * `stop_grace_period: 45s` içinde kalır (aksi halde SIGKILL).
      */
-    SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(1000).max(40_000).default(30_000),
+    SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(1000).max(38_000).default(30_000),
     /** Alarm izlemesi (MonitorService) en fazla bu aralıkla çalışır; scheduler tick'inden bağımsız. */
     MONITOR_INTERVAL_MS: z.coerce.number().int().min(1000).default(60_000),
     SCRAPE_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(2),

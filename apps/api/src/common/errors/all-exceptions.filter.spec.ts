@@ -104,12 +104,18 @@ describe('AllExceptionsFilter', () => {
     ['model query lock_timeout (UnknownRequestError)', () => modelFailed('55P03', 'canceling statement due to lock timeout')],
     ['model query statement_timeout (UnknownRequestError)', () => modelFailed('57014', 'canceling statement due to statement timeout')],
     ['P2024 pool timeout', () => new Prisma.PrismaClientKnownRequestError('Timed out fetching a new connection from the connection pool', { code: 'P2024', clientVersion: '6.19.3' })],
+    ['P2034 write conflict / deadlock', () => new Prisma.PrismaClientKnownRequestError('Transaction failed due to a write conflict or a deadlock. Please retry your transaction', { code: 'P2034', clientVersion: '6.19.3' })],
+    ['P2010 deadlock (40P01)', () => rawFailed('40P01', 'deadlock detected')],
+    ['P2010 serialization failure (40001)', () => rawFailed('40001', 'could not serialize access due to concurrent update')],
+    ['P2010 deadlock without meta.code (message fallback)', () => rawFailed('40P01', 'deadlock detected', false)],
+    ['model query deadlock (UnknownRequestError)', () => modelFailed('40P01', 'deadlock detected')],
+    ['model query serialization failure (UnknownRequestError)', () => modelFailed('40001', 'could not serialize access due to concurrent update')],
   ])('maps %s to 503 SERVICE_BUSY with Retry-After and a route-tagged warn', (_name, make) => {
     const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
     const { status, body, headers } = run(make());
     expect(status).toBe(503);
     expect(body).toEqual({ error: { code: 'SERVICE_BUSY', message: expect.any(String) } });
-    expect(JSON.stringify(body)).not.toMatch(/55P03|57014|timeout|ConnectorError/);
+    expect(JSON.stringify(body)).not.toMatch(/55P03|57014|40P01|40001|timeout|deadlock|ConnectorError/);
     expect(headers['retry-after']).toBe('5');
     expect(warn).toHaveBeenCalledWith(expect.objectContaining({ requestId: 'req-1', route: 'POST /api/v1/me/search-profiles' }), expect.any(String));
   });

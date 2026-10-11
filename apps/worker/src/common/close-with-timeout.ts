@@ -24,7 +24,10 @@ function within(promise: Promise<void>, ms: number): Promise<Outcome> {
   return Promise.race([settled, timeout]).finally(() => clearTimeout(timer));
 }
 
-/** Zorla kapatma için üst sınır: kapanışın toplamı SHUTDOWN_TIMEOUT_MS (en fazla 40 sn) + 5 sn ≤ compose stop_grace_period 45 sn. */
+/**
+ * Zorla kapatma için üst sınır: SHUTDOWN_TIMEOUT_MS (en fazla 38 sn) + 5 sn + bağlantı kapatma payı (~2 sn)
+ * ≤ compose stop_grace_period 45 sn.
+ */
 export const FORCE_CLOSE_BOUND_MS = 5000;
 
 const describeError = (err: unknown) => (err instanceof Error ? err.message : String(err));

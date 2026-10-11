@@ -77,7 +77,7 @@ Token iptal edilmiş ya da yanlıştır. BotFather'dan token'ı kontrol edin, `.
 Admin → İlanlar/analizler → "Takılı eşleştirme gönderimleri" (`GET /admin/match-dispatches/stuck`). Önce nedeni bulun; çoğunlukla Redis erişimidir. Ardından `reset` ile sayacı sıfırlayıp yeniden gönderin. Bu işlem denetim kaydına yazılır.
 
 ### Scheduler hiç tick yapmıyor
-- Lider kilidini başka bir örnek tutuyor olabilir. Scheduler logunda "lider değil, beklemede" türünden `info` satırları görünür. Tek scheduler çalıştığını doğrulayın (`dc ps scheduler`).
+- Lider kilidini başka bir örnek tutuyor olabilir. Scheduler logunda `scheduler standby: leader lock held by another instance` (`info`, bekleme durumuna her girişte bir kez) satırı görünür. Lider kilidi kaybedilirse `scheduler leader lock lost; ticking stopped, retrying as standby` (`warn`) yazılır. Tek scheduler çalıştığını doğrulayın (`dc ps scheduler`).
 - Kilit 30 sn TTL'lidir. Çöken bir liderin kilidi en geç 30 sn içinde düşer.
 
 ### Yedek alarmı (healthcheck unhealthy)

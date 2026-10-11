@@ -54,7 +54,7 @@ Kimlik doğrulama modeli için [docs/architecture.md](../architecture.md#kimlik-
 | api | Token varsa `TELEGRAM_MODE=webhook` (+ secret) ve https `TELEGRAM_API_BASE` zorunludur |
 | api | `TRUST_PROXY` 0–5 aralığında olmalı (compose'da 1) |
 | worker / scheduler | `PUBLIC_BASE_URL` ve `BOT_CONTACT_URL` açıkça verilmeli ve loopback olamaz. `TELEGRAM_API_BASE` https olmalı |
-| worker / scheduler | `DATABASE_URL` içinde yeterli `connection_limit` olmalı ([deploy.md](deploy.md#connection_limit-hesabı)). `SHUTDOWN_TIMEOUT_MS` ≤ 40000 |
+| worker / scheduler | `DATABASE_URL` içinde yeterli `connection_limit` olmalı ([deploy.md](deploy.md#connection_limit-hesabı)). `SHUTDOWN_TIMEOUT_MS` ≤ 38000 |
 | worker | `TELEGRAM_BOT_TOKEN` yoksa süreç **açılır**, ama `warn` logu ve bir `SystemLog` WARN satırı (`telegram`) yazar |
 | web | `API_ORIGIN` geçerli bir http(s) URL olmalı ve derleme anındaki değerle aynı olmalı. `CSP_IMG_EXTRA` geçerli olmalı |
 | seed (migrate) | `SEED_DEMO_SOURCE=true` reddedilir. `SEED_ADMIN_PASSWORD` en az 12 karakter olmalı ve `<`/`>` içeremez |
@@ -66,7 +66,7 @@ Kimlik doğrulama modeli için [docs/architecture.md](../architecture.md#kimlik-
 - **Mutlak aile ömrü 90 gündür** (`Session.familyStartedAt`). Rotasyon bu tarihi taşır. 90 günü aşan bir aile ile yapılan refresh 401 döner, aile iptal edilir ve kullanıcı yeniden giriş yapar.
 - **Giriş kilidi:** IP+e-posta başına 15 dk içinde 5 hata. Throttle: genel 120/dk, `/auth` 10/dk.
 - **Şifremi unuttum bekleme süresi:** e-posta başına 60 sn (Redis `NX`). Bekleme sırasında da yanıt 204 olur, böylece hesap varlığı sızmaz. Redis yoksa istek yine işlenir (fail-open).
-- **Kilit zaman aşımları:** advisory/satır kilidi tutan transaction'larda `lock_timeout` 5 sn ve `statement_timeout` 12 sn (ağır işlemlerde 25 sn) kullanılır. Prisma tx: `maxWait` 10 sn, `timeout` 15 sn. Bu süreler aşılırsa yanıt **503 `SERVICE_BUSY`** ve `Retry-After: 5` olur. Böylece bekleyen istekler sınırsız asılı kalmaz. Sık görülüyorsa veritabanı yükünü ve bağlantı bütçesini inceleyin.
+- **Kilit zaman aşımları:** advisory/satır kilidi tutan transaction'larda `lock_timeout` 5 sn ve `statement_timeout` 12 sn (ağır işlemlerde 25 sn) kullanılır. Prisma tx: `maxWait` 10 sn, `timeout` 15 sn. Bu süreler aşılırsa ya da Postgres bir deadlock (`40P01`, Prisma `P2034`) veya serileştirme çakışması (`40001`) bildirirse yanıt **503 `SERVICE_BUSY`** ve `Retry-After: 5` olur. Böylece bekleyen istekler sınırsız asılı kalmaz. Sık görülüyorsa veritabanı yükünü ve bağlantı bütçesini inceleyin.
 - **Kaynak `config` gizli anahtarları** admin yanıtlarında ve denetim kaydının `before`/`after` alanlarında `"***"` olarak döner. Kural **ad parçası (segment) tabanlıdır**: `token`, `secret`, `pass(word)`, `auth`, `apiKey`, `credential` gibi parçalar gizlidir. Ad yalnızca `key` ise ya da `api|private|secret|access` + `key` biçimindeyse de gizlidir. Alt dize eşleşmesi yapılmaz; örneğin `keywords`, `authorName` ve `sortKey` gizli değildir. Gizli bir anahtarın tüm torunları maskelenir. Ayrıntılar: [admin.md](../admin.md#kaynak-yaşam-döngüsü).
 - Telegram sohbet kimlikleri (`NotificationChannel.config`) ve proxy URL'leri (`ProxyConfig.urlEncrypted`) AES-256-GCM ile şifreli saklanır.
 

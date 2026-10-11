@@ -16,7 +16,10 @@ Production yığını `docker-compose.yml` ile tek sunucuda çalışır. Env şa
 | `redis` | `redis:7-alpine` | backend | AOF (`everysec`), `noeviction`, parola yapılandırma dosyasında |
 | `backup` | `oto/backup` | backend | Gece `pg_dump` + rotasyon ([backup-restore.md](backup-restore.md)) |
 
-`backend` ağı `internal`'dır: postgres ve redis dışarıya çıkamaz, dışarıdan da erişilemez. Yalnızca worker ve scheduler `egress` ağıyla dış kaynaklara ve Telegram'a çıkar.
+`backend` ağı `internal`'dır: postgres ve redis dışarıya çıkamaz, dışarıdan da erişilemez. Dışa çıkış iki ağdan yapılır:
+
+- `edge` (internal **değil**): Caddy gelen trafiği buradan api ve web'e iletir. api dışa çıkışını da bu ağdan yapar: SMTP, HIBP parola kontrolü, Telegram (bağlama, webhook kurulumu) ve admin proxy testi. Bu yüzden `edge` ağını `internal` yapmayın, aksi halde bu özellikler bozulur. web de `edge` üzerindedir ama dışa çıkış ihtiyacı yoktur, yalnızca Caddy'den gelen istekleri karşılar.
+- `egress`: worker ve scheduler dış kaynaklara (scraping) ve Telegram'a buradan çıkar.
 
 ## Sunucu gereksinimleri
 
@@ -82,7 +85,7 @@ dc up -d --build --wait                                    # 4. derle, migrate, 
 ```
 
 - `migrate` her `up` çalıştığında yeniden çalışır. `prisma migrate deploy` idempotenttir, uygulanmış migration'ları atlar. api, worker ve scheduler, migrate başarıyla bitmeden başlamaz.
-- Worker ve scheduler SIGTERM ile kapanır. Aktif işler `SHUTDOWN_TIMEOUT_MS` (varsayılan 30 sn, en fazla 40 sn) kadar beklenir. Süre aşılırsa worker zorla kapanır ve işler BullMQ'da "stalled" olarak yeniden işlenir. Compose `stop_grace_period: 45s` bu sınır ile 5 sn'lik zorla kapatma payını kapsar. `SHUTDOWN_TIMEOUT_MS`'i 40000'in üzerine çıkarmak env doğrulamasında reddedilir. Böyle bir kural olmasaydı Docker 45. saniyede SIGKILL gönderirdi.
+- Worker ve scheduler SIGTERM ile kapanır. Aktif işler `SHUTDOWN_TIMEOUT_MS` (varsayılan 30 sn, en fazla 38 sn) kadar beklenir. Süre aşılırsa worker zorla kapanır ve işler BullMQ'da "stalled" olarak yeniden işlenir. Compose `stop_grace_period: 45s` bu sınırı, 5 sn'lik zorla kapatma payını ve Redis/Prisma bağlantılarının kapanması için ~2 sn'yi kapsar. `SHUTDOWN_TIMEOUT_MS`'i 38000'in üzerine çıkarmak env doğrulamasında reddedilir. Böyle bir kural olmasaydı Docker 45. saniyede SIGKILL gönderirdi.
 - api `stop_grace_period: 20s` ile açık SSE ve HTTP bağlantılarını kapatır. Tarayıcı istemcileri yeniden bağlanır.
 - Düzgün kapanan worker'lar heartbeat anahtarlarını siler. SIGKILL ile ölen bir worker'ın kaydı 24 saat kalır ve bir kez `worker:<host>:<pid>:lost` alarmı üretir ([alarms.md](alarms.md)).
 - Derleme ayrıntıları:
@@ -125,7 +128,7 @@ env -i HOME="$HOME" PATH="$PATH" OTO_TAG=prev docker compose --env-file .env.pro
 ## Ölçekleme ve bağlantı bütçesi
 
 - **Worker:** `.env.prod` içinde `WORKER_REPLICAS=N` ayarlayın ve `dc up -d --wait` çalıştırın. Worker'lar yatay ölçeklenir. İşler BullMQ üzerinden paylaşılır, kaynak başına hız limiti Redis'te ortaktır.
-- **Scheduler daima tek örnektir.** Redis `scheduler:leader` kilidi (`SET NX PX 30000`, 10 sn'de bir Lua CAS ile yenilenir) ikinci bir örneği zaten bekletir: kilidi alamayan örnek tick yapmaz ve `info` log yazar. Yine de ölçeklemeyin, `deploy.replicas: 1` sabittir. Saklama temizliği ve alarm monitörü de yalnız lider örnekte çalışır.
+- **Scheduler daima tek örnektir.** Redis `scheduler:leader` kilidi (`SET NX PX 30000`, 10 sn'de bir Lua CAS ile yenilenir) ikinci bir örneği zaten bekletir: kilidi alamayan örnek tick yapmaz ve `scheduler standby: leader lock held by another instance` (`info`) logunu yazar. Yine de ölçeklemeyin, `deploy.replicas: 1` sabittir. Saklama temizliği ve alarm monitörü de yalnız lider örnekte çalışır.
 - **api** tek örnek olarak tasarlanmıştır. Compose'da replika ayarı yoktur.
 
 ### `connection_limit` hesabı

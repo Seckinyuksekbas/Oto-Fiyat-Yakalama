@@ -17,12 +17,13 @@ describe('worker env', () => {
     expect(parseEnv(base).MATCH_CONCURRENCY).toBe(4);
   });
 
-  it('defaults SHUTDOWN_TIMEOUT_MS to 30000 and bounds it (max 40000: compose grace 45 s)', () => {
+  it('defaults SHUTDOWN_TIMEOUT_MS to 30000 and bounds it (max 38000: +5 s force close +2 s connection teardown within compose grace 45 s)', () => {
     expect(parseEnv(base).SHUTDOWN_TIMEOUT_MS).toBe(30_000);
     expect(parseEnv({ ...base, SHUTDOWN_TIMEOUT_MS: '5000' }).SHUTDOWN_TIMEOUT_MS).toBe(5000);
     expect(() => parseEnv({ ...base, SHUTDOWN_TIMEOUT_MS: '0' })).toThrow(/SHUTDOWN_TIMEOUT_MS/);
-    expect(parseEnv({ ...base, SHUTDOWN_TIMEOUT_MS: '40000' }).SHUTDOWN_TIMEOUT_MS).toBe(40_000);
-    expect(() => parseEnv({ ...base, SHUTDOWN_TIMEOUT_MS: '40001' })).toThrow(/SHUTDOWN_TIMEOUT_MS/);
+    expect(parseEnv({ ...base, SHUTDOWN_TIMEOUT_MS: '38000' }).SHUTDOWN_TIMEOUT_MS).toBe(38_000);
+    expect(() => parseEnv({ ...base, SHUTDOWN_TIMEOUT_MS: '38001' })).toThrow(/SHUTDOWN_TIMEOUT_MS/);
+    expect(() => parseEnv({ ...base, SHUTDOWN_TIMEOUT_MS: '40000' })).toThrow(/SHUTDOWN_TIMEOUT_MS/);
   });
 
   it('never echoes an invalid value in the error message', () => {

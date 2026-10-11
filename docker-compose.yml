@@ -4,8 +4,9 @@
 #   docker compose --env-file .env.prod up -d --build --wait
 #
 # Topoloji: yalnız `caddy` dışa port açar (80/443). Caddy tek origin'dir: /api/* → api:3001, gerisi → web:3000.
-# Ağlar: `edge` (caddy, web, api), `backend` (internal: dışa çıkışı yok; postgres, redis ve onlara bağlanan
-# servisler), `egress` (worker/scheduler'ın dış kaynaklara/Telegram'a çıkışı).
+# Ağlar: `edge` (caddy, web, api; internal DEĞİL: api dışa çıkışını buradan yapar — SMTP, HIBP, Telegram, proxy
+# testi; web'in dışa çıkış ihtiyacı yoktur), `backend` (internal: dışa çıkışı yok; postgres, redis ve onlara
+# bağlanan servisler), `egress` (worker/scheduler'ın dış kaynaklara/Telegram'a çıkışı).
 #
 # Env: değerler `--env-file` ile verilen dosyadan okunur ve her servise YALNIZ ihtiyacı olan değişkenler
 # aktarılır (en az yetki: web hiçbir sır görmez, worker JWT özel anahtarını görmez, scheduler Telegram token'ını
@@ -50,7 +51,6 @@ x-worker-env: &worker-env
   ANALYZE_CONCURRENCY:
   MATCH_CONCURRENCY:
   NOTIFY_CONCURRENCY:
-  TELEGRAM_API_BASE:
 
 services:
   caddy:
@@ -146,13 +146,15 @@ services:
     environment:
       <<: *worker-env
       ROLE: worker
-      # Telegram gönderimini yalnız worker yapar (scheduler yalnız kuyruğa alır, token'a ihtiyacı yok)
+      # Telegram gönderimini yalnız worker yapar (scheduler yalnız kuyruğa alır; token ve API tabanı ona aktarılmaz,
+      # scheduler env'inde TELEGRAM_API_BASE'in varsayılanı vardır ve kullanılmaz)
       TELEGRAM_BOT_TOKEN:
+      TELEGRAM_API_BASE:
       # connection_limit >= SCRAPE+ANALYZE+MATCH+NOTIFY_CONCURRENCY + 5 (Telegram) + 3 (varsayılanlarla 26)
       DATABASE_URL: postgresql://${POSTGRES_USER:-oto}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD zorunlu}@postgres:5432/${POSTGRES_DB:-oto}?connection_limit=${WORKER_DB_CONNECTION_LIMIT:-30}
     deploy:
       replicas: ${WORKER_REPLICAS:-2}
-    stop_grace_period: 45s # SHUTDOWN_TIMEOUT_MS (en fazla 40 sn) + zorla kapatma payı
+    stop_grace_period: 45s # SHUTDOWN_TIMEOUT_MS (en fazla 38 sn) + zorla kapatma (5 sn) + bağlantı kapatma payı
     networks: [backend, egress]
     depends_on:
       migrate: { condition: service_completed_successfully }

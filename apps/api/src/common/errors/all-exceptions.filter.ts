@@ -4,21 +4,25 @@ import { ErrorCode, type ApiErrorBody } from '@oto/shared';
 import type { Request, Response } from 'express';
 import { AppError } from './app-error';
 
-/** Geçici DB yoğunluğu: lock_timeout, statement_timeout (bkz. infra/tx-options). */
-const BUSY_PG_CODES = new Set(['55P03', '57014']);
-const BUSY_PG_MESSAGE = /code: [`"](55P03|57014)[`"]/i;
+/**
+ * Geçici DB yoğunluğu: lock_timeout, statement_timeout (bkz. infra/tx-options), deadlock (40P01) ve
+ * serileştirme çakışması (40001). Hepsi yeniden denenebilir; istemciye 503 + Retry-After döner.
+ */
+const BUSY_PG_CODES = new Set(['55P03', '57014', '40P01', '40001']);
+const BUSY_PG_MESSAGE = /code: [`"](55P03|57014|40P01|40001)[`"]/i;
 const RETRY_AFTER_SEC = '5';
 
 /**
  * Prisma'nın "sistem meşgul" hataları (gerçek biçimler Prisma 6.19 ile doğrulandı):
  * - P2028: interaktif tx maxWait/timeout aşıldı.
  * - P2024: havuzdan bağlantı alınamadı.
- * - P2010 (ham sorgu) + meta.code 55P03/57014; meta yoksa mesajdaki `Code: \`55P03\``.
+ * - P2034: yazma çakışması / deadlock (Prisma'nın model sorgularında 40001/40P01 karşılığı).
+ * - P2010 (ham sorgu) + meta.code 55P03/57014/40P01/40001; meta yoksa mesajdaki `Code: \`55P03\``.
  * - Model sorgusu: PrismaClientUnknownRequestError, PG kodu yalnız mesajda (`code: "55P03"`).
  */
 export function isServiceBusy(e: unknown): boolean {
   if (e instanceof Prisma.PrismaClientKnownRequestError) {
-    if (e.code === 'P2028' || e.code === 'P2024') return true;
+    if (e.code === 'P2028' || e.code === 'P2024' || e.code === 'P2034') return true;
     if (e.code !== 'P2010') return false;
     const pg = (e.meta as { code?: unknown } | undefined)?.code;
     return typeof pg === 'string' ? BUSY_PG_CODES.has(pg) : BUSY_PG_MESSAGE.test(e.message);
