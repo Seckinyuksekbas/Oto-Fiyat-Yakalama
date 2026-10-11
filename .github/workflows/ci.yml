@@ -28,6 +28,10 @@ jobs:
     name: secret scan (gitleaks)
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # gitleaks-action PR commit aralığını GITHUB_TOKEN ile listeler (yalnız okuma).
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -43,7 +47,8 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # lint + typecheck + unit + seri api/worker e2e (testcontainers) + web build; e2e tek başına ~25-35 dk sürebilir.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
