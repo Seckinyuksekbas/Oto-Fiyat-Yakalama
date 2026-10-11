@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { register } from './instrumentation';
 
+const buildInfo = vi.hoisted(() => ({ origin: null as string | null }));
+vi.mock('./build-info', () => ({ readBuildApiOrigin: () => buildInfo.origin }));
+
 let exitSpy: MockInstance<typeof process.exit>;
 let errorSpy: MockInstance<typeof console.error>;
 beforeEach(() => {
@@ -8,6 +11,7 @@ beforeEach(() => {
   errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 afterEach(() => {
+  buildInfo.origin = null;
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
@@ -43,6 +47,23 @@ describe('instrumentation register', () => {
   it('does not exit on a valid env', async () => {
     vi.stubEnv('NEXT_RUNTIME', 'nodejs');
     vi.stubEnv('CSP_IMG_EXTRA', 'http://127.0.0.1:4100');
+    await expect(register()).resolves.toBeUndefined();
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it('fails server start when runtime API_ORIGIN differs from the build-time record', async () => {
+    buildInfo.origin = 'http://api:3001';
+    vi.stubEnv('NEXT_RUNTIME', 'nodejs');
+    vi.stubEnv('API_ORIGIN', 'http://other-api:3001');
+    await expect(register()).rejects.toThrow(/API_ORIGIN: derleme anındaki/);
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(String(errorSpy.mock.calls[0]?.[0])).not.toContain('other-api');
+  });
+
+  it('accepts a runtime API_ORIGIN equal to the build-time record (trailing slash normalized)', async () => {
+    buildInfo.origin = 'http://api:3001';
+    vi.stubEnv('NEXT_RUNTIME', 'nodejs');
+    vi.stubEnv('API_ORIGIN', 'http://api:3001/');
     await expect(register()).resolves.toBeUndefined();
     expect(exitSpy).not.toHaveBeenCalled();
   });

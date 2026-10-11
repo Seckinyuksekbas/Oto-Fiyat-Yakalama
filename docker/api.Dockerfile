@@ -2,7 +2,8 @@
 # Oto Fırsat API (NestJS). Derleme: docker build -f docker/api.Dockerfile -t oto/api .
 # Sırlar imaja girmez: tüm yapılandırma çalışma zamanı env'inden okunur (bkz. .env.example).
 
-ARG NODE_IMAGE=node:22-alpine
+# Sabitlenmiş taban (yeniden üretilebilir derleme); güncellerken dört Dockerfile birlikte değişir.
+ARG NODE_IMAGE=node:22.23.3-alpine3.24
 
 # --- base: node + pnpm (corepack) ------------------------------------------------------------
 FROM ${NODE_IMAGE} AS base
@@ -17,23 +18,27 @@ ENV PNPM_HOME=/pnpm \
 RUN corepack enable && corepack prepare pnpm@10.30.3 --activate
 WORKDIR /repo
 
-# --- deps: yalnız lockfile ile paket deposunu doldur (kaynak değişince yeniden indirmez) ---------
+# --- deps: pnpm deposu yalnız lockfile ile bu KATMANDA doldurulur (cache mount yok): sonraki adımlar
+# (install/deploy --offline) ağa ve builder'ın cache mount'una bağlı değil; katman lockfile değişince yenilenir.
 FROM base AS deps
 COPY pnpm-lock.yaml pnpm-workspace.yaml ./
-RUN --mount=type=cache,id=oto-pnpm-store,target=/pnpm/store pnpm fetch
+RUN pnpm fetch
 
 # --- build: derle + üretim bağımlılıklarıyla /out'a dağıt -----------------------------------------
 FROM deps AS build
 COPY . .
-RUN --mount=type=cache,id=oto-pnpm-store,target=/pnpm/store \
-    pnpm install --offline --frozen-lockfile
+RUN pnpm install --offline --frozen-lockfile
 RUN pnpm --filter "@oto/api..." build
-RUN --mount=type=cache,id=oto-pnpm-store,target=/pnpm/store \
-    pnpm --filter @oto/api deploy --prod --legacy /out
+# pnpm deploy kararı: lockfile tabanlı (legacy olmayan) deploy; inject-workspace-packages yalnız bu komutta
+# --config ile açılır (pnpm-workspace.yaml ve lockfile değişmez). --offline: çözümleme ortak lockfile'dan,
+# paketler deps katmanındaki depodan gelir, ağa çıkılmaz. `--legacy` KULLANILMAZ: workspace
+# bağımlılıklarını registry metadata'sıyla yeniden çözer (ağ gerekir; --offline ile ERR_PNPM_NO_OFFLINE_META).
+# @oto/* paketleri package.json "files" alanına göre kopyalanır (yalnız dist; db: dist + prisma).
+RUN pnpm --config.inject-workspace-packages=true --filter @oto/api deploy --prod --offline /out
 # Üretilmiş Prisma istemcisi (musl motoru dahil) dağıtımdaki @prisma/client'ın yanına kopyalanır.
 RUN sh docker/copy-prisma-client.sh /out && sh docker/prune-prisma-cli.sh /out
 # Çalışma zamanında gerekmeyenler
-RUN cd /out && rm -rf src test tsconfig*.json nest-cli.json vitest*.config.ts .env* \
+RUN cd /out && rm -rf pnpm-lock.yaml src test tsconfig*.json nest-cli.json vitest*.config.ts .env* \
     && find dist -name '*.map' -delete
 
 # --- runtime -----------------------------------------------------------------------------------

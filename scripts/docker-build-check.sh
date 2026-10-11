@@ -19,11 +19,29 @@ cd "$ROOT"
 
 IMAGES="api worker web migrate"
 FAILS=0
+BUILD_FAILED=""
+NET=oto-check-net-$$
 TMP=$(mktemp -d 2>/dev/null || mktemp -d -t oto-docker-check)
-trap 'rm -rf "$TMP"' EXIT INT TERM
+
+# Her çıkışta (başarı, hata, Ctrl-C) geçici konteyner/ağ/dosyalar silinir; her adım bağımsız (|| true).
+cleanup() {
+  docker rm -f "$NET-pg" >/dev/null 2>&1 || true
+  docker rm -f oto-check-unsafe-api >/dev/null 2>&1 || true
+  docker rm -f oto-check-web-origin >/dev/null 2>&1 || true
+  docker network rm "$NET" >/dev/null 2>&1 || true
+  rm -rf "$TMP" || true
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
 
 pass() { printf '  PASS %s\n' "$1"; }
 fail() { printf '  FAIL %s\n' "$1"; FAILS=$((FAILS + 1)); }
+# İmaj var ve bu çalıştırmada derlemesi başarısız olmadı mı? (eski imajı doğrulamamak için)
+available() {
+  case " $BUILD_FAILED " in *" $1 "*) return 1 ;; esac
+  docker image inspect "oto/$1" >/dev/null 2>&1
+}
+build_failed() { fail "oto/$1 derlenemedi"; BUILD_FAILED="$BUILD_FAILED $1"; }
 
 # --- 1. Derleme -------------------------------------------------------------------------------
 if [ "${SKIP_BUILD:-0}" != "1" ]; then
@@ -31,12 +49,13 @@ if [ "${SKIP_BUILD:-0}" != "1" ]; then
     echo "==> docker build oto/$app"
     if [ ! -f "docker/$app.Dockerfile" ]; then
       fail "docker/$app.Dockerfile yok"
+      BUILD_FAILED="$BUILD_FAILED $app"
       continue
     fi
     if [ "$app" = "web" ]; then
-      docker build -f "docker/$app.Dockerfile" --build-arg API_ORIGIN=http://api:3001 -t "oto/$app" . || fail "oto/$app derlenemedi"
+      docker build -f "docker/$app.Dockerfile" --build-arg API_ORIGIN=http://api:3001 -t "oto/$app" . || build_failed "$app"
     else
-      docker build -f "docker/$app.Dockerfile" -t "oto/$app" . || fail "oto/$app derlenemedi"
+      docker build -f "docker/$app.Dockerfile" -t "oto/$app" . || build_failed "$app"
     fi
   done
 fi
@@ -45,13 +64,13 @@ fi
 for app in $IMAGES; do
   img="oto/$app"
   echo "==> $img"
-  if ! docker image inspect "$img" >/dev/null 2>&1; then
-    fail "$img imajı yok"
+  if ! available "$app"; then
+    fail "$img yok ya da derlenemedi; imaj doğrulamaları atlandı"
     continue
   fi
 
   uid=$(docker run --rm --entrypoint id "$img" -u 2>/dev/null || echo "?")
-  if [ "$uid" != "0" ] && [ "$uid" != "?" ]; then pass "(a) uid=$uid (non-root)"; else fail "(a) uid=$uid (root ya da çalışmadı)"; fi
+  if [ "$uid" = "1000" ]; then pass "(a) uid=1000 (node, non-root)"; else fail "(a) uid=$uid (1000 bekleniyor)"; fi
 
   if docker run --rm --entrypoint sh "$img" -c 'test ! -e /app/.env && test -z "$(find /app -maxdepth 4 -path "*/node_modules" -prune -o \( -name .env -o -name ".env.*" \) ! -name .env.example -print 2>/dev/null | head -1)"'; then
     pass "(b) imajda .env yok"
@@ -81,9 +100,23 @@ const gen = path.join(path.dirname(require.resolve(".prisma/client/default", { p
 const engine = fs.readdirSync(gen).find((f) => f.includes("linux-musl-openssl-3.0.x"));
 if (!engine) throw new Error("musl Prisma motoru yok: " + gen);
 const { PrismaClient } = require(client);
-new PrismaClient();
-console.log("prisma ok " + engine);
+// Ulaşılamaz adrese $connect: motor yüklenip bağlantı hatası (P1001) dönmeli; motor yüklenemezse başka hata.
+const prisma = new PrismaClient({ datasourceUrl: "postgresql://probe:probe@127.0.0.1:1/probe?connect_timeout=2" });
+prisma.$connect().then(
+  () => { console.error("beklenmedik: bağlantı kuruldu"); process.exit(1); },
+  (err) => {
+    if (err && err.errorCode === "P1001") { console.log("prisma ok " + engine + " (P1001)"); process.exit(0); }
+    console.error("motor/bağlantı hatası beklenmedik: " + (err && (err.errorCode || err.name)) + " " + String(err && err.message).slice(0, 300));
+    process.exit(1);
+  },
+);
 '
+# @oto/* paketleri yalnız "files" içeriğiyle gelmeli (src/test/spec yok)
+PKG_FILES_CHECK='find /app/node_modules/.pnpm -path "*/node_modules/@oto/*" \( -name src -o -name test -o -name "*.spec.ts" -o -name "*.spec.js" \) -print 2>/dev/null | grep -v "/node_modules/@oto/[^/]*/node_modules/" | head -5'
+check_pkg_files() { # img
+  out=$(docker run --rm --entrypoint sh "$1" -c "$PKG_FILES_CHECK")
+  if [ -z "$out" ]; then pass "(c) $1 @oto/* paketlerinde src/test/spec yok"; else fail "(c) $1 @oto/* içinde kaynak/test: $out"; fi
+}
 
 check_require() { # img pkg...
   img=$1; shift
@@ -96,15 +129,17 @@ check_require() { # img pkg...
   done
 }
 
-if docker image inspect oto/api >/dev/null 2>&1; then
+if available api; then
   echo "==> oto/api modül çözümü"
   check_require oto/api @oto/shared @oto/db @oto/server-common @oto/telegram
-  if docker run --rm --entrypoint node -w /app oto/api -e "$PRISMA_CHECK"; then pass "(c) oto/api Prisma istemcisi üretilmiş"; else fail "(c) oto/api Prisma istemcisi"; fi
+  if docker run --rm --entrypoint node -w /app oto/api -e "$PRISMA_CHECK"; then pass "(c) oto/api Prisma motoru yükleniyor"; else fail "(c) oto/api Prisma istemcisi/motoru"; fi
+  check_pkg_files oto/api
 fi
-if docker image inspect oto/worker >/dev/null 2>&1; then
+if available worker; then
   echo "==> oto/worker modül çözümü"
   check_require oto/worker @oto/shared @oto/db @oto/collection @oto/analysis @oto/telegram ioredis
-  if docker run --rm --entrypoint node -w /app oto/worker -e "$PRISMA_CHECK"; then pass "(c) oto/worker Prisma istemcisi üretilmiş"; else fail "(c) oto/worker Prisma istemcisi"; fi
+  if docker run --rm --entrypoint node -w /app oto/worker -e "$PRISMA_CHECK"; then pass "(c) oto/worker Prisma motoru yükleniyor"; else fail "(c) oto/worker Prisma istemcisi/motoru"; fi
+  check_pkg_files oto/worker
   # Redis'e ulaşamayan healthcheck hızla başarısız olmalı
   if docker run --rm -e REDIS_URL=redis://127.0.0.1:1 oto/worker node /app/healthcheck-worker.mjs >/dev/null 2>&1; then
     fail "worker healthcheck Redis yokken başarılı döndü"
@@ -112,22 +147,35 @@ if docker image inspect oto/worker >/dev/null 2>&1; then
     pass "worker healthcheck Redis yokken başarısız"
   fi
 fi
-if docker image inspect oto/web >/dev/null 2>&1; then
+if available web; then
   echo "==> oto/web standalone"
   if docker run --rm --entrypoint sh oto/web -c 'test -f /app/apps/web/server.js && test -d /app/apps/web/.next/static'; then
     pass "(c) standalone server.js + .next/static"
   else
     fail "(c) standalone düzeni eksik"
   fi
+  origin=$(docker run --rm --entrypoint cat oto/web /app/apps/web/.next/build-api-origin 2>/dev/null || true)
+  if [ "$origin" = "http://api:3001" ]; then pass "derleme API_ORIGIN kaydı: $origin"; else fail "derleme API_ORIGIN kaydı '$origin'"; fi
+  # Çalışma zamanı API_ORIGIN derlemedekinden farklıysa açılış durmalı
+  set +e
+  timeout 60 docker run --rm --name oto-check-web-origin -e API_ORIGIN=http://other-api:3001 oto/web >"$TMP/web.out" 2>&1
+  code=$?
+  set -e
+  docker rm -f oto-check-web-origin >/dev/null 2>&1 || true
+  if [ "$code" -ne 0 ] && [ "$code" -lt 124 ] && grep -q 'API_ORIGIN' "$TMP/web.out"; then
+    pass "web farklı çalışma zamanı API_ORIGIN ile açılmadı (kod $code)"
+  else
+    fail "web API_ORIGIN uyuşmazlığında açıldı (kod $code): $(head -c 300 "$TMP/web.out")"
+  fi
 fi
-if docker image inspect oto/migrate >/dev/null 2>&1; then
+if available migrate; then
   echo "==> oto/migrate"
   if docker run --rm --entrypoint sh oto/migrate -c 'test -x node_modules/.bin/prisma && test -d prisma/migrations && test -f prisma/seed.js'; then
     pass "(c) prisma CLI + migrations + seed.js"
   else
     fail "(c) prisma CLI / migrations / seed.js eksik"
   fi
-  if docker run --rm --entrypoint node -w /app oto/migrate -e "$PRISMA_CHECK"; then pass "(c) oto/migrate Prisma istemcisi üretilmiş"; else fail "(c) oto/migrate Prisma istemcisi"; fi
+  if docker run --rm --entrypoint node -w /app oto/migrate -e "$PRISMA_CHECK"; then pass "(c) oto/migrate Prisma motoru yükleniyor"; else fail "(c) oto/migrate Prisma istemcisi/motoru"; fi
   # CLI motorları imajda olmalı (çalışma anında indirme yok)
   if docker run --rm --network none --entrypoint prisma oto/migrate -v >"$TMP/prisma.out" 2>&1; then
     pass "prisma CLI ağsız çalışıyor"
@@ -135,7 +183,6 @@ if docker image inspect oto/migrate >/dev/null 2>&1; then
     fail "prisma CLI ağsız çalışmadı: $(tail -c 300 "$TMP/prisma.out")"
   fi
   # Gerçek uçtan uca: geçici Postgres'e migrate deploy + seed (production, demo kaynak kapalı)
-  NET=oto-check-net-$$
   PGPASS=$(openssl rand -hex 16 2>/dev/null || node -e "console.log(require('crypto').randomBytes(16).toString('hex'))")
   ADMINPASS=$(openssl rand -hex 16 2>/dev/null || node -e "console.log(require('crypto').randomBytes(16).toString('hex'))")
   docker network create "$NET" >/dev/null
@@ -164,7 +211,7 @@ if docker image inspect oto/migrate >/dev/null 2>&1; then
 fi
 
 # --- 3. api güvensiz production env'de açılmamalı ------------------------------------------------
-if docker image inspect oto/api >/dev/null 2>&1; then
+if available api; then
   echo "==> oto/api güvensiz production env (COOKIE_SECURE=false)"
   # Değerler dosyaya yazılmaz: süreç env'inde tutulur, `docker run -e AD` (değersiz) ile aktarılır.
   KEYS=$(node scripts/gen-keys.mjs | sed 's/"//g')

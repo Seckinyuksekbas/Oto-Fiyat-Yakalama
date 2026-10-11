@@ -15,6 +15,13 @@
 graphify-out
 docs
 apps/web/.screenshots
-apps/e2e/test-results
-apps/e2e/playwright-report
 **/.DS_Store
+apps/e2e/.logs
+apps/e2e/.web-build
+**/test-results
+**/playwright-report
+# Anahtar/sertifika dosyaları asla bağlama girmez
+**/*.pem
+**/*.key
+.vscode
+.idea

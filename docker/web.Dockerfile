@@ -4,7 +4,8 @@
 # API_ORIGIN gizli değildir: derleme anında /api/* rewrites hedefine gömülür (sonradan değiştirmek etkisiz).
 # Sırlar build argümanı olarak verilmez.
 
-ARG NODE_IMAGE=node:22-alpine
+# Sabitlenmiş taban (yeniden üretilebilir derleme); güncellerken dört Dockerfile birlikte değişir.
+ARG NODE_IMAGE=node:22.23.3-alpine3.24
 
 # --- base: node + pnpm (corepack) ------------------------------------------------------------
 FROM ${NODE_IMAGE} AS base
@@ -19,17 +20,17 @@ ENV PNPM_HOME=/pnpm \
 RUN corepack enable && corepack prepare pnpm@10.30.3 --activate
 WORKDIR /repo
 
-# --- deps: yalnız lockfile ile paket deposunu doldur ------------------------------------------
+# --- deps: pnpm deposu yalnız lockfile ile bu KATMANDA doldurulur (cache mount yok): sonraki adımlar
+# (install/deploy --offline) ağa ve builder'ın cache mount'una bağlı değil; katman lockfile değişince yenilenir.
 FROM base AS deps
 COPY pnpm-lock.yaml pnpm-workspace.yaml ./
-RUN --mount=type=cache,id=oto-pnpm-store,target=/pnpm/store pnpm fetch
+RUN pnpm fetch
 
 # --- build ---------------------------------------------------------------------------------------
 FROM deps AS build
 ARG API_ORIGIN=http://api:3001
 COPY . .
-RUN --mount=type=cache,id=oto-pnpm-store,target=/pnpm/store \
-    pnpm install --offline --frozen-lockfile
+RUN pnpm install --offline --frozen-lockfile
 # Standalone Linux'ta her zaman açık (next.config.ts); NODE_ENV=production derlemesi.
 RUN NODE_ENV=production API_ORIGIN="$API_ORIGIN" pnpm --filter "@oto/web..." build
 # Standalone kökü: apps/web/server.js + izlenen node_modules. Statik dosyalar ayrıca kopyalanır.
@@ -39,6 +40,9 @@ RUN mkdir -p /out \
     && cp -R apps/web/.next/static /out/apps/web/.next/static \
     && if [ -d apps/web/public ]; then cp -R apps/web/public /out/apps/web/public; fi \
     && rm -f /out/apps/web/.env /out/apps/web/.env.* /out/.env /out/.env.*
+# Derleme anındaki API_ORIGIN kaydı (parseWebEnv ile aynı normalizasyon: sondaki '/' atılır).
+# instrumentation.ts çalışma zamanı API_ORIGIN farklıysa açılışı durdurur (rewrites derlemede sabitlenir).
+RUN printf '%s' "$API_ORIGIN" | sed 's:/*$::' > /out/apps/web/.next/build-api-origin
 
 # --- runtime -----------------------------------------------------------------------------------
 FROM ${NODE_IMAGE} AS runtime
