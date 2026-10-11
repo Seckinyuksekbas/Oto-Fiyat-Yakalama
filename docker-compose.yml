@@ -256,7 +256,50 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "5" }
 
-  # backup: Task 10 (günlük pg_dump + saklama) bu noktaya eklenecek — `backend` ağı, `postgres` bağımlılığı.
+  # Gece pg_dump yedeği (busybox crond) + rotasyon (7 günlük + 4 haftalık, Pazar) → `backups` volume'ü.
+  # Elle yedek / geri yükleme testi (docs/operations/backup-restore.md):
+  #   docker compose --env-file .env.prod exec -u postgres backup backup.sh
+  #   docker compose --env-file .env.prod exec -u postgres backup restore-test.sh [dump]
+  # Yalnız iç `backend` ağında: dışa çıkış yok. BACKUP_S3_URI kullanılacaksa imaj WITH_AWS_CLI=true ile derlenmeli
+  # ve servise `egress` ağı eklenmeli; önerilen yol `backups` volume'ünü salt-okunur bağlayan rclone yan konteyneri.
+  backup:
+    image: ${OTO_IMAGE_PREFIX:-oto}/backup:${OTO_TAG:-latest}
+    build:
+      context: .
+      dockerfile: docker/backup.Dockerfile
+    restart: unless-stopped
+    init: true # tini: crond PID 1 olmaz, SIGTERM iletilir
+    environment:
+      TZ: ${BACKUP_TZ:-Europe/Istanbul}
+      BACKUP_CRON: ${BACKUP_CRON:-0 3 * * *}
+      BACKUP_KEEP_DAILY: ${BACKUP_KEEP_DAILY:-7}
+      BACKUP_KEEP_WEEKLY: ${BACKUP_KEEP_WEEKLY:-4}
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_USER:-oto}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD zorunlu}
+      PGDATABASE: ${POSTGRES_DB:-oto}
+      # İsteğe bağlı (değersiz): env dosyasında yoksa aktarılmaz
+      BACKUP_S3_URI:
+      AWS_ACCESS_KEY_ID:
+      AWS_SECRET_ACCESS_KEY:
+      AWS_DEFAULT_REGION:
+      AWS_ENDPOINT_URL:
+    volumes:
+      - backups:/backups
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/healthcheck.sh"]
+      interval: 5m
+      timeout: 10s
+      start_period: 30s
+      start_interval: 2s
+      retries: 2
+    networks: [backend]
+    depends_on:
+      postgres: { condition: service_healthy }
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
 
 networks:
   edge: {}
@@ -269,3 +312,4 @@ volumes:
   redisdata: {}
   caddydata: {}
   caddyconfig: {}
+  backups: {} # pg_dump yedekleri: aynı diskte durur, sunucu dışına da kopyalayın (docs/operations/backup-restore.md)
