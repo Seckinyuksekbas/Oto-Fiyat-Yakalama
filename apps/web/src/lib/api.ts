@@ -131,8 +131,12 @@ function refreshOutcome(): Promise<RefreshOutcome> {
 }
 
 /** Tek uçuşta oturum yenileme; eşzamanlı çağrılar aynı promise'i paylaşır. */
+export async function refreshSessionDetailed(): Promise<'ok' | 'expired' | 'transient'> {
+  return (await refreshOutcome()).kind;
+}
+
 export async function refreshSession(): Promise<boolean> {
-  return (await refreshOutcome()).kind === 'ok';
+  return (await refreshSessionDetailed()) === 'ok';
 }
 
 export async function apiFetch<T = unknown>(path: string, init: ApiInit = {}): Promise<T> {

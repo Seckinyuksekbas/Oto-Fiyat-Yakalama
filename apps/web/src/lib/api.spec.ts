@@ -1,7 +1,7 @@
 import { http, HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { server } from '@/test/server';
-import { ApiError, apiFetch, setSessionExpiredHandler } from './api';
+import { ApiError, apiFetch, refreshSession, refreshSessionDetailed, setSessionExpiredHandler } from './api';
 
 afterEach(() => setSessionExpiredHandler(null));
 
@@ -295,5 +295,37 @@ describe('apiFetch', () => {
   it('noRefresh skips the refresh flow', async () => {
     server.use(http.get('/api/v1/me', () => unauth()));
     await expect(apiFetch('/me', { noRefresh: true })).rejects.toMatchObject({ status: 401 });
+  });
+});
+
+describe('refreshSessionDetailed', () => {
+  const refreshWith = (status: number, code = 'TOKEN_INVALID') =>
+    server.use(http.post('/api/v1/auth/refresh', () => HttpResponse.json({ error: { code, message: '' } }, { status })));
+
+  it('ok on 200, and refreshSession wraps it as a boolean', async () => {
+    server.use(http.post('/api/v1/auth/refresh', () => new HttpResponse(null, { status: 204 })));
+    await expect(refreshSessionDetailed()).resolves.toBe('ok');
+    await expect(refreshSession()).resolves.toBe(true);
+  });
+  it('expired on 401 TOKEN_INVALID and REFRESH_REUSED', async () => {
+    refreshWith(401);
+    await expect(refreshSessionDetailed()).resolves.toBe('expired');
+    await expect(refreshSession()).resolves.toBe(false);
+    refreshWith(401, 'REFRESH_REUSED');
+    await expect(refreshSessionDetailed()).resolves.toBe('expired');
+  });
+  it('transient on 429, 5xx and network errors', async () => {
+    refreshWith(429, 'RATE_LIMITED');
+    await expect(refreshSessionDetailed()).resolves.toBe('transient');
+    refreshWith(503, 'INTERNAL');
+    await expect(refreshSessionDetailed()).resolves.toBe('transient');
+    server.use(http.post('/api/v1/auth/refresh', () => HttpResponse.error()));
+    await expect(refreshSessionDetailed()).resolves.toBe('transient');
+  });
+  it('shares one in-flight request between concurrent callers', async () => {
+    let calls = 0;
+    server.use(http.post('/api/v1/auth/refresh', () => { calls++; return new HttpResponse(null, { status: 204 }); }));
+    await Promise.all([refreshSessionDetailed(), refreshSession()]);
+    expect(calls).toBe(1);
   });
 });

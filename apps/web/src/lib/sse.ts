@@ -3,7 +3,7 @@ import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import type { UserEvent } from '@oto/shared';
-import { refreshSession } from './api';
+import { refreshSessionDetailed } from './api';
 import { describeNotification, type NotificationView } from './notification-text';
 import { onLoggedOut } from './session';
 
@@ -16,7 +16,8 @@ export interface NotificationStreamOptions {
   onStatus?(s: StreamStatus): void;
   eventSourceFactory?: (url: string) => EventSource;
   /** Her yeniden bağlanmadan önce çağrılır (erişim token'ı yenileme). */
-  refresh?: () => Promise<boolean>;
+  /** 'expired' (ya da false): oturum bitti, bırak. 'transient': yeniden dene. */
+  refresh?: () => Promise<boolean | 'ok' | 'expired' | 'transient'>;
   now?: () => number;
 }
 
@@ -72,18 +73,21 @@ export function createNotificationStream(opts: NotificationStreamOptions): { clo
     opts.onStatus?.('closed');
   };
 
-  /** false: oturum bitti, bağlanmayı bırak. Geçici hata (throw): üstel bekleme ile yeniden dene. */
+  /** Oturum bittiyse bağlanmayı bırakır; geçici hatada (throw / 'transient') üstel bekleme ile yeniden dener. */
   const refreshThenConnect = async () => {
     if (opts.refresh) {
-      let ok: boolean;
+      let res: boolean | 'ok' | 'expired' | 'transient';
       try {
-        ok = await opts.refresh();
+        res = await opts.refresh();
       } catch {
-        if (!closed) reconnect(backoffDelay(attempt++));
+        res = 'transient';
+      }
+      if (res === false || res === 'expired') {
+        stop();
         return;
       }
-      if (!ok) {
-        stop();
+      if (res === 'transient') {
+        if (!closed) reconnect(backoffDelay(attempt++));
         return;
       }
     }
@@ -218,7 +222,7 @@ export function useNotificationStream(): void {
     closeNotificationStream();
     const push = createToastLimiter({ show: showToast, showOverflow: showOverflowToast });
     const stream = createNotificationStream({
-      refresh: refreshSession,
+      refresh: refreshSessionDetailed,
       onReady: ({ unreadCount }) => {
         qc.setQueryData<number>(NOTIFICATION_KEYS.unread, unreadCount);
         void qc.invalidateQueries({ queryKey: NOTIFICATION_KEYS.list });

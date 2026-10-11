@@ -118,6 +118,22 @@ describe('createNotificationStream', () => {
     expect(FakeES.instances).toHaveLength(2);
   });
 
+  it("detailed refresh: 'expired' stops, 'transient' keeps retrying", async () => {
+    const onStatus = vi.fn();
+    const refresh = vi.fn().mockResolvedValueOnce('transient').mockResolvedValueOnce('ok');
+    createNotificationStream({ onReady: vi.fn(), onNotification: vi.fn(), onStatus, eventSourceFactory: factory, refresh });
+    FakeES.instances[0]!.emit('error');
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(FakeES.instances).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(FakeES.instances).toHaveLength(2);
+    refresh.mockResolvedValueOnce('expired');
+    FakeES.instances[1]!.emit('error');
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(FakeES.instances).toHaveLength(2);
+    expect(onStatus).toHaveBeenLastCalledWith('closed');
+  });
+
   it('reconnects when nothing (not even a ping) arrives for 60 seconds', async () => {
     createNotificationStream({ onReady: vi.fn(), onNotification: vi.fn(), eventSourceFactory: factory });
     await vi.advanceTimersByTimeAsync(59_000);
