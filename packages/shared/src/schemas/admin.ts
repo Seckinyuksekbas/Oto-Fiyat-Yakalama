@@ -11,6 +11,7 @@ export function escapeLike(s: string): string {
 export function maskUrlQuery(url: string): string {
   try {
     const u = new URL(url);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return '[geçersiz URL]';
     const base = `${u.origin}${u.pathname}`;
     return u.search ? `${base}?…` : base;
   } catch {
@@ -102,7 +103,7 @@ export type AdminAuditLogsQuery = z.infer<typeof adminAuditLogsQuerySchema>;
 
 export const adminSystemLogsQuerySchema = z
   .object({
-    level: z.enum(['DEBUG', 'INFO', 'WARN', 'ERROR']).optional(),
+    level: z.enum(['WARN', 'ERROR']).optional(),
     component: text(100).optional(),
     from: isoDate.optional(),
     to: isoDate.optional(),
@@ -146,7 +147,7 @@ const sourceConfigSchema = z
       .refine((u) => /^https?:\/\//i.test(u), { message: 'yalnızca http(s)' }),
   })
   .passthrough()
-  .refine((c) => JSON.stringify(c).length <= 4096, { message: 'config 4 KB sınırını aşıyor' });
+  .refine((c) => new TextEncoder().encode(JSON.stringify(c)).length <= 4096, { message: 'config 4 KB sınırını aşıyor' });
 
 const sourceFields = {
   code: z.string().regex(/^[a-z0-9-]{2,40}$/),

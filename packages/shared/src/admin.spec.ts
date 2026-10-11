@@ -30,6 +30,11 @@ describe('escapeLike / maskUrlQuery', () => {
     expect(maskUrlQuery('https://a/b?x=1')).toBe('https://a/b?…');
     expect(maskUrlQuery('https://a/b')).toBe('https://a/b');
     expect(maskUrlQuery('not a url')).toBe('[geçersiz URL]');
+    expect(maskUrlQuery('https://u:p@a/b?x=1')).toBe('https://a/b?…');
+    expect(maskUrlQuery('https://a/b#frag')).toBe('https://a/b');
+    expect(maskUrlQuery('https://a/b?')).toBe('https://a/b');
+    expect(maskUrlQuery('ftp://a/b?x=1')).toBe('[geçersiz URL]');
+    expect(maskUrlQuery('javascript:alert(1)')).toBe('[geçersiz URL]');
   });
 });
 
@@ -62,6 +67,8 @@ describe('admin query schemas', () => {
     expect(adminAnalysesQuerySchema.safeParse({ minScore: '101' }).success).toBe(false);
     expect(adminJobsQuerySchema.safeParse({ status: 'PARTIAL', trigger: 'MANUAL' }).success).toBe(true);
     expect(adminAuditLogsQuerySchema.safeParse({ from: 'yesterday' }).success).toBe(false);
+    expect(adminSystemLogsQuerySchema.safeParse({ level: 'DEBUG' }).success).toBe(false);
+    expect(adminSystemLogsQuerySchema.safeParse({ level: 'INFO' }).success).toBe(false);
     expect(
       adminSystemLogsQuerySchema.safeParse({ from: '2026-10-11T00:00:00.000Z', level: 'WARN' }).success,
     ).toBe(true);
@@ -114,6 +121,9 @@ describe('admin body schemas', () => {
     expect(adminSourceCreateSchema.safeParse({ ...src, config: { baseUrl: 'nope' } }).success).toBe(false);
     expect(
       adminSourceCreateSchema.safeParse({ ...src, config: { baseUrl: 'https://a.b', blob: 'x'.repeat(5000) } }).success,
+    ).toBe(false);
+    expect(
+      adminSourceCreateSchema.safeParse({ ...src, config: { baseUrl: 'https://a.b', blob: 'ğ'.repeat(2100) } }).success,
     ).toBe(false);
     expect(adminSourceCreateSchema.safeParse({ ...src, intervalSec: 10 }).success).toBe(false);
     expect(adminSourceCreateSchema.safeParse({ ...src, permissionNote: 'x'.repeat(501) }).success).toBe(false);
