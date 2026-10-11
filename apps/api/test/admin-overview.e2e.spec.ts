@@ -3,7 +3,7 @@ import { Test } from '@nestjs/testing';
 import { ADMIN_EVENTS_CHANNEL, startOfIstanbulDay } from '@oto/shared';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppModule } from '../src/app.module';
-import { configureApp } from '../src/bootstrap';
+import { APP_OPTIONS, configureApp } from '../src/bootstrap';
 import { AdminQueues } from '../src/infra/admin-queues.service';
 import { PrismaService } from '../src/infra/prisma.service';
 import { RedisService } from '../src/infra/redis.service';
@@ -24,7 +24,7 @@ const RECHECK_MS = 200;
 
 beforeAll(async () => {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).overrideProvider(SSE_RECHECK_MS).useValue(RECHECK_MS).compile();
-  app = moduleRef.createNestApplication<NestExpressApplication>({ bodyParser: false });
+  app = moduleRef.createNestApplication<NestExpressApplication>(APP_OPTIONS);
   configureApp(app);
   await app.init();
   prisma = app.get(PrismaService);

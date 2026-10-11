@@ -5,7 +5,7 @@ import { Test } from '@nestjs/testing';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module';
-import { configureApp } from '../src/bootstrap';
+import { APP_OPTIONS, configureApp } from '../src/bootstrap';
 import { AdminQueues } from '../src/infra/admin-queues.service';
 import { PrismaService } from '../src/infra/prisma.service';
 import { RedisService } from '../src/infra/redis.service';
@@ -404,7 +404,7 @@ describe('SSRF (production mode)', () => {
   let prodApp: NestExpressApplication;
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).overrideProvider(ALLOW_PRIVATE_URLS).useValue(false).compile();
-    prodApp = moduleRef.createNestApplication<NestExpressApplication>({ bodyParser: false });
+    prodApp = moduleRef.createNestApplication<NestExpressApplication>(APP_OPTIONS);
     configureApp(prodApp);
     await prodApp.init();
   });

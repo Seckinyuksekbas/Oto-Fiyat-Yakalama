@@ -13,6 +13,8 @@ export interface SseClient {
   waitFor(pred: (e: SseEvent) => boolean, ms?: number): Promise<SseEvent>;
   /** Sunucu yanıtı bitirdiğinde (akış kapandığında) çözülür. */
   ended: Promise<void>;
+  /** Akış sunucu tarafından düzgün tamamlandıysa (yanıt sonu alındı) true; soket koptuysa false. */
+  endedCleanly(): boolean;
   close(): void;
 }
 
@@ -78,14 +80,19 @@ export async function openSse(
   res.setEncoding('utf8');
   res.on('data', parseChunk);
   res.on('error', () => undefined);
+  let cleanEnd = false;
   const ended = new Promise<void>((resolve) => {
-    res.on('end', () => resolve());
+    res.on('end', () => {
+      cleanEnd = res.complete;
+      resolve();
+    });
     res.on('close', () => resolve());
   });
 
   return {
     events,
     ended,
+    endedCleanly: () => cleanEnd,
     status: res.statusCode ?? 0,
     async waitFor(pred, ms = 3000) {
       const deadline = Date.now() + ms;

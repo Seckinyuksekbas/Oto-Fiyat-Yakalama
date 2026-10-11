@@ -1,4 +1,4 @@
-import { Injectable, Logger, type OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, type OnApplicationShutdown } from '@nestjs/common';
 import { ADMIN_EVENTS_CHANNEL, adminEventSchema, type AdminEvent } from '@oto/shared';
 import type Redis from 'ioredis';
 import { Observable } from 'rxjs';
@@ -11,7 +11,7 @@ type Listener = (e: AdminEvent) => void;
  * ve bağlantı kapanınca dinleyici kaldırılır (bağlantı başına Redis bağlantısı/sızıntı yok). UserEventsService ile aynı desen.
  */
 @Injectable()
-export class AdminEventsService implements OnModuleDestroy {
+export class AdminEventsService implements OnApplicationShutdown {
   private readonly logger = new Logger(AdminEventsService.name);
   private sub?: Redis;
   private subscribing?: Promise<void>;
@@ -68,7 +68,8 @@ export class AdminEventsService implements OnModuleDestroy {
     return p;
   }
 
-  async onModuleDestroy(): Promise<void> {
+  /** HTTP sunucusu kapandıktan sonra (SSE akışları ShutdownSignal ile bitmiş olur). */
+  async onApplicationShutdown(): Promise<void> {
     await this.sub?.quit().catch(() => undefined);
   }
 }

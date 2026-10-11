@@ -1,8 +1,9 @@
 import { Controller, type MessageEvent, Sse } from '@nestjs/common';
 import type { Role } from '@oto/db';
-import { interval, Observable, takeUntil, timer } from 'rxjs';
+import { interval, merge, Observable, takeUntil, timer } from 'rxjs';
 import { CurrentUser } from '../../common/decorators/current-user';
 import { Roles } from '../../common/decorators/roles';
+import { ShutdownSignal } from '../../infra/shutdown-signal.service';
 import { StreamSessionService } from '../../infra/stream-session.service';
 import type { AuthUser } from '../auth/auth-user';
 import { SSE_MAX_LIFETIME_MS, SSE_PING_MS } from '../me/notifications.controller';
@@ -18,6 +19,7 @@ export class AdminStreamController {
     private readonly events: AdminEventsService,
     private readonly overview: AdminOverviewService,
     private readonly session: StreamSessionService,
+    private readonly shutdown: ShutdownSignal,
   ) {}
 
   /**
@@ -67,6 +69,6 @@ export class AdminStreamController {
         ping.unsubscribe();
         tick.unsubscribe();
       };
-    }).pipe(takeUntil(timer(SSE_MAX_LIFETIME_MS)));
+    }).pipe(takeUntil(merge(timer(SSE_MAX_LIFETIME_MS), this.shutdown.signal$)));
   }
 }

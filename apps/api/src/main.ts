@@ -11,8 +11,8 @@ if (existsSync(rootEnv)) process.loadEnvFile(rootEnv);
 async function main(): Promise<void> {
   // AppModule env yüklendikten sonra import edilir (ConfigModule process.env'i okur)
   const { AppModule } = await import('./app.module');
-  const { configureApp } = await import('./bootstrap');
-  const app = await NestFactory.create<NestExpressApplication>(AppModule, { bufferLogs: true, bodyParser: false });
+  const { APP_OPTIONS, configureApp } = await import('./bootstrap');
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { ...APP_OPTIONS, bufferLogs: true });
   configureApp(app);
   const { ENV } = await import('./config/config.module');
   await app.listen(app.get<Env>(ENV).PORT);

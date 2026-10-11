@@ -1,4 +1,4 @@
-import { Injectable, Logger, type OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, type OnApplicationShutdown } from '@nestjs/common';
 import { userEventChannel, userEventSchema, type UserEvent } from '@oto/shared';
 import type Redis from 'ioredis';
 import { Observable } from 'rxjs';
@@ -7,7 +7,7 @@ import { RedisService } from './redis.service';
 type Listener = (e: UserEvent) => void;
 
 @Injectable()
-export class UserEventsService implements OnModuleDestroy {
+export class UserEventsService implements OnApplicationShutdown {
   private readonly logger = new Logger(UserEventsService.name);
   private sub?: Redis;
   private subscribing?: Promise<void>;
@@ -79,7 +79,8 @@ export class UserEventsService implements OnModuleDestroy {
     return p;
   }
 
-  async onModuleDestroy(): Promise<void> {
+  /** HTTP sunucusu kapandıktan sonra (SSE akışları ShutdownSignal ile bitmiş olur). */
+  async onApplicationShutdown(): Promise<void> {
     await this.sub?.quit().catch(() => undefined);
   }
 }
