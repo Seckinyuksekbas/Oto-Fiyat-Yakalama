@@ -61,6 +61,7 @@ export interface AdminSourceHealth {
   health: 'HEALTHY' | 'DEGRADED' | 'DOWN' | 'PAUSED' | string;
   /** false: yönetici duraklatması (health=PAUSED ise engel). */
   isActive: boolean;
+  permissionVerifiedAt: string | null;
   lastSuccessAt: string | null;
 }
 

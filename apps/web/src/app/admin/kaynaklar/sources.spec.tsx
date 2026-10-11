@@ -444,6 +444,29 @@ describe('two kinds of pause', () => {
     expect(within(blockCard).getByRole('button', { name: 'Etkinleştir' })).toBeEnabled();
   });
 
+  it('both flags at once: a block-PAUSED source the admin also paused shows both badges; an unverified inactive source shows "Zamanlama kapalı"', async () => {
+    server.use(
+      meHandler('ADMIN'),
+      http.get('*/api/v1/admin/sources', () =>
+        HttpResponse.json({
+          total: 2,
+          items: [
+            row({ id: 1, name: 'İkisi birden', isActive: false, health: 'PAUSED' }),
+            row({ id: 2, code: 'izinsiz', name: 'İzinsiz', isActive: false, health: 'HEALTHY', permissionVerifiedAt: null }),
+          ],
+        }),
+      ),
+    );
+    renderWithClient(<AdminSourcesView />);
+    const both = (await screen.findByRole('heading', { name: 'İkisi birden' })).closest('article') as HTMLElement;
+    expect(within(both).getByText('Engel nedeniyle duraklatıldı')).toBeInTheDocument();
+    expect(within(both).getByText('Duraklatıldı (yönetici)')).toBeInTheDocument();
+
+    const unverified = screen.getByRole('heading', { name: 'İzinsiz' }).closest('article') as HTMLElement;
+    expect(within(unverified).getByText('Zamanlama kapalı')).toBeInTheDocument();
+    expect(within(unverified).queryByText('Duraklatıldı (yönetici)')).toBeNull();
+  });
+
   it('detail: dry-run is allowed for an admin-paused source and refused (with the block reason) for a block-PAUSED one', async () => {
     server.use(...detailHandlers(source({ isActive: false, health: 'HEALTHY' })));
     const first = renderWithClient(<AdminSourceDetailView id={1} />);

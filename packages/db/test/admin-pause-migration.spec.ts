@@ -64,17 +64,30 @@ describe('20261019000000_admin_pause_health_restore', () => {
     await audit(lastActivate.id, 'source.pause', { isActive: true, health: 'HEALTHY' }, t(1));
     await audit(lastActivate.id, 'source.activate', { isActive: false, health: 'PAUSED' }, t(2));
 
-    await prisma.$executeRawUnsafe(readFileSync(MIGRATION, 'utf8'));
+    const sql = readFileSync(MIGRATION, 'utf8');
+    await prisma.$executeRawUnsafe(sql);
 
-    const health = async (id: number) => (await prisma.dataSource.findUniqueOrThrow({ where: { id } })).health;
-    expect(await health(adminHealthy.id)).toBe('HEALTHY');
-    expect(await health(adminDown.id)).toBe('DOWN');
-    expect(await health(blocked.id)).toBe('PAUSED');
-    expect(await health(blockedThenPaused.id)).toBe('PAUSED');
-    expect(await health(errorAfter.id)).toBe('PAUSED');
-    expect(await health(noAudit.id)).toBe('PAUSED');
-    expect(await health(lastActivate.id)).toBe('PAUSED');
-    // isActive değişmez
-    expect((await prisma.dataSource.findUniqueOrThrow({ where: { id: adminHealthy.id } })).isActive).toBe(false);
+    const ids = [adminHealthy, adminDown, blocked, blockedThenPaused, errorAfter, noAudit, lastActivate].map((x) => x.id);
+    const snapshot = async () =>
+      prisma.dataSource.findMany({ where: { id: { in: ids } }, orderBy: { id: 'asc' }, select: { id: true, health: true, isActive: true, consecutiveFailures: true, updatedAt: true } });
+    const byId = async () => new Map((await snapshot()).map((r) => [r.id, r]));
+    const rows = await byId();
+    const expected: Array<[number, string, boolean]> = [
+      [adminHealthy.id, 'HEALTHY', false],
+      [adminDown.id, 'DOWN', false],
+      [blocked.id, 'PAUSED', true],
+      [blockedThenPaused.id, 'PAUSED', false],
+      [errorAfter.id, 'PAUSED', false],
+      [noAudit.id, 'PAUSED', false],
+      [lastActivate.id, 'PAUSED', false],
+    ];
+    for (const [id, health, isActive] of expected) expect(rows.get(id)).toMatchObject({ health, isActive });
+    // consecutiveFailures da korunur
+    expect(rows.get(adminDown.id)?.consecutiveFailures).toBe(7);
+
+    // İkinci çalıştırma hiçbir şeyi değiştirmez (updatedAt dahil)
+    const first = await snapshot();
+    await prisma.$executeRawUnsafe(sql);
+    expect(await snapshot()).toEqual(first);
   });
 });

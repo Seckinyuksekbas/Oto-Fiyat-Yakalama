@@ -358,6 +358,24 @@ describe('config secret masking', () => {
     expect((create.after as { config: unknown }).config).toMatchObject({ apiKey: '***', nested: { token: '***' } });
   });
 
+  it('create with "***" under a secret key is refused (400, nothing stored); a reordered masked array on PATCH is refused (400)', async () => {
+    const { agent } = await actor();
+    const bad = await agent.post(`${api}/sources`).send(sourceBody({ config: { baseUrl: 'http://127.0.0.1:4010/', auth: { user: '***' } } }));
+    expect(bad.status).toBe(400);
+    expect(bad.body.error.code).toBe('VALIDATION_FAILED');
+    expect(await prisma.dataSource.count()).toBe(0);
+
+    const accounts = [{ name: 'a', token: secret() }, { name: 'b', token: secret() }];
+    const res = await agent.post(`${api}/sources`).send(sourceBody({ config: { baseUrl: 'http://127.0.0.1:4010/', accounts } }));
+    expect(res.status).toBe(201);
+    const masked = res.body.source.config.accounts as unknown[];
+    const reordered = await agent.patch(`${api}/sources/${res.body.source.id}`).send({ config: { baseUrl: 'http://127.0.0.1:4010/', accounts: [masked[1], masked[0]] } });
+    expect(reordered.status).toBe(400);
+    expect(reordered.body.error.message).toMatch(/yeniden yazın/);
+    expect(((await prisma.dataSource.findUniqueOrThrow({ where: { id: res.body.source.id } })).config as { accounts: unknown }).accounts).toEqual(accounts);
+    expect(await audits('source.update')).toHaveLength(0);
+  });
+
   it('a no-op PATCH that only echoes the masked config (keys in any order) writes nothing', async () => {
     const { agent } = await actor();
     const res = await agent.post(`${api}/sources`).send(sourceBody({ config: { baseUrl: 'http://127.0.0.1:4010/', authToken: secret(), opts: { pages: 2, apiKey: secret() } } }));

@@ -10,7 +10,7 @@ import { PrismaService } from '../../infra/prisma.service';
 import { boundLocks, LOCK_TX_OPTIONS } from '../../infra/tx-options';
 import { RedisService } from '../../infra/redis.service';
 import { ALLOW_PRIVATE_URLS } from './admin.tokens';
-import { MaskedSecretMissingError, maskConfigSecrets, mergeMaskedConfig } from './config-mask';
+import { containsMaskedSecret, MaskedSecretMissingError, maskConfigSecrets, mergeMaskedConfig } from './config-mask';
 
 export type StatsRange = '24h' | '7d' | '30d';
 const RANGE_MS: Record<StatsRange, number> = { '24h': 86_400_000, '7d': 7 * 86_400_000, '30d': 30 * 86_400_000 };
@@ -139,6 +139,8 @@ export class AdminSourcesService {
   }
 
   async create(ctx: AuditCtx, input: AdminSourceCreate) {
+    // Oluşturmada saklı değer yok: gizli alanda "***" eşlenemez.
+    if (containsMaskedSecret(input.config)) throw badRequest('Gizli config alanlarında *** kullanılamaz; gerçek değeri yazın');
     await this.validateRefs(input);
     try {
       const created = await this.prisma.$transaction(async (tx) => {

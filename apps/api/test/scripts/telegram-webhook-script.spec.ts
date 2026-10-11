@@ -42,7 +42,7 @@ function run(args: string[], env: Record<string, string | undefined>): Promise<{
   const base: Record<string, string> = { PATH: process.env.PATH ?? '', SYSTEMROOT: process.env.SYSTEMROOT ?? '' };
   for (const [k, v] of Object.entries(env)) if (v !== undefined) base[k] = v;
   return new Promise((done) => {
-    execFile(process.execPath, [SCRIPT, ...args], { env: base, timeout: 15_000 }, (err, stdout, stderr) => {
+    execFile(process.execPath, [SCRIPT, ...args], { env: base, timeout: 10_000 }, (err, stdout, stderr) => {
       const code = err ? (typeof err.code === 'number' ? err.code : 1) : 0;
       done({ code, stdout: String(stdout), stderr: String(stderr) });
     });
@@ -56,7 +56,7 @@ const fullEnv = () => ({
   TELEGRAM_API_BASE: apiBase,
 });
 
-describe('scripts/telegram-webhook.mjs', () => {
+describe('scripts/telegram-webhook.mjs', { timeout: 30_000 }, () => {
   it('set: posts setWebhook with url, secret_token and allowed_updates; never prints the token or secret', async () => {
     const r = await run(['set'], fullEnv());
     expect(r.code).toBe(0);
