@@ -67,7 +67,11 @@ test('kullanıcı: kayıt → doğrulama → Telegram → profil → canlı fır
     await expect(tg).toBeEnabled();
     await tg.click();
     await expect(tg).toHaveAttribute('aria-checked', 'true');
+    // Yüklü makinede kayıt (limit kilidi tx'i) yavaş olabilir: yanıt beklenir ve durumu hata mesajında görünür.
+    const created = page.waitForResponse((r) => r.url().endsWith('/api/v1/me/search-profiles') && r.request().method() === 'POST', { timeout: 60_000 });
     await page.getByRole('button', { name: 'Profili oluştur' }).click();
+    const res = await created;
+    expect(res.status(), `POST /me/search-profiles: ${await res.text().catch(() => '')}`).toBe(201);
     await expect(page).toHaveURL(/\/app\/profiller$/);
     await expect(page.getByRole('heading', { level: 2, name: `${deal.make} ${deal.model}` })).toBeVisible();
   });
