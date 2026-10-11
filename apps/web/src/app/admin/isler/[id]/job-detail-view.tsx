@@ -9,7 +9,7 @@ import { EmptyState } from '@/components/empty-state';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ApiError } from '@/lib/api';
-import { parseDryRun, type AdminJobDetail } from '@/lib/admin/catalog-api';
+import { isTerminalJob, parseDryRun, type AdminJobDetail } from '@/lib/admin/catalog-api';
 import { useAdminJob } from '@/lib/admin/catalog-queries';
 import { formatDateTime } from '@/lib/format';
 import { jobDuration } from '../jobs-view';
@@ -145,7 +145,11 @@ export function AdminJobDetailView({ id }: { id: number }) {
           <h2 id="dry-run-sonucu" className="font-display text-base font-semibold">
             Dry-run sonucu
           </h2>
-          {dry ? <DryRunPreview result={dry} /> : <p className="text-sm text-muted">Sonuç iş bitince burada görünür.</p>}
+          {dry ? (
+            <DryRunPreview result={dry} />
+          ) : (
+            <p className="text-sm text-muted">{isTerminalJob(j.status) ? 'Sonuç yok.' : 'Sonuç iş bitince burada görünür.'}</p>
+          )}
         </section>
       ) : null}
 

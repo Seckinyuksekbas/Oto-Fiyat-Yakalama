@@ -47,6 +47,14 @@ export function ListingStatusBadge({ status }: { status: string }) {
   return status === 'REMOVED' ? <StatusBadge status="REMOVED" label="Yayından kalktı" tone="neutral" /> : <StatusBadge status={status} />;
 }
 
+const DAY = new Intl.DateTimeFormat('tr-TR', { timeZone: 'Europe/Istanbul', day: '2-digit', month: '2-digit', year: 'numeric' });
+
+/** Yalnızca tarih (İstanbul): "11.10.2026". */
+export function formatDay(iso: string): string {
+  const d = new Date(iso);
+  return Number.isFinite(d.getTime()) ? DAY.format(d) : '—';
+}
+
 export function When({ iso, empty = 'hiç' }: { iso: string | null | undefined; empty?: string }) {
   if (!iso) return <span className="text-muted">{empty}</span>;
   return (

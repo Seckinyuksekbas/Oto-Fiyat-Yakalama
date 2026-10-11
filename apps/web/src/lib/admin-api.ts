@@ -226,7 +226,19 @@ export function adminErrorMessage(err: unknown): string {
   if (err.status === 429) return RATE_LIMIT_MESSAGE;
   if (err.code === ErrorCode.INVALID_OPERATION && err.status === 409) return err.message || GENERIC;
   if (err.status >= 500) return GENERIC;
+  const serverText = detaillessValidationMessage(err);
+  if (serverText) return serverText;
   return ADMIN_CODE_MESSAGES[err.code] ?? GENERIC;
+}
+
+/**
+ * Servis içi 400'ler (SSRF, bilinmeyen adapter, proxy bulunamadı) `VALIDATION_FAILED` + ayrıntısız + Türkçe mesaj
+ * döner; ZodPipe 400'leri ise ayrıntı listesi taşır. Ayrıntısız olanların sunucu mesajı gösterilebilir.
+ */
+export function detaillessValidationMessage(err: unknown): string | null {
+  if (!(err instanceof ApiError) || err.code !== ErrorCode.VALIDATION_FAILED || err.status !== 400) return null;
+  const empty = err.details === undefined || err.details === null || (Array.isArray(err.details) && err.details.length === 0);
+  return empty && typeof err.message === 'string' && err.message.trim() !== '' ? err.message : null;
 }
 
 /**

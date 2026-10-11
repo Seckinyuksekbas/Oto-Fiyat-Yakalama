@@ -210,9 +210,18 @@ function IssuesTab({ active }: { active: boolean }) {
         />
         <div className="flex flex-col gap-1">
           <label htmlFor="issue-field" className="text-[13px] text-muted">
-            Alan
+            Alan adı (tam eşleşme)
           </label>
-          <Input id="issue-field" value={fieldText} maxLength={100} placeholder="price, year…" onChange={(e) => setFieldText(e.target.value)} className="h-9 w-44" />
+          <Input
+            id="issue-field"
+            value={fieldText}
+            maxLength={100}
+            placeholder="price"
+            spellCheck={false}
+            autoCapitalize="off"
+            onChange={(e) => setFieldText(e.target.value)}
+            className="num h-9 w-44"
+          />
         </div>
       </form>
       <DataTable

@@ -1,8 +1,8 @@
 import { cloneElement } from 'react';
 import { http, HttpResponse } from 'msw';
 import userEvent from '@testing-library/user-event';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { server } from '@/test/server';
 import { renderWithClient } from '@/test/render';
 import { apiError, meHandler } from '@/test/admin-fixtures';
@@ -31,8 +31,21 @@ vi.mock('recharts', async (orig) => {
   };
 });
 
+const jobListeners = vi.hoisted(() => new Set<(j: unknown) => void>());
+vi.mock('@/lib/admin-stream', () => ({
+  onAdminJob: (fn: (j: unknown) => void) => {
+    jobListeners.add(fn);
+    return () => jobListeners.delete(fn);
+  },
+}));
+
 import { AdminSourcesView } from './sources-view';
 import { AdminSourceDetailView } from './[id]/source-detail-view';
+
+afterEach(() => {
+  vi.useRealTimers();
+  jobListeners.clear();
+});
 
 beforeEach(() => {
   toastMock.error.mockClear();
@@ -243,5 +256,161 @@ describe('source detail: edit form', () => {
     await user.click(screen.getByRole('button', { name: 'Değişiklikleri kaydet' }));
     await waitFor(() => expect(patch).toEqual({ permissionVerified: false }));
     expect(toastMock.warning).toHaveBeenCalledWith('İzin geri alındı; kaynak devre dışı bırakıldı.');
+  });
+});
+
+const dryJob = (status: string, over: Record<string, unknown> = {}) => ({
+  job: {
+    id: 77, sourceId: 1, sourceCode: 'demo-site', sourceName: 'Demo site', trigger: 'MANUAL', dryRun: true,
+    status, startedAt: '2026-10-11T09:00:00.000Z', finishedAt: status === 'QUEUED' ? null : '2026-10-11T09:00:04.000Z',
+    pagesFetched: 1, listingsSeen: 1, listingsNew: 0, listingsUpdated: 0, listingsRemoved: 0, errorsCount: 0,
+    avgResponseMs: 300, errorSummary: null, createdAt: '2026-10-11T09:00:00.000Z', errors: [],
+    dryRunResult:
+      status === 'SUCCEEDED'
+        ? { pages: 1, durationMs: 900, items: [{ externalId: 'D-9', title: 'Opel Corsa 1.2 Edition', year: 2019, km: 70000, price: '690000', city: 'Ankara' }], problems: [] }
+        : null,
+    ...over,
+  },
+});
+
+describe('source detail: dry-run lifecycle', () => {
+  it('polls while queued, refetches on the job stream event and stops polling when finished', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let done = false;
+    let jobCalls = 0;
+    server.use(
+      ...detailHandlers(),
+      http.post('*/api/v1/admin/sources/1/test-scrape', () => HttpResponse.json({ jobId: 77 }, { status: 202 })),
+      http.get('*/api/v1/admin/jobs/77', () => {
+        jobCalls += 1;
+        return HttpResponse.json(dryJob(done ? 'SUCCEEDED' : 'QUEUED'));
+      }),
+    );
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderWithClient(<AdminSourceDetailView id={1} />);
+    await user.click(await screen.findByRole('button', { name: 'Test taraması başlat' }));
+    await waitFor(() => expect(jobCalls).toBe(1));
+    expect(screen.getByText('Sonuç bekleniyor…')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Test taraması başlat' })).toBeDisabled();
+
+    // Akış yokken 3 sn'de bir yoklama
+    await act(() => vi.advanceTimersByTimeAsync(3_100));
+    await waitFor(() => expect(jobCalls).toBe(2));
+
+    // Akıştaki `job` olayı beklemeden yeniden çeker
+    done = true;
+    act(() => {
+      for (const fn of jobListeners) fn({ type: 'job', jobId: 77, sourceId: 1, status: 'SUCCEEDED', at: '2026-10-11T09:00:04.000Z' });
+    });
+    expect(await screen.findByRole('table', { name: /Dry-run önizlemesi/ })).toBeInTheDocument();
+    const settled = jobCalls;
+    expect(settled).toBe(3);
+
+    // Bitmiş iş artık yoklanmaz
+    await act(() => vi.advanceTimersByTimeAsync(15_000));
+    expect(jobCalls).toBe(settled);
+  });
+
+  it('shows "Sonuç yok" for a failed dry run without a result', async () => {
+    server.use(
+      ...detailHandlers(),
+      http.post('*/api/v1/admin/sources/1/test-scrape', () => HttpResponse.json({ jobId: 77 }, { status: 202 })),
+      http.get('*/api/v1/admin/jobs/77', () => HttpResponse.json(dryJob('FAILED', { errorSummary: 'Bağlantı reddedildi' }))),
+    );
+    const user = userEvent.setup();
+    renderWithClient(<AdminSourceDetailView id={1} />);
+    await user.click(await screen.findByRole('button', { name: 'Test taraması başlat' }));
+    expect(await screen.findByText('Sonuç yok.')).toBeInTheDocument();
+    expect(screen.getByText('Bağlantı reddedildi')).toBeInTheDocument();
+  });
+
+  it('shows the server reason on 409', async () => {
+    server.use(
+      ...detailHandlers(),
+      http.post('*/api/v1/admin/sources/1/test-scrape', () => apiError(409, 'INVALID_OPERATION', 'Bu kaynak için devam eden bir iş var')),
+    );
+    const user = userEvent.setup();
+    renderWithClient(<AdminSourceDetailView id={1} />);
+    await user.click(await screen.findByRole('button', { name: 'Test taraması başlat' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Bu kaynak için devam eden bir iş var');
+  });
+});
+
+describe('source detail: form robustness', () => {
+  it('keeps typed values when a background refetch changes updatedAt', async () => {
+    let version = 0;
+    server.use(...detailHandlers());
+    server.use(
+      http.get('*/api/v1/admin/sources/1', () =>
+        HttpResponse.json({ source: source({ updatedAt: `2026-10-11T09:0${version}:00.000Z`, lastSuccessAt: `2026-10-11T09:0${version}:00.000Z` }) }),
+      ),
+    );
+    const user = userEvent.setup();
+    const { client } = renderWithClient(<AdminSourceDetailView id={1} />);
+    const name = await screen.findByLabelText('Ad');
+    await user.clear(name);
+    await user.type(name, 'Yazılıyor');
+    version = 5;
+    await act(() => client.invalidateQueries({ queryKey: ['admin', 'sources'] }));
+    await waitFor(() =>
+      expect(client.getQueryData<{ source: { updatedAt: string } }>(['admin', 'sources', 'detail', 1])?.source.updatedAt).toBe('2026-10-11T09:05:00.000Z'),
+    );
+    expect(screen.getByLabelText('Ad')).toHaveValue('Yazılıyor');
+  });
+
+  it('saves a source whose permission note is null without sending an empty note', async () => {
+    let patch: Record<string, unknown> | undefined;
+    server.use(
+      ...detailHandlers(source({ permissionNote: null })),
+      http.patch('*/api/v1/admin/sources/1', async ({ request }) => {
+        patch = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ source: source({ permissionNote: null, intervalSec: 600 }) });
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithClient(<AdminSourceDetailView id={1} />);
+    const interval = await screen.findByLabelText('Tarama aralığı (sn)');
+    await user.clear(interval);
+    await user.type(interval, '600');
+    await user.click(screen.getByRole('button', { name: 'Değişiklikleri kaydet' }));
+    await waitFor(() => expect(patch).toEqual({ intervalSec: 600 }));
+    expect(toastMock.success).toHaveBeenCalledWith('Kaynak kaydedildi');
+  });
+
+  it('ignores formatting-only config edits and attaches SSRF rejections to the config field', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    server.use(
+      ...detailHandlers(),
+      http.patch('*/api/v1/admin/sources/1', async ({ request }) => {
+        const b = (await request.json()) as Record<string, unknown>;
+        bodies.push(b);
+        if (b.config) return apiError(400, 'VALIDATION_FAILED', 'Adres özel/iç ağa çözümleniyor');
+        return HttpResponse.json({ source: source() });
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithClient(<AdminSourceDetailView id={1} />);
+    const config = await screen.findByLabelText('Yapılandırma (JSON)');
+    // Yalnızca biçim değişikliği: config gönderilmez (maskeli adres yerinde kalsa bile)
+    fireEvent.change(config, { target: { value: JSON.stringify(source().config) } });
+    await user.type(screen.getByLabelText('Ad'), ' 2');
+    await user.click(screen.getByRole('button', { name: 'Değişiklikleri kaydet' }));
+    await waitFor(() => expect(bodies[0]).toEqual({ name: 'Demo site 2' }));
+
+    fireEvent.change(screen.getByLabelText('Yapılandırma (JSON)'), { target: { value: JSON.stringify({ baseUrl: 'http://10.0.0.5/ilanlar', pages: 3 }) } });
+    await user.click(screen.getByRole('button', { name: 'Değişiklikleri kaydet' }));
+    expect(await screen.findByText('Adres özel/iç ağa çözümleniyor')).toBeInTheDocument();
+    expect(screen.getByLabelText('Yapılandırma (JSON)')).toHaveAccessibleDescription('Adres özel/iç ağa çözümleniyor');
+    expect(bodies[1]).toMatchObject({ config: { baseUrl: 'http://10.0.0.5/ilanlar', pages: 3 } });
+  });
+
+  it('locks the proxy selection and keeps the current value when proxies fail to load', async () => {
+    server.use(...detailHandlers(source({ proxyConfigId: 9 })));
+    server.use(http.get('*/api/v1/admin/proxies', () => apiError(500, 'INTERNAL', 'x')));
+    renderWithClient(<AdminSourceDetailView id={1} />);
+    const select = await screen.findByLabelText('Proxy');
+    expect(select).toBeDisabled();
+    expect(select).toHaveValue('9');
+    expect(screen.getByText(/Proxy listesi yüklenemedi/)).toBeInTheDocument();
   });
 });

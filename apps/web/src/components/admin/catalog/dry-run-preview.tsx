@@ -28,52 +28,102 @@ export function DryRunPreview({ result }: { result: DryRunResult }) {
         </div>
         <div className="flex gap-1.5">
           <dt>Sorun</dt>
-          <dd className={problems.length > 0 ? 'num text-warning-text' : 'num text-text'}>{formatCount(problems.length)}</dd>
+          <dd className={problems.length > 0 ? 'num text-warning-text' : 'num text-text'}>
+            {formatCount(problems.length)}
+          </dd>
         </div>
       </dl>
 
       {items.length === 0 ? (
-        <p className="text-sm text-muted">Adapter hiç ilan döndürmedi. Kaynak sayfasının yapısı ya da yapılandırma adresi değişmiş olabilir.</p>
+        <p className="text-sm text-muted">
+          Adapter hiç ilan döndürmedi. Kaynak sayfasının yapısı ya da yapılandırma adresi değişmiş olabilir.
+        </p>
       ) : (
-        <div className="overflow-x-auto rounded-md border border-border">
-          <table className="w-full min-w-[640px] border-collapse text-sm">
-            <caption className="sr-only">Dry-run önizlemesi: normalize edilen ilk {items.length} ilan</caption>
-            <thead className="bg-surface-2 text-left text-[13px] text-muted">
-              <tr>
-                <th scope="col" className="px-3 py-2 font-medium">İlan</th>
-                <th scope="col" className="px-3 py-2 text-right font-medium">Yıl</th>
-                <th scope="col" className="px-3 py-2 text-right font-medium">Km</th>
-                <th scope="col" className="px-3 py-2 text-right font-medium">Fiyat</th>
-                <th scope="col" className="px-3 py-2 font-medium">Şehir</th>
-                <th scope="col" className="px-3 py-2 font-medium">Adres</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((it, i) => {
-                const year = num(it.year);
-                const km = num(it.km);
-                const price = str(it.price);
-                return (
-                  <tr key={str(it.externalId) ?? i} className="border-t border-border align-top">
-                    <td className="max-w-[300px] px-3 py-2">
-                      <span className="block truncate">{str(it.title) ?? 'Başlıksız'}</span>
-                      <span className="num block text-[12px] text-muted">{str(it.externalId) ?? 'kimlik yok'}</span>
-                    </td>
-                    <td className="num px-3 py-2 text-right">{year ?? '—'}</td>
-                    <td className="num px-3 py-2 text-right">{km !== null ? formatKm(km) : '—'}</td>
-                    <td className="num px-3 py-2 text-right">{price ? formatTl(price) : '—'}</td>
-                    <td className="px-3 py-2">{str(it.city) ?? <span className="text-muted">yok</span>}</td>
-                    <td className="max-w-[220px] px-3 py-2">
-                      <span className="block truncate text-[12px] text-muted" title={str(it.url) ?? undefined}>
-                        {str(it.url) ?? 'yok'}
-                      </span>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <>
+          {/* ≤ 768 px: kart listesi (tablo yatay kaydırma gerektirirdi) */}
+          <ul aria-label="Dry-run önizlemesi" className="flex flex-col gap-2 md:hidden">
+            {items.map((it, i) => {
+              const price = str(it.price);
+              const year = num(it.year);
+              const km = num(it.km);
+              return (
+                <li
+                  key={str(it.externalId) ?? i}
+                  className="flex flex-col gap-1 rounded-md border border-border p-3 text-sm"
+                >
+                  <span className="font-medium break-words">{str(it.title) ?? 'Başlıksız'}</span>
+                  <span className="text-[13px] text-muted">
+                    {[year !== null ? String(year) : null, km !== null ? formatKm(km) : null, str(it.city)]
+                      .filter(Boolean)
+                      .join(', ') || 'bilgi yok'}
+                  </span>
+                  <span className="num">{price ? formatTl(price) : '—'}</span>
+                  <span className="num break-all text-[12px] text-muted">
+                    {str(it.externalId) ?? 'kimlik yok'}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+          <div className="hidden overflow-x-auto rounded-md border border-border md:block">
+            <table className="w-full min-w-[640px] border-collapse text-sm">
+              <caption className="sr-only">
+                Dry-run önizlemesi: normalize edilen ilk {items.length} ilan
+              </caption>
+              <thead className="bg-surface-2 text-left text-[13px] text-muted">
+                <tr>
+                  <th scope="col" className="px-3 py-2 font-medium">
+                    İlan
+                  </th>
+                  <th scope="col" className="px-3 py-2 text-right font-medium">
+                    Yıl
+                  </th>
+                  <th scope="col" className="px-3 py-2 text-right font-medium">
+                    Km
+                  </th>
+                  <th scope="col" className="px-3 py-2 text-right font-medium">
+                    Fiyat
+                  </th>
+                  <th scope="col" className="px-3 py-2 font-medium">
+                    Şehir
+                  </th>
+                  <th scope="col" className="px-3 py-2 font-medium">
+                    Adres
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((it, i) => {
+                  const year = num(it.year);
+                  const km = num(it.km);
+                  const price = str(it.price);
+                  return (
+                    <tr key={str(it.externalId) ?? i} className="border-t border-border align-top">
+                      <td className="max-w-[300px] px-3 py-2">
+                        <span className="block truncate">{str(it.title) ?? 'Başlıksız'}</span>
+                        <span className="num block text-[12px] text-muted">
+                          {str(it.externalId) ?? 'kimlik yok'}
+                        </span>
+                      </td>
+                      <td className="num px-3 py-2 text-right">{year ?? '—'}</td>
+                      <td className="num px-3 py-2 text-right">{km !== null ? formatKm(km) : '—'}</td>
+                      <td className="num px-3 py-2 text-right">{price ? formatTl(price) : '—'}</td>
+                      <td className="px-3 py-2">{str(it.city) ?? <span className="text-muted">yok</span>}</td>
+                      <td className="max-w-[220px] px-3 py-2">
+                        <span
+                          className="block truncate text-[12px] text-muted"
+                          title={str(it.url) ?? undefined}
+                        >
+                          {str(it.url) ?? 'yok'}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
 
       {problems.length > 0 ? (

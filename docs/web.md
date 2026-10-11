@@ -71,6 +71,7 @@ Sunucu tarafı: [notifications.md](notifications.md). Akış `GET /api/v1/me/not
 - Tokenlar `src/app/globals.css` (`@theme`). Koyu varsayılan; amber yalnızca fırsat/skor/birincil aksiyon için. Tema `data-theme` ile; `<head>` içindeki satır içi betik (`themeInitScript`) ilk boyamadan önce tercihi uygular. Seçenekler: sistem / açık / koyu.
 - **Açık tema AA kuralı:** spec yalnızca koyu amberi sabitler; açık temada metin ve kontrol renkleri WCAG AA sağlar: accent `#8A4A0C` (bg/surface/surface-2 üzerinde 5.9–6.9:1), `danger-text #A81D22`, `positive-text #176843`, `warning-text #6F4E08`, kontrol sınırları için `border-strong #7A8088` (>=3:1). Koyu tarafta `border-strong #6A7079`.
 - Yazı tipleri: Instrument Sans (başlık), Inter (gövde), Geist Mono (sayılar, `.num`). Hepsi self-hosted.
+- Geist Mono: sayılar ve makine tanımlayıcıları/kod (URL, alan adı, JSON); düz metinde kullanılmaz.
 - Bileşenler: `components/ui/*` (badge, button, card, dialog, dropdown-menu, input, label, select, separator, sheet, skeleton, switch, tabs, tooltip), imza bileşenler: `ScoreRing`, `ConfidenceMeter`, `PriceBand`, `PriceHistoryChart`, `ListingCard`/`ListingTable`, `ExplanationPanel`, `FavoriteButton`, `NotificationBell`, `ProfileWizard`/`ProfilePreview`, `AppShell`.
 - İndirim rengi işarete göre seçilir; INSUFFICIENT tahminler "zayıf tahmin" etiketiyle gösterilir. Açıklama paneli motorun gerçek davranışını yansıtır (hasarlı ilan dışlama sayıları ham açıklamadan).
 

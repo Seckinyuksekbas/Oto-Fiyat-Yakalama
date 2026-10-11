@@ -126,9 +126,17 @@ export function useSourceAction(id: number) {
   });
 }
 
+/** Başarıda yanıt önce detay önbelleğine yazılır: form yeniden kurulduğunda bayat değerle başlamasın. */
 export function useUpdateSource(id: number) {
+  const qc = useQueryClient();
   const invalidate = useInvalidateSources();
-  return useMutation({ mutationFn: (body: AdminSourceUpdate) => catalogApi.sources.update(id, body), onSuccess: invalidate });
+  return useMutation({
+    mutationFn: (body: AdminSourceUpdate) => catalogApi.sources.update(id, body),
+    onSuccess: (res) => {
+      qc.setQueryData(catalogKeys.sources.detail(id), res);
+      return invalidate();
+    },
+  });
 }
 
 export function useTestScrape(id: number) {

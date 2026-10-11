@@ -10,7 +10,7 @@ import { StatusBadge } from '@/components/admin/status-badge';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
-import { adminErrorMessage, adminFieldErrors, type Paged } from '@/lib/admin-api';
+import { adminErrorMessage, adminFieldErrors, detaillessValidationMessage, type Paged } from '@/lib/admin-api';
 import { catalogApi, proxyCheckErrorMessage, type AdminProxy, type ProxyWrite } from '@/lib/admin/catalog-api';
 import { catalogKeys, useAdminProxies } from '@/lib/admin/catalog-queries';
 
@@ -36,6 +36,9 @@ function takeSecret(ref: React.RefObject<HTMLInputElement | null>): string {
 }
 
 function fieldMessages(err: unknown) {
+  // Servis içi 400 (SSRF/iç ağ, kimlik bilgisi biçimi): ayrıntısız Türkçe mesaj adres alanına aittir.
+  const serverText = detaillessValidationMessage(err);
+  if (serverText) return { url: serverText, form: null };
   const fe = adminFieldErrors(err);
   return { name: fe.name, url: fe.url, form: Object.keys(fe).length > 0 ? null : adminErrorMessage(err) };
 }
@@ -206,8 +209,19 @@ function EditProxyDialog({ proxy, onClose }: { proxy: AdminProxy; onClose(): voi
             <label htmlFor={`${uid}-name`} className="text-sm font-medium">
               Ad
             </label>
-            <Input id={`${uid}-name`} value={name} maxLength={100} aria-invalid={!!errors.name} onChange={(e) => setName(e.target.value)} />
-            {errors.name ? <p className="text-[13px] text-danger-text">{errors.name}</p> : null}
+            <Input
+              id={`${uid}-name`}
+              value={name}
+              maxLength={100}
+              aria-invalid={!!errors.name}
+              aria-describedby={errors.name ? `${uid}-name-error` : undefined}
+              onChange={(e) => setName(e.target.value)}
+            />
+            {errors.name ? (
+              <p id={`${uid}-name-error`} className="text-[13px] text-danger-text">
+                {errors.name}
+              </p>
+            ) : null}
           </div>
           <div className="flex flex-col gap-1.5">
             <label htmlFor={`${uid}-url`} className="text-sm font-medium">
@@ -223,8 +237,13 @@ function EditProxyDialog({ proxy, onClose }: { proxy: AdminProxy; onClose(): voi
               maxLength={500}
               className="num"
               aria-invalid={!!errors.url}
+              aria-describedby={errors.url ? `${uid}-url-error` : undefined}
             />
-            {errors.url ? <p className="text-[13px] text-danger-text">{errors.url}</p> : null}
+            {errors.url ? (
+              <p id={`${uid}-url-error`} className="text-[13px] text-danger-text">
+                {errors.url}
+              </p>
+            ) : null}
           </div>
           <label className="inline-flex items-center gap-2 text-sm">
             <input type="checkbox" className="size-4 accent-[var(--color-accent)]" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />

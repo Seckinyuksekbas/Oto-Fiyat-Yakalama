@@ -101,7 +101,7 @@ export interface AdminAnalysesQuery extends PageQuery {
 
 export interface AdminAnalysisDetail {
   analysis: AdminAnalysisRow & {
-    expansionLevel: number;
+    expansionLevel: number | null;
     listingPrice: string | null;
     comparableIds: number[];
     explanation: unknown;
@@ -121,7 +121,7 @@ export interface AdminSource {
   adapterKey: string;
   kind: SourceKind;
   permissionType: PermissionType;
-  permissionNote: string;
+  permissionNote: string | null;
   permissionVerifiedAt: string | null;
   isActive: boolean;
   intervalSec: number;

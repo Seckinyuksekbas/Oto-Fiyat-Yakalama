@@ -1,8 +1,8 @@
 import { cloneElement } from 'react';
 import { http, HttpResponse } from 'msw';
 import userEvent from '@testing-library/user-event';
-import { screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { server } from '@/test/server';
 import { renderWithClient } from '@/test/render';
 import { apiError, meHandler } from '@/test/admin-fixtures';
@@ -252,5 +252,56 @@ describe('listing detail', () => {
     renderWithClient(<AdminListingDetailView id={42} />);
     expect(await screen.findByRole('button', { name: 'Yeniden analiz et' })).toBeDisabled();
     expect(screen.getByText('Kaldırılmış ilan yeniden analiz edilemez.')).toBeInTheDocument();
+  });
+});
+
+describe('listing detail: reanalyze waiting', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('gives up after 90 seconds with an explanation and re-enables the button', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let gets = 0;
+    server.use(
+      meHandler('ADMIN'),
+      http.get('*/api/v1/admin/listings/42', () => {
+        gets += 1;
+        return HttpResponse.json(detail(10));
+      }),
+      http.get('*/api/v1/admin/analyses/:id', ({ params }) => HttpResponse.json(analysisDetail(Number(params.id)))),
+      http.post('*/api/v1/admin/listings/42/reanalyze', () => HttpResponse.json({ jobId: 'analyze-manual-42-1' }, { status: 202 })),
+    );
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderWithClient(<AdminListingDetailView id={42} />);
+    await user.click(await screen.findByRole('button', { name: 'Yeniden analiz et' }));
+    expect(await screen.findByRole('button', { name: /Analiz sırada/ })).toBeDisabled();
+    const before = gets;
+    await act(() => vi.advanceTimersByTimeAsync(10_000));
+    expect(gets).toBeGreaterThan(before); // bekleme sırasında yoklama
+    await act(() => vi.advanceTimersByTimeAsync(81_000));
+    expect(await screen.findByRole('status')).toHaveTextContent('Sonuç 90 saniyede gelmedi');
+    expect(screen.getByRole('button', { name: 'Yeniden analiz et' })).toBeEnabled();
+    expect(toastMock.success).not.toHaveBeenCalled();
+  });
+
+  it('does not toast after the page is left while the request is in flight', async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    server.use(
+      meHandler('ADMIN'),
+      http.get('*/api/v1/admin/listings/42', () => HttpResponse.json(detail(10))),
+      http.get('*/api/v1/admin/analyses/:id', ({ params }) => HttpResponse.json(analysisDetail(Number(params.id)))),
+      http.post('*/api/v1/admin/listings/42/reanalyze', async () => {
+        await gate;
+        return apiError(409, 'INVALID_OPERATION', 'Kaldırılmış ilan yeniden analiz edilemez');
+      }),
+    );
+    const user = userEvent.setup();
+    const { unmount } = renderWithClient(<AdminListingDetailView id={42} />);
+    await user.click(await screen.findByRole('button', { name: 'Yeniden analiz et' }));
+    unmount();
+    release();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(toastMock.error).not.toHaveBeenCalled();
+    expect(toastMock.success).not.toHaveBeenCalled();
   });
 });

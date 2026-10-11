@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, FlaskConical, Loader2 } from 'lucide-react';
-import { PERMISSION_LABEL, When } from '@/components/admin/catalog/cells';
+import { PERMISSION_LABEL, When, formatDay } from '@/components/admin/catalog/cells';
 import { DryRunPreview } from '@/components/admin/catalog/dry-run-preview';
 import { SourceToggle } from '@/components/admin/catalog/source-toggle';
 import { StatusBadge } from '@/components/admin/status-badge';
@@ -14,7 +14,6 @@ import { ApiError } from '@/lib/api';
 import { isTerminalJob, parseDryRun, testScrapeErrorMessage, type AdminSource } from '@/lib/admin/catalog-api';
 import { catalogKeys, useAdminJob, useAdminProxies, useAdminSource, useTestScrape } from '@/lib/admin/catalog-queries';
 import { onAdminJob } from '@/lib/admin-stream';
-import { formatDateTime } from '@/lib/format';
 import { SourceForm } from './source-form';
 import { SourceStats } from './source-stats';
 
@@ -48,15 +47,23 @@ function DryRunPanel({ source }: { source: AdminSource }) {
       ? 'Kaynak engel ya da elle duraklatma nedeniyle durdu. Önce nedeni inceleyip etkinleştirin.'
       : null;
 
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
   const start = async () => {
     if (busy.current) return;
     busy.current = true;
     setError(null);
     try {
       const res = await scrape.mutateAsync();
-      setJobId(res.jobId);
+      if (mounted.current) setJobId(res.jobId);
     } catch (err) {
-      setError(testScrapeErrorMessage(err));
+      if (mounted.current) setError(testScrapeErrorMessage(err));
     } finally {
       busy.current = false;
     }
@@ -99,7 +106,7 @@ function DryRunPanel({ source }: { source: AdminSource }) {
           </div>
           {job.isError ? <p className="text-sm text-muted">İş durumu okunamadı. İşler sayfasından takip edin.</p> : null}
           {status === 'FAILED' && job.data?.job.errorSummary ? <p className="text-sm text-danger-text">{job.data.job.errorSummary}</p> : null}
-          {status && isTerminalJob(status) && result ? <DryRunPreview result={result} /> : null}
+          {status && isTerminalJob(status) ? result ? <DryRunPreview result={result} /> : <p className="text-sm text-muted">Sonuç yok.</p> : null}
         </div>
       ) : null}
     </section>
@@ -141,7 +148,7 @@ function Header({ s }: { s: AdminSource }) {
               <dt>İzin</dt>
               <dd className="text-text">
                 {PERMISSION_LABEL[s.permissionType] ?? s.permissionType}
-                {s.permissionVerifiedAt ? `, doğrulama ${formatDateTime(s.permissionVerifiedAt).slice(0, 10)}` : ', doğrulanmadı'}
+                {s.permissionVerifiedAt ? `, doğrulama ${formatDay(s.permissionVerifiedAt)}` : ', doğrulanmadı'}
               </dd>
             </div>
           </dl>
@@ -160,6 +167,9 @@ function Header({ s }: { s: AdminSource }) {
 export function AdminSourceDetailView({ id }: { id: number }) {
   const q = useAdminSource(id);
   const proxies = useAdminProxies();
+  // Form yalnızca başarılı kayıttan sonra yeniden kurulur; worker her taramada `updatedAt`'i değiştirir ve akış
+  // olayları kaynak sorgularını tazeler, bu yüzden `updatedAt` anahtarı yazılmakta olan değerleri silerdi.
+  const [formVersion, setFormVersion] = useState(0);
 
   if (q.isPending) {
     return (
@@ -198,7 +208,13 @@ export function AdminSourceDetailView({ id }: { id: number }) {
       {proxies.isPending ? (
         <Skeleton className="h-[420px] w-full rounded-lg" />
       ) : (
-        <SourceForm key={s.updatedAt} source={s} proxies={proxies.data?.items ?? []} />
+        <SourceForm
+          key={formVersion}
+          source={s}
+          proxies={proxies.data?.items ?? []}
+          proxiesError={proxies.isError}
+          onSaved={() => setFormVersion((v) => v + 1)}
+        />
       )}
     </div>
   );

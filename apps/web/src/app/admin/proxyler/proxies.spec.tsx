@@ -83,7 +83,8 @@ describe('proxies', () => {
     server.use(
       meHandler('ADMIN'),
       http.get('*/api/v1/admin/proxies', () => HttpResponse.json({ total: 0, items: [] })),
-      http.post('*/api/v1/admin/proxies', () => apiError(400, 'VALIDATION_FAILED', 'Özel ağ adresi', [{ path: 'url', message: 'İç ağ adresi kullanılamaz' }])),
+      // Gerçek biçim: SSRF reddi ayrıntısız VALIDATION_FAILED + Türkçe mesaj (assertPublicHttpUrl)
+      http.post('*/api/v1/admin/proxies', () => apiError(400, 'VALIDATION_FAILED', 'İç ağ adresi kullanılamaz')),
     );
     const user = userEvent.setup();
     const { client } = renderWithClient(<AdminProxiesView />);
@@ -92,6 +93,7 @@ describe('proxies', () => {
     await user.type(within(form).getByLabelText('Proxy adresi'), SECRET_URL);
     await user.click(within(form).getByRole('button', { name: 'Proxy ekle' }));
     expect(await within(form).findByText('İç ağ adresi kullanılamaz')).toBeInTheDocument();
+    expect(within(form).getByLabelText('Proxy adresi')).toHaveAccessibleDescription('İç ağ adresi kullanılamaz');
     expect(within(form).getByLabelText('Proxy adresi')).toHaveValue('');
     expectNoSecret(client);
   });

@@ -46,7 +46,15 @@ function useReanalyzeFlow(id: number, detail: AdminListingDetail | undefined) {
   const [baseline, setBaseline] = useState<{ value: number | null } | null>(null);
   const [outcome, setOutcome] = useState<Outcome>(null);
   const busy = useRef(false);
+  const mounted = useRef(true);
   const latest = detail?.listing.latestAnalysisId ?? null;
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!baseline || latest === null || latest === baseline.value) return;
@@ -72,12 +80,13 @@ function useReanalyzeFlow(id: number, detail: AdminListingDetail | undefined) {
     const from = latest;
     try {
       await mutation.mutateAsync();
+      if (!mounted.current) return; // sayfadan çıkıldı: toast/durum yok
       setOutcome('queued');
       setBaseline({ value: from });
       void qc.invalidateQueries({ queryKey: catalogKeys.listings.detail(id) });
     } catch (err) {
       busy.current = false;
-      toast.error(reanalyzeErrorMessage(err));
+      if (mounted.current) toast.error(reanalyzeErrorMessage(err));
     }
   };
 

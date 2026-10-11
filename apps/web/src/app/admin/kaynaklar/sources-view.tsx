@@ -1,7 +1,7 @@
 'use client';
 import Link from 'next/link';
 import { Database, ShieldCheck, ShieldAlert } from 'lucide-react';
-import { PERMISSION_LABEL, When } from '@/components/admin/catalog/cells';
+import { PERMISSION_LABEL, When, formatDay } from '@/components/admin/catalog/cells';
 import { SourceToggle, isRunning } from '@/components/admin/catalog/source-toggle';
 import { formatCount } from '@/components/admin/kpi-tile';
 import { StatusBadge } from '@/components/admin/status-badge';
@@ -11,7 +11,6 @@ import { Skeleton } from '@/components/ui/skeleton';
 import type { AdminSourceRow } from '@/lib/admin/catalog-api';
 import { useAdminSources } from '@/lib/admin/catalog-queries';
 import { cn } from '@/lib/cn';
-import { formatDateTime } from '@/lib/format';
 
 /** Sağlık rengi kartın sol kenarında ince bir şerit olarak da taşınır; anlamı her zaman rozet metni verir. */
 const HEALTH_EDGE: Record<string, string> = {
@@ -90,7 +89,7 @@ function SourceCard({ s }: { s: AdminSourceRow }) {
           <p>
             <span className="font-medium">{PERMISSION_LABEL[s.permissionType] ?? s.permissionType}</span>
             <span className="text-muted">
-              {s.permissionVerifiedAt ? `, doğrulama ${formatDateTime(s.permissionVerifiedAt).slice(0, 10)}` : ', doğrulama tarihi yok'}
+              {s.permissionVerifiedAt ? `, doğrulama ${formatDay(s.permissionVerifiedAt)}` : ', doğrulama tarihi yok'}
             </span>
           </p>
           {s.permissionNote ? <p className="mt-0.5 line-clamp-2 text-muted">{s.permissionNote}</p> : null}

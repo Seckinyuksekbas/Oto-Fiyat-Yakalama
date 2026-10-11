@@ -13,6 +13,26 @@ const dayFmt = new Intl.DateTimeFormat('tr-TR', { day: '2-digit', month: 'short'
 const dayLabel = (day: string) => dayFmt.format(new Date(`${day}T00:00:00Z`));
 const pctFmt = new Intl.NumberFormat('tr-TR', { style: 'percent', maximumFractionDigits: 1 });
 
+type DayRow = AdminSourceStats['listingsPerDay'][number];
+const RANGE_DAYS: Record<StatsRange, number> = { '24h': 2, '7d': 7, '30d': 30 };
+const istanbulDay = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul' }).format(d);
+
+/**
+ * API yalnızca iş olan günleri döndürür; boş günler sıfırla doldurulur ki çubuklar zaman ekseninde doğru yerde dursun.
+ * Pencere bugünden (İstanbul) geriye `RANGE_DAYS` gün; pencere dışında kalan gün varsa (saat dilimi kenarı) korunur.
+ */
+export function fillDays(rows: DayRow[], range: StatsRange, now: Date = new Date()): DayRow[] {
+  const byDay = new Map(rows.map((r) => [r.day, r]));
+  const today = Date.parse(`${istanbulDay(now)}T00:00:00Z`);
+  const out: DayRow[] = [];
+  for (let i = RANGE_DAYS[range] - 1; i >= 0; i -= 1) {
+    const day = new Date(today - i * 86_400_000).toISOString().slice(0, 10);
+    out.push(byDay.get(day) ?? { day, new: 0, updated: 0, removed: 0 });
+    byDay.delete(day);
+  }
+  return [...byDay.values(), ...out].sort((a, b) => a.day.localeCompare(b.day));
+}
+
 type SeriesKey = 'new' | 'updated' | 'removed';
 const SERIES: Array<{ key: SeriesKey; title: string }> = [
   { key: 'new', title: 'Yeni ilan' },
@@ -118,7 +138,7 @@ export function SourceStats({ id }: { id: number }) {
           ) : (
             <div className="grid gap-px overflow-hidden rounded-lg border border-border bg-border md:grid-cols-3">
               {SERIES.map((s) => (
-                <DailyBars key={s.key} data={q.data.listingsPerDay} k={s.key} title={s.title} />
+                <DailyBars key={s.key} data={fillDays(q.data.listingsPerDay, range)} k={s.key} title={s.title} />
               ))}
             </div>
           )}

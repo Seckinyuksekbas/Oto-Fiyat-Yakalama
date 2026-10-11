@@ -6,7 +6,7 @@ import { PERMISSION_LABEL } from '@/components/admin/catalog/cells';
 import { adminSelectCls } from '@/components/admin/filter-select';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { adminErrorMessage, adminFieldErrors } from '@/lib/admin-api';
+import { adminErrorMessage, adminFieldErrors, detaillessValidationMessage } from '@/lib/admin-api';
 import type { AdminProxy, AdminSource, PermissionType, SourceKind } from '@/lib/admin/catalog-api';
 import { useUpdateSource } from '@/lib/admin/catalog-queries';
 import { cn } from '@/lib/cn';
@@ -41,7 +41,7 @@ function initialState(s: AdminSource): FormState {
     adapterKey: s.adapterKey,
     kind: s.kind,
     permissionType: s.permissionType,
-    permissionNote: s.permissionNote,
+    permissionNote: s.permissionNote ?? '',
     permissionVerified: s.permissionVerifiedAt !== null,
     intervalSec: String(s.intervalSec),
     maxConcurrency: String(s.maxConcurrency),
@@ -57,7 +57,7 @@ type Built = { ok: true; body: AdminSourceUpdate } | { ok: false; errors: Record
  * Yalnızca değişen alanlar gönderilir. `config` metni değişmediyse hiç gönderilmez (API PATCH'i alan bazlıdır;
  * gönderilmeyen config korunur). Değiştiyse geçerli JSON nesnesi olmalı ve maskeli `baseUrl` taşımamalıdır.
  */
-export function buildSourcePatch(initial: FormState, f: FormState): Built {
+export function buildSourcePatch(initial: FormState, f: FormState, originalConfig: unknown): Built {
   const body: Record<string, unknown> = {};
   const errors: Record<string, string> = {};
   if (f.name.trim() !== initial.name) body.name = f.name.trim();
@@ -73,13 +73,15 @@ export function buildSourcePatch(initial: FormState, f: FormState): Built {
     else body[k] = n;
   }
   if (f.proxyConfigId !== initial.proxyConfigId) body.proxyConfigId = f.proxyConfigId === '' ? null : Number(f.proxyConfigId);
-  if (f.config.trim() !== initial.config.trim()) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(f.config);
-    } catch {
-      parsed = undefined;
-    }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(f.config);
+  } catch {
+    parsed = undefined;
+  }
+  // Değişiklik normalize JSON ile ölçülür: yalnızca boşluk/girinti değişikliği config göndermez.
+  const configChanged = parsed === undefined ? f.config !== initial.config : JSON.stringify(parsed) !== JSON.stringify(originalConfig ?? {});
+  if (configChanged) {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) errors.config = 'Geçerli bir JSON nesnesi girin.';
     else {
       const baseUrl = (parsed as { baseUrl?: unknown }).baseUrl;
@@ -125,7 +127,27 @@ function Field({ id, label, error, hint, children, className }: { id: string; la
   );
 }
 
-export function SourceForm({ source, proxies }: { source: AdminSource; proxies: AdminProxy[] }) {
+const isMaskedConfig = (c: unknown) =>
+  !!c && typeof c === 'object' && typeof (c as { baseUrl?: unknown }).baseUrl === 'string' && (c as { baseUrl: string }).baseUrl.includes(MASK_MARK);
+
+/** Servis içi 400 (ayrıntısız) mesajını ilgili alana bağlar: adapter, proxy, aksi halde SSRF → config. */
+function serverFieldFor(message: string, body: AdminSourceUpdate): keyof FormState | null {
+  if (message.startsWith('Bilinmeyen adapter')) return 'adapterKey';
+  if (message.startsWith('Proxy')) return 'proxyConfigId';
+  if (body.config !== undefined) return 'config';
+  return null;
+}
+
+export interface SourceFormProps {
+  source: AdminSource;
+  proxies: AdminProxy[];
+  /** Proxy listesi okunamadı: seçim kilitlenir, mevcut değer korunur. */
+  proxiesError?: boolean;
+  /** Başarılı kayıttan sonra (formu yeni değerlerle yeniden kurmak için). */
+  onSaved?(): void;
+}
+
+export function SourceForm({ source, proxies, proxiesError = false, onSaved }: SourceFormProps) {
   const uid = useId();
   const fid = (k: string) => `${uid}-${k}`;
   const [initial] = useState(() => initialState(source));
@@ -141,7 +163,7 @@ export function SourceForm({ source, proxies }: { source: AdminSource; proxies: 
     e.preventDefault();
     if (update.isPending) return;
     setFormError(null);
-    const built = buildSourcePatch(initial, f);
+    const built = buildSourcePatch(initial, f, source.config);
     if (!built.ok) {
       setErrors(built.errors);
       return;
@@ -158,7 +180,14 @@ export function SourceForm({ source, proxies }: { source: AdminSource; proxies: 
       } else {
         toast.success('Kaynak kaydedildi');
       }
+      onSaved?.();
     } catch (err) {
+      const serverText = detaillessValidationMessage(err);
+      const field = serverText ? serverFieldFor(serverText, built.body) : null;
+      if (serverText && field) {
+        setErrors({ [field]: serverText });
+        return;
+      }
       const fe = adminFieldErrors(err);
       const mapped: Record<string, string> = {};
       for (const [k, v] of Object.entries(fe)) mapped[k.split('.')[0] || 'form'] = v;
@@ -200,9 +229,26 @@ export function SourceForm({ source, proxies }: { source: AdminSource; proxies: 
             ))}
           </select>
         </Field>
-        <Field id={fid('proxyConfigId')} label="Proxy" error={errors.proxyConfigId}>
-          <select id={fid('proxyConfigId')} className={adminSelectCls} value={f.proxyConfigId} onChange={(e) => set('proxyConfigId', e.target.value)}>
+        <Field
+          id={fid('proxyConfigId')}
+          label="Proxy"
+          error={errors.proxyConfigId}
+          hint={proxiesError ? 'Proxy listesi yüklenemedi; seçim şimdilik değiştirilemez, mevcut değer korunur.' : undefined}
+        >
+          <select
+            id={fid('proxyConfigId')}
+            className={adminSelectCls}
+            value={f.proxyConfigId}
+            disabled={proxiesError}
+            aria-describedby={proxiesError ? `${fid('proxyConfigId')}-hint` : undefined}
+            onChange={(e) => set('proxyConfigId', e.target.value)}
+          >
             <option value="">Proxy yok (doğrudan)</option>
+            {f.proxyConfigId !== '' && !proxies.some((p) => String(p.id) === f.proxyConfigId) ? (
+              <option value={f.proxyConfigId} disabled>
+                {`Proxy #${f.proxyConfigId}`}
+              </option>
+            ) : null}
             {proxies.map((p) => (
               <option key={p.id} value={String(p.id)}>
                 {p.name}
@@ -270,7 +316,11 @@ export function SourceForm({ source, proxies }: { source: AdminSource; proxies: 
         id={fid('config')}
         label="Yapılandırma (JSON)"
         error={errors.config}
-        hint="baseUrl zorunlu, yalnızca http(s), en fazla 4 KB. Adresin sorgu dizisi güvenlik için gizlenir; dokunmazsanız sunucudaki değer korunur."
+        hint={
+          isMaskedConfig(source.config)
+            ? 'Kayıtlı baseUrl’in sorgu dizisi (?…) güvenlik için gizli. Yapılandırmayı değiştirecekseniz tam adresi yeniden yazın; dokunmazsanız sunucudaki değer korunur.'
+            : 'baseUrl zorunlu, yalnızca http(s), en fazla 4 KB. Adresteki #parça yanıtta gösterilmez; yapılandırmayı değiştirirken varsa adresi #parçasıyla yeniden yazın.'
+        }
         className="border-t border-border pt-4"
       >
         <textarea
