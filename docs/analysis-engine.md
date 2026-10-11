@@ -55,6 +55,8 @@ Her `ListingAnalysis.explanation`: seviye, hedef özeti, emsal başına özet (`
 
 ## Sertleştirmeler (Plan 07)
 
+- **MANUAL yeniden analiz** (`POST /admin/listings/:id/reanalyze`, `reason: 'MANUAL'`): `REFRESH`in "maddi değişiklik" eşiğini (tahmin > %2, güven/motor sürümü) atlar ve her zaman yeni satır yazar; olay türetmesi aynıdır. Eşik altı değişiklikte (`materiallyChanged` false) "daha eşleşebilir" türevi `NEW` olayı üretilmez, yani bir yönetici tıklaması kullanıcı bildirimi doğurmaz. Gerçek olaylar (`NEW`, `PRICE_DROP`, `RELIST`) her zamanki gibi yayılır. İş `removeOnComplete` ile silindiğinden jobId tamamlandıktan sonra sorgulanamaz.
+
 - Analiz kilidi (`lock:analyze:<id>`) Lua CAS ile bırakılır; kilit TTL'i dolup başka süreç yazdıysa `latestAnalysisId` CAS'ı başarısız olur, satır geri alınır ve `AnalysisLockBusyError` ile iş yeniden denenir (`debug` log).
 - `AnalysisSettingsService` Redis `settings:changed` kanalını (mesaj = anahtar) dinler ve `analysis.settings` için önbelleği anında temizler; 60 sn TTL yedek kalır.
 - Eşleştirme olayı yeniden gönderimi `matchDispatchAttempts` sayar; 10 denemede takılan satır atlanır ve bir kez `match-dispatch-stuck` alarmı verilir.

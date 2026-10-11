@@ -98,9 +98,12 @@ export class AnalysisService {
       return { status: 'UNCHANGED', event, analysisId: latest.id };
     }
 
+    // MANUAL (admin) yeniden analizi eşik altı değişiklikte kullanıcı bildirimi üretmez: "daha eşleşebilir" türevi
+    // yalnızca maddi değişiklikte geçerlidir. Gerçek olaylar (NEW/PRICE_DROP/RELIST) her zaman yayılır.
+    const manualImmaterial = reason === 'MANUAL' && latest !== null && !materiallyChanged(latest, result, settings);
     const matchEvent: MatchEvent | null = isMatchEvent(event)
       ? event
-      : (event === 'REFRESH' || event === 'CHANGE') && latest && becameMoreMatchable(latest, result)
+      : !manualImmaterial && (event === 'REFRESH' || event === 'CHANGE') && latest && becameMoreMatchable(latest, result)
         ? 'NEW'
         : null;
     const matchPreviousPrice = event === 'PRICE_DROP' ? (latest?.listingPrice ?? null) : null;

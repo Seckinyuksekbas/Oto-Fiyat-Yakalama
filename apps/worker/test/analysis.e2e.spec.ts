@@ -74,6 +74,33 @@ describe('AnalysisService.process', () => {
     expect(await matchJobs()).toHaveLength(1);
   });
 
+  it('a MANUAL reanalysis after a sub-threshold (+1.5%) estimate change writes a row but enqueues no match job', async () => {
+    await seedMarket();
+    const t = await createListing(ref, sourceId, { price: 960_000n });
+    const first = await service.process(t.id);
+    const before = await prisma.listingAnalysis.findUniqueOrThrow({ where: { id: first.analysisId! } });
+    await prisma.listing.updateMany({ where: { id: { not: t.id } }, data: { price: { increment: 18_000n } } });
+    const out = await service.process(t.id, new Date(), 'MANUAL');
+    expect(out.status).toBe('WRITTEN');
+    const a = await prisma.listingAnalysis.findUniqueOrThrow({ where: { id: out.analysisId! } });
+    const change = Math.abs(Number(a.estimatedPrice! - before.estimatedPrice!)) / Number(before.estimatedPrice!);
+    expect(change).toBeGreaterThan(0.01);
+    expect(change).toBeLessThan(0.02); // below refreshMinChangePct
+    expect(Number(a.discountPct) - Number(before.discountPct)).toBeGreaterThanOrEqual(0.01); // would be "more matchable"
+    expect(a.matchEvent).toBeNull();
+    expect(await matchJobs()).toHaveLength(1); // only the first analysis' job
+  });
+
+  it('a MANUAL reanalysis still emits real events (PRICE_DROP)', async () => {
+    await seedMarket();
+    const t = await createListing(ref, sourceId, { price: 1_100_000n });
+    await service.process(t.id);
+    await prisma.listing.update({ where: { id: t.id }, data: { price: 980_000n, contentHash: 'drop' } });
+    const out = await service.process(t.id, new Date(), 'MANUAL');
+    expect(out.event).toBe('PRICE_DROP');
+    expect((await prisma.listingAnalysis.findUniqueOrThrow({ where: { id: out.analysisId! } })).matchEvent).toBe('PRICE_DROP');
+  });
+
   it('a refresh after the market moved > 2% writes a new row but emits no match event', async () => {
     await seedMarket();
     const t = await createListing(ref, sourceId, { price: 960_000n });

@@ -20,13 +20,13 @@ export function maskUrlQuery(url: string): string {
 }
 
 const adminPageShape = {
-  page: z.coerce.number().int().min(1).default(1),
+  page: z.coerce.number().int().min(1).max(100000).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
 };
 export const adminPageQuery = z.object(adminPageShape);
 
 const isoDate = z.string().datetime();
-const intId = z.coerce.number().int().min(1);
+const intId = z.coerce.number().int().min(1).max(2_147_483_647);
 const text = (max = 100) => z.string().trim().min(1).max(max);
 
 export const adminUsersQuerySchema = z

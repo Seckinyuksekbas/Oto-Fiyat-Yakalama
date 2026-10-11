@@ -90,19 +90,24 @@ describe('GET /admin/listings', () => {
     expect((await admin.get(api('/listings')).query({ pageSize: 101 })).status).toBe(400);
     expect((await admin.get(api('/listings')).query({ hasIssues: 'maybe' })).status).toBe(400);
     expect((await admin.get(api('/listings')).query({ bogus: '1' })).status).toBe(400);
+    expect((await admin.get(api('/listings')).query({ page: '1e300' })).status).toBe(400);
+    expect((await admin.get(api('/listings')).query({ source: '99999999999' })).status).toBe(400);
+    expect((await admin.get(api('/listing-issues')).query({ source: '99999999999' })).status).toBe(400);
   });
 });
 
 describe('GET /admin/listings/:id', () => {
   it('returns detail with analysis history (newest 50, no explanation), price history, issues and match count', async () => {
-    const { listingId } = await seedListing(app, { analysis: { explanation: { secretish: 'x', stats: { median: 1_200_000 } } } });
+    const { listingId, analysisId } = await seedListing(app, { analysis: { explanation: { secretish: 'x', stats: { median: 1_200_000 } } } });
+    const seeded: number[] = [];
     for (let i = 0; i < 54; i += 1) {
-      await prisma.listingAnalysis.create({
+      const row = await prisma.listingAnalysis.create({
         data: {
           listingId, engineVersion: 'rules-v1', opportunityScore: i % 100, comparableCount: 3, confidence: 'LOW',
           flags: [], explanation: { big: 'blob' }, comparableIds: [], createdAt: new Date(Date.now() + (i + 1) * 1000),
         },
       });
+      seeded.push(row.id);
     }
     await prisma.listingPriceHistory.createMany({
       data: [{ listingId, price: 1_000_000n, km: 85_000 }, { listingId, price: 960_000n, km: 85_000 }],
@@ -114,6 +119,10 @@ describe('GET /admin/listings/:id', () => {
     expect(res.status).toBe(200);
     expect(res.body.listing).toMatchObject({ id: listingId, make: 'BMW', price: '960000', sourceCode: 'test-src', matchCount: 0 });
     expect(res.body.analyses).toHaveLength(50);
+    const ids = res.body.analyses.map((a: { id: number }) => a.id);
+    expect(ids[0]).toBe(seeded[53]);
+    expect(ids).not.toContain(seeded[0]);
+    expect(ids).not.toContain(analysisId);
     expect(res.body.analyses[0].createdAt >= res.body.analyses[49].createdAt).toBe(true);
     expect(res.body.analyses[0]).toEqual(expect.objectContaining({ id: expect.any(Number), engineVersion: 'rules-v1', opportunityScore: expect.any(Number) }));
     expect(JSON.stringify(res.body.analyses)).not.toContain('blob');
@@ -235,6 +244,43 @@ describe('POST /admin/listings/:id/reanalyze', () => {
     expect(await app.get(RedisService).exists(`admin:reanalyze:${listingId}`)).toBe(0);
     // retry works right away
     expect((await admin.post(api(`/listings/${listingId}/reanalyze`)).send({})).status).toBe(202);
+  });
+
+  it('add failure inside the transaction rolls the audit back (no audit row), 503, key released', async () => {
+    const { listingId } = await seedListing(app);
+    const spy = vi.spyOn(app.get(AdminQueues).analyze, 'add').mockRejectedValueOnce(new Error('boom'));
+    const res = await admin.post(api(`/listings/${listingId}/reanalyze`)).send({});
+    spy.mockRestore();
+    expect(res.status).toBe(503);
+    expect(await prisma.auditLog.count()).toBe(0);
+    expect(await app.get(RedisService).exists(`admin:reanalyze:${listingId}`)).toBe(0);
+  });
+
+  it('commit failure after a successful add keeps the key: a retry returns the same jobId, no second job', async () => {
+    const { listingId } = await seedListing(app);
+    const spy = vi.spyOn(prisma, '$transaction').mockImplementationOnce((async (fn: (tx: unknown) => Promise<unknown>) => {
+      await fn({ auditLog: { create: async () => ({}) } });
+      throw new Error('commit failed');
+    }) as never);
+    const failed = await admin.post(api(`/listings/${listingId}/reanalyze`)).send({});
+    spy.mockRestore();
+    expect(failed.status).toBe(500);
+    expect(await app.get(RedisService).exists(`admin:reanalyze:${listingId}`)).toBe(1);
+    const retry = await admin.post(api(`/listings/${listingId}/reanalyze`)).send({});
+    expect(retry.status).toBe(202);
+    expect(await app.get(AdminQueues).analyze.getJobCounts('waiting')).toMatchObject({ waiting: 1 });
+    expect(await app.get(AdminQueues).analyze.getJob(retry.body.jobId)).toBeTruthy();
+    expect(await prisma.auditLog.count()).toBe(0); // the retry returned the existing id without a new audit
+  });
+
+  it('a phantom key (job gone, key older than the grace period) is dropped and a fresh job is queued', async () => {
+    const { listingId } = await seedListing(app);
+    await app.get(RedisService).set(`admin:reanalyze:${listingId}`, 'analyze-manual-phantom', 'EX', 30);
+    const res = await admin.post(api(`/listings/${listingId}/reanalyze`)).send({});
+    expect(res.status).toBe(202);
+    expect(res.body.jobId).not.toBe('analyze-manual-phantom');
+    expect(await app.get(AdminQueues).analyze.getJob(res.body.jobId)).toBeTruthy();
+    expect(await prisma.auditLog.count({ where: { action: 'listing.reanalyze' } })).toBe(1);
   });
 
   it('USER is refused on every listing route', async () => {

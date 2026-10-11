@@ -10,6 +10,17 @@ export const QueueName = {
 } as const;
 export type QueueName = (typeof QueueName)[keyof typeof QueueName];
 
+/**
+ * Yeniden denenen işler (worker + API ortak): 5 deneme, üstel bekleme. `removeOnComplete: true` nedeniyle iş tamamlanınca
+ * silinir; jobId yalnızca beklerken/çalışırken sorgulanabilir (tamamlandıktan sonra getJob(jobId) null döner).
+ */
+export const RETRYING_JOB_OPTS = {
+  attempts: 5,
+  backoff: { type: 'exponential' as const, delay: 10_000 },
+  removeOnComplete: true,
+  removeOnFail: { age: 24 * 60 * 60 },
+};
+
 export const scrapeJobSchema = z.object({
   collectionJobId: z.number().int().positive(),
   sourceId: z.number().int().positive(),

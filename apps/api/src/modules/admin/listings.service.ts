@@ -3,6 +3,7 @@ import type { Prisma } from '@oto/db';
 import {
   ErrorCode,
   escapeLike,
+  RETRYING_JOB_OPTS,
   type AdminAnalysesQuery,
   type AdminListingIssuesQuery,
   type AdminListingsQuery,
@@ -21,6 +22,9 @@ const HISTORY_LIMIT = 50;
 const PRICE_HISTORY_LIMIT = 500;
 const ISSUE_LIMIT = 50;
 
+/** Anahtar bu süreden (sn) eskiyse ve iş kuyrukta yoksa yetim sayılır. */
+const PHANTOM_GRACE_SEC = 5;
+class EnqueueFailed extends Error {}
 const reanalyzeKey = (listingId: number) => `admin:reanalyze:${listingId}`;
 const unavailable = () => new AppError(ErrorCode.INTERNAL, 503, 'Yeniden analiz şu anda kuyruğa alınamıyor');
 
@@ -228,25 +232,40 @@ export class AdminListingsService {
       }
       if (acquired === 'OK') return this.enqueue(ctx, listingId, key, candidate);
       const existing = await this.redis.get(key).catch(() => null);
-      if (existing) return { jobId: existing };
-      // Anahtar arada süresi dolup silindi: yeniden dene
+      if (!existing) continue; // Anahtar arada süresi dolup silindi: yeniden dene
+      // jobId bir arayüz ipucudur: iş tamamlanınca (removeOnComplete) ya da kuyruk temizlenince sorgulanamaz.
+      // Anahtar kısa süreli yarış payından eskiyse ve iş yoksa yetim sayılır: sil ve yeniden dene.
+      const job = await this.queues.analyze.getJob(existing).catch(() => undefined);
+      if (job) return { jobId: existing };
+      const ttl = await this.redis.ttl(key).catch(() => -1);
+      if (ttl > 0 && REANALYZE_DEDUPE_SEC - ttl > PHANTOM_GRACE_SEC) {
+        await this.redis.del(key).catch(() => undefined);
+        continue;
+      }
+      return { jobId: existing };
     }
     throw unavailable();
   }
 
+  /**
+   * Denetim kaydı ve kuyruğa ekleme aynı transaction'da: ekleme başarısızsa tx geri alınır (denetim yok), anahtar silinir, 503.
+   * Ekleme başarılı ama commit başarısızsa iş zaten kuyrukta: anahtar KORUNUR, 60 sn içindeki yeniden deneme aynı jobId'yi alır.
+   */
   private async enqueue(ctx: AuditCtx, listingId: number, key: string, jobId: string): Promise<{ jobId: string }> {
-    try {
-      await this.queues.analyze.add('analyze', { listingId, reason: 'MANUAL' }, { jobId, attempts: 5, backoff: { type: 'exponential', delay: 10_000 }, removeOnComplete: true, removeOnFail: { age: 24 * 60 * 60 } });
-    } catch {
-      await this.redis.del(key).catch(() => undefined);
-      throw unavailable();
-    }
+    let added = false;
     try {
       await this.prisma.$transaction(async (tx) => {
         await this.audit.recordInTx(tx, ctx, { targetType: 'Listing', targetId: String(listingId), after: { jobId } });
+        try {
+          await this.queues.analyze.add('analyze', { listingId, reason: 'MANUAL' }, { jobId, ...RETRYING_JOB_OPTS });
+        } catch {
+          throw new EnqueueFailed();
+        }
+        added = true;
       });
     } catch (err) {
-      await this.redis.del(key).catch(() => undefined);
+      if (!added) await this.redis.del(key).catch(() => undefined);
+      if (err instanceof EnqueueFailed) throw unavailable();
       throw err;
     }
     return { jobId };
