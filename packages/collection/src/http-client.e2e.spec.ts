@@ -295,6 +295,79 @@ describe('blockPrivateAddresses', () => {
     expect(res.body).toBe('landed');
   });
 
+  describe('IPv6 literals', () => {
+    let v6: Server;
+    let v6Port: number;
+    const v6Hits: string[] = [];
+    beforeAll(async () => {
+      v6 = createServer((req, res) => {
+        v6Hits.push(req.url ?? '');
+        res.writeHead(200, { 'content-type': 'text/html' }).end('v6-secret');
+      });
+      await new Promise<void>((done) => v6.listen(0, '::1', done));
+      v6Port = (v6.address() as AddressInfo).port;
+    });
+    afterAll(async () => {
+      v6.closeAllConnections();
+      await new Promise<void>((done) => v6.close(() => done()));
+    });
+    beforeEach(() => {
+      v6Hits.length = 0;
+    });
+
+    it('rejects a redirect hop to a bracketed IPv6 loopback literal', async () => {
+      const mock = new MockAgent(); // eşleşmeyen istekler gerçek ağa gider (IPv6 sunucusu)
+      const pool = mock.get('http://public.example');
+      pool.intercept({ path: '/robots.txt' }).reply(404, '');
+      pool.intercept({ path: '/start' }).reply(302, '', { headers: { location: `http://[::1]:${v6Port}/secret` } });
+      const err = await client({ blockPrivateAddresses: true, dispatcher: mock }).getText('http://public.example/start').catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(FetchError);
+      expect(err).toMatchObject({ transient: false });
+      expect((err as Error).message).toContain('iç ağ');
+      expect(v6Hits).toHaveLength(0);
+      await mock.close();
+    });
+
+    it('rejects a direct request to a bracketed IPv6 loopback literal', async () => {
+      const err = await client({ blockPrivateAddresses: true }).getText(`http://[::1]:${v6Port}/p`).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(FetchError);
+      expect(err).toMatchObject({ transient: false });
+      expect((err as Error).message).toContain('iç ağ');
+      expect(v6Hits).toHaveLength(0);
+    });
+
+    it('rejects an IPv4-mapped IPv6 literal pointing at loopback', async () => {
+      const port = new URL(base).port;
+      const err = await client({ blockPrivateAddresses: true }).getText(`http://[::ffff:127.0.0.1]:${port}/p`).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(FetchError);
+      expect(err).toMatchObject({ transient: false });
+      expect((err as Error).message).toContain('iç ağ');
+      expect(hits).toHaveLength(0);
+    });
+
+    it('rejects a proxy given as a private IP literal (undici skips lookup for literals)', async () => {
+      const err = await client({ blockPrivateAddresses: true, proxyUrl: `http://[::1]:${v6Port}` })
+        .getText('http://93.184.216.34/p')
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(FetchError);
+      expect(err).toMatchObject({ transient: false });
+      expect((err as Error).message).toContain('iç ağ');
+      expect(v6Hits).toHaveLength(0);
+    });
+
+    it('rejects an IPv4-mapped link-local (metadata) literal on a redirect hop', async () => {
+      const mock = new MockAgent();
+      mock.disableNetConnect();
+      const pool = mock.get('http://public.example');
+      pool.intercept({ path: '/robots.txt' }).reply(404, '');
+      pool.intercept({ path: '/start' }).reply(302, '', { headers: { location: 'http://[::ffff:a9fe:a9fe]/latest/meta-data' } });
+      const err = await client({ blockPrivateAddresses: true, dispatcher: mock }).getText('http://public.example/start').catch((e: unknown) => e);
+      expect(err).toMatchObject({ transient: false });
+      expect((err as Error).message).toContain('iç ağ');
+      await mock.close();
+    });
+  });
+
   it('keeps current behaviour (local targets allowed) when the flag is off', async () => {
     routes.set('/p', html('<p>ok</p>'));
     expect((await client({ blockPrivateAddresses: false }).getText(`${base}/p`)).body).toBe('<p>ok</p>');

@@ -147,8 +147,13 @@ export class PoliteHttpClient implements HttpFetcher {
 
   /** Her atlama (ilk istek + yönlendirmeler) için: IP sabit adres ve (proxy ile) ad çözümü denetimi. */
   private async assertHopAllowed(url: string): Promise<void> {
-    const host = new URL(url).hostname.replace(/^[|]$/g, '');
+    const host = new URL(url).hostname.replace(/^\[|\]$/g, '');
     try {
+      if (this.opts.proxyUrl) {
+        // undici IP sabit adreslerde lookup çağırmaz: IP olarak verilmiş proxy burada denetlenir.
+        const proxyHost = new URL(this.opts.proxyUrl).hostname.replace(/^\[|\]$/g, '');
+        if (isIP(proxyHost)) await assertPublicHttpUrl(this.opts.proxyUrl, { allowPrivate: false, allowCredentials: true });
+      }
       if (isIP(host)) {
         await assertPublicHttpUrl(url, { allowPrivate: false });
       } else if (this.opts.proxyUrl) {
