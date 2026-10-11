@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { anonymizeUser, resolveUserPlan, type User } from '@oto/db';
+import { anonymizeUser, COUNTS_TOWARD_QUOTA, isLastActiveSuperAdmin, lockUserForUpdate, resolveUserPlan, type User } from '@oto/db';
 import { PrismaService } from '../../infra/prisma.service';
 
 /** /me altındaki TEK veri erişim noktası. Her sorgu userId ile kapsamlanır. */
@@ -22,7 +22,7 @@ export class MeRepository {
 
   countExternalNotificationsSince(userId: string, since: Date) {
     return this.prisma.notification.count({
-      where: { userId, kind: 'MATCH', channel: { not: 'IN_APP' }, status: { not: 'SKIPPED_LIMIT' }, NOT: { status: 'FAILED', lastError: 'USER_INACTIVE' }, createdAt: { gte: since } },
+      where: { userId, kind: 'MATCH', channel: { not: 'IN_APP' }, status: { not: 'SKIPPED_LIMIT' }, AND: [COUNTS_TOWARD_QUOTA], createdAt: { gte: since } },
     });
   }
 
@@ -31,16 +31,6 @@ export class MeRepository {
     const res = await this.prisma.user.updateMany({ where: { id: userId, status: { not: 'DELETED' } }, data: { name } });
     if (res.count !== 1) return null;
     return this.findUser(userId);
-  }
-
-  async hasOtherActiveSuperAdmin(userId: string): Promise<boolean> {
-    const n = await this.prisma.user.count({ where: { role: 'SUPER_ADMIN', status: 'ACTIVE', id: { not: userId } } });
-    return n > 0;
-  }
-
-  async findRole(userId: string) {
-    const u = await this.prisma.user.findFirst({ where: { id: userId, status: { not: 'DELETED' } }, select: { role: true } });
-    return u?.role ?? null;
   }
 
   /** Kullanıcının kullanılmamış tüm şifre sıfırlama token'larını geçersiz kılar. */
@@ -52,8 +42,17 @@ export class MeRepository {
     await this.prisma.user.update({ where: { id: userId }, data: { passwordHash } });
   }
 
-  /** KVKK anonimleştirme kuralları packages/db'de paylaşılır (admin silme ile aynı). */
-  async anonymizeAndDelete(userId: string): Promise<void> {
-    await this.prisma.$transaction((tx) => anonymizeUser(tx, userId));
+  /**
+   * KVKK anonimleştirme (packages/db; admin silme ile aynı kurallar). Son ACTIVE SUPER_ADMIN kontrolü aynı tx'te,
+   * süper admin kümesi kilidi altında yapılır. Dönüş: 'LAST_SUPER_ADMIN' ise hiçbir şey değişmez.
+   */
+  async anonymizeAndDelete(userId: string): Promise<'DELETED' | 'LAST_SUPER_ADMIN' | 'NOT_FOUND'> {
+    return this.prisma.$transaction(async (tx) => {
+      const { target, activeSupers } = await lockUserForUpdate(tx, userId);
+      if (!target || target.status === 'DELETED') return 'NOT_FOUND';
+      if (isLastActiveSuperAdmin(target, activeSupers)) return 'LAST_SUPER_ADMIN';
+      await anonymizeUser(tx, userId);
+      return 'DELETED';
+    });
   }
 }

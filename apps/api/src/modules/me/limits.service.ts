@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import type { User } from '@oto/db';
+import { maxSearchProfilesFor, type User } from '@oto/db';
 import type { PlanLimits } from '@oto/shared';
 import { Errors } from '../../common/errors/app-error';
 import { MeRepository } from './me.repository';
@@ -47,7 +47,7 @@ export class LimitsService {
       planCode: plan.planCode,
       limits,
       emailVerified,
-      maxSearchProfiles: emailVerified ? limits.maxSearchProfiles : Math.min(1, limits.maxSearchProfiles),
+      maxSearchProfiles: maxSearchProfilesFor(limits, emailVerified),
     };
   }
 }

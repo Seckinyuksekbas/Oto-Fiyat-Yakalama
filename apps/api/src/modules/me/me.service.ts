@@ -64,9 +64,8 @@ export class MeService {
 
   async deleteAccount(userId: string, input: DeleteMeInput): Promise<void> {
     await this.confirm.assert(userId, input.password);
-    if ((await this.repo.findRole(userId)) === 'SUPER_ADMIN' && !(await this.repo.hasOtherActiveSuperAdmin(userId))) {
-      throw new AppError('INVALID_OPERATION', 409, 'Son süper admin hesabı silinemez');
-    }
-    await this.repo.anonymizeAndDelete(userId);
+    const res = await this.repo.anonymizeAndDelete(userId);
+    if (res === 'LAST_SUPER_ADMIN') throw new AppError('INVALID_OPERATION', 409, 'Son süper admin hesabı silinemez');
+    if (res === 'NOT_FOUND') throw Errors.unauthenticated();
   }
 }

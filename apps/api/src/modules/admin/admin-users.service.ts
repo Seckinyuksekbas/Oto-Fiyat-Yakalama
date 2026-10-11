@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { anonymizeUser, resolveUserPlan, type Prisma, type User } from '@oto/db';
+import { anonymizeUser, COUNTS_TOWARD_QUOTA, isLastActiveSuperAdmin, lockUserForUpdate, maxSearchProfilesFor, resolveUserPlan, type Prisma, type User } from '@oto/db';
 import {
   ErrorCode,
   escapeLike,
@@ -39,6 +39,12 @@ export interface AdminUserNotification {
 type UserResult = { user: PublicUser };
 type Role = 'USER' | 'ADMIN' | 'SUPER_ADMIN';
 
+/** Canlı abonelik: ACTIVE ve süresi dolmamış (resolveUserPlan ile aynı tanım); yoksa FREE geçerlidir. */
+const liveSubscription = (now: Date): Prisma.UserSubscriptionWhereInput => ({
+  status: 'ACTIVE',
+  OR: [{ endsAt: null }, { endsAt: { gt: now } }],
+});
+
 const conflict = (msg: string) => new AppError(ErrorCode.INVALID_OPERATION, 409, msg);
 
 interface Locked {
@@ -66,11 +72,11 @@ export class AdminUsersService {
       and.push({ OR: [{ email: { contains: like, mode: 'insensitive' } }, { name: { contains: like, mode: 'insensitive' } }] });
     }
     if (q.plan) {
-      const active = { status: 'ACTIVE' as const };
+      const live = liveSubscription(new Date());
       and.push(
         q.plan === 'FREE'
-          ? { OR: [{ subscriptions: { some: { ...active, plan: { code: 'FREE' } } } }, { subscriptions: { none: active } }] }
-          : { subscriptions: { some: { ...active, plan: { code: q.plan } } } },
+          ? { OR: [{ subscriptions: { some: { ...live, plan: { code: 'FREE' } } } }, { subscriptions: { none: live } }] }
+          : { subscriptions: { some: { ...live, plan: { code: q.plan } } } },
       );
     }
     const where: Prisma.UserWhereInput = {
@@ -85,7 +91,7 @@ export class AdminUsersService {
         orderBy: { createdAt: 'desc' },
         skip: (q.page - 1) * q.pageSize,
         take: q.pageSize,
-        include: { subscriptions: { where: { status: 'ACTIVE' }, include: { plan: { select: { code: true } } }, take: 1 } },
+        include: { subscriptions: { where: liveSubscription(new Date()), include: { plan: { select: { code: true } } }, orderBy: { startsAt: 'desc' }, take: 1 } },
       }),
     ]);
     return {
@@ -129,7 +135,7 @@ export class AdminUsersService {
       const { target, activeSupers } = await this.lock(tx, actor, id);
       if (target.id === actor.id) throw conflict('Kendi hesabınızı askıya alamazsınız');
       if (target.status === 'SUSPENDED') return target;
-      if (target.role === 'SUPER_ADMIN' && target.status === 'ACTIVE' && activeSupers <= 1) {
+      if (isLastActiveSuperAdmin(target, activeSupers)) {
         throw conflict('Son süper admin askıya alınamaz');
       }
       const after = await tx.user.update({ where: { id }, data: { status: 'SUSPENDED' } });
@@ -160,7 +166,7 @@ export class AdminUsersService {
       const { target, activeSupers } = await this.lock(tx, actor, id);
       if (target.role === role) return target;
       if (target.id === actor.id) throw conflict('Kendi rolünüzü değiştiremezsiniz');
-      if (target.role === 'SUPER_ADMIN' && target.status === 'ACTIVE' && activeSupers <= 1) {
+      if (isLastActiveSuperAdmin(target, activeSupers)) {
         throw conflict('Son süper admin düşürülemez');
       }
       const after = await tx.user.update({ where: { id }, data: { role } });
@@ -174,7 +180,7 @@ export class AdminUsersService {
     const deleted = await this.prisma.$transaction(async (tx) => {
       const { target, activeSupers } = await this.lock(tx, actor, id);
       if (target.id === actor.id) throw conflict('Kendi hesabınızı silemezsiniz');
-      if (target.role === 'SUPER_ADMIN' && target.status === 'ACTIVE' && activeSupers <= 1) {
+      if (isLastActiveSuperAdmin(target, activeSupers)) {
         throw conflict('Son süper admin silinemez');
       }
       await anonymizeUser(tx, id);
@@ -222,7 +228,7 @@ export class AdminUsersService {
       this.prisma.notification.count({
         where: {
           userId: id, kind: 'MATCH', channel: { not: 'IN_APP' }, status: { not: 'SKIPPED_LIMIT' },
-          NOT: { status: 'FAILED', lastError: 'USER_INACTIVE' }, createdAt: { gte: startOfIstanbulDay(now) },
+          AND: [COUNTS_TOWARD_QUOTA], createdAt: { gte: startOfIstanbulDay(now) },
         },
       }),
       this.prisma.listingMatch.count({ where: { userId: id, createdAt: { gte: new Date(now.getTime() - 7 * 86_400_000) } } }),
@@ -239,9 +245,11 @@ export class AdminUsersService {
     const now = new Date();
     if (endsAt && endsAt <= now) throw Errors.validation([{ path: ['endsAt'], message: 'Bitiş tarihi gelecekte olmalı' }]);
     const out = await this.prisma.$transaction(async (tx) => {
-      await this.lock(tx, actor, id);
+      const { target } = await this.lock(tx, actor, id);
+      if (target.id === actor.id) throw conflict('Kendi aboneliğinizi değiştiremezsiniz');
       const plan = await tx.subscriptionPlan.findUnique({ where: { id: input.planId } });
-      if (!plan) throw Errors.notFound();
+      if (!plan) throw Errors.validation([{ path: ['planId'], message: 'Paket bulunamadı' }]);
+      if (!plan.isActive) throw conflict('Pasif pakete abonelik atanamaz');
       const before = await resolveUserPlan(tx, id, now);
       await tx.userSubscription.updateMany({ where: { userId: id, status: 'ACTIVE' }, data: { status: 'CANCELED' } });
       await tx.userSubscription.create({
@@ -253,7 +261,8 @@ export class AdminUsersService {
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         select: { id: true },
       });
-      const excess = active.slice(after.limits.maxSearchProfiles);
+      const cap = maxSearchProfilesFor(after.limits, target.emailVerifiedAt !== null);
+      const excess = active.slice(cap);
       let event: UserEvent | null = null;
       if (excess.length > 0) {
         await tx.searchProfile.updateMany({ where: { id: { in: excess.map((p) => p.id) }, status: 'ACTIVE' }, data: { status: 'PAUSED' } });
@@ -262,7 +271,7 @@ export class AdminUsersService {
             userId: id, kind: 'SYSTEM_ALERT', channel: 'IN_APP', status: 'SENT', sentAt: now,
             payload: {
               type: 'PROFILES_PAUSED', count: excess.length, level: 'WARN',
-              message: `Aboneliğiniz değişti; ${after.planName} planı en fazla ${after.limits.maxSearchProfiles} aktif profile izin veriyor. ${excess.length} profil duraklatıldı.`,
+              message: `Aboneliğiniz değişti; ${after.planName} planı en fazla ${cap} aktif profile izin veriyor. ${excess.length} profil duraklatıldı.`,
             },
           },
         });
@@ -298,11 +307,9 @@ export class AdminUsersService {
    * DELETED hedef 404; ADMIN bir SUPER_ADMIN'e dokunamaz (403).
    */
   private async lock(tx: Prisma.TransactionClient, actor: AuthUser, id: string): Promise<Locked> {
-    const supers = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM "User" WHERE role = 'SUPER_ADMIN' AND status = 'ACTIVE' ORDER BY id FOR UPDATE`;
-    await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${id} FOR UPDATE`;
-    const target = await tx.user.findUnique({ where: { id } });
+    const { target, activeSupers } = await lockUserForUpdate(tx, id);
     if (!target || target.status === 'DELETED') throw Errors.notFound();
     if (target.role === 'SUPER_ADMIN' && actor.role !== 'SUPER_ADMIN') throw Errors.forbidden();
-    return { target, activeSupers: supers.length };
+    return { target, activeSupers };
   }
 }

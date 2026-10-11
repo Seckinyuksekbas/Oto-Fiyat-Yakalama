@@ -1,4 +1,4 @@
-import { type Prisma, resolveUserPlan, type Listing, type ListingAnalysis } from '@oto/db';
+import { COUNTS_TOWARD_QUOTA, type Prisma, resolveUserPlan, type Listing, type ListingAnalysis } from '@oto/db';
 import { startOfIstanbulDay, type MatchEvent } from '@oto/shared';
 import { buildMatchPayload } from './payload';
 
@@ -47,7 +47,7 @@ export async function planNotifications(
     const open = new Set<string>(['IN_APP', ...verified.map((c) => c.type)]);
     const allowed = new Set<string>(['IN_APP', ...plan.limits.channels]);
     let usedToday = await tx.notification.count({
-      where: { userId, kind: 'MATCH', channel: { not: 'IN_APP' }, status: { not: 'SKIPPED_LIMIT' }, NOT: { status: 'FAILED', lastError: 'USER_INACTIVE' }, createdAt: { gte: dayStart } },
+      where: { userId, kind: 'MATCH', channel: { not: 'IN_APP' }, status: { not: 'SKIPPED_LIMIT' }, AND: [COUNTS_TOWARD_QUOTA], createdAt: { gte: dayStart } },
     });
     for (const m of byUser.get(userId)!) {
       const channels = [...new Set(['IN_APP', ...m.profile.channels])].filter(
