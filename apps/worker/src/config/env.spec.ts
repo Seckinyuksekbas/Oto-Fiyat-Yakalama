@@ -15,6 +15,12 @@ describe('worker env', () => {
     expect(parseEnv(base).MATCH_CONCURRENCY).toBe(4);
   });
 
+  it('defaults SHUTDOWN_TIMEOUT_MS to 30000 and bounds it', () => {
+    expect(parseEnv(base).SHUTDOWN_TIMEOUT_MS).toBe(30_000);
+    expect(parseEnv({ ...base, SHUTDOWN_TIMEOUT_MS: '5000' }).SHUTDOWN_TIMEOUT_MS).toBe(5000);
+    expect(() => parseEnv({ ...base, SHUTDOWN_TIMEOUT_MS: '0' })).toThrow(/SHUTDOWN_TIMEOUT_MS/);
+  });
+
   it('bounds ANALYZE_CONCURRENCY', () => {
     expect(() => parseEnv({ ...base, ANALYZE_CONCURRENCY: '0' })).toThrow(/ANALYZE_CONCURRENCY/);
     expect(parseEnv({ ...base, ANALYZE_CONCURRENCY: '8' }).ANALYZE_CONCURRENCY).toBe(8);

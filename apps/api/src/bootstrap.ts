@@ -3,11 +3,13 @@ import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { Logger } from 'nestjs-pino';
 import { jsonBody } from './common/json-body';
+import { ENV } from './config/config.module';
+import type { Env } from './config/env';
 
 /** main.ts ve testler aynı yapılandırmayı kullanır. App `bodyParser: false` ile oluşturulmalıdır. */
 export function configureApp(app: NestExpressApplication): void {
   app.useLogger(app.get(Logger));
-  app.set('trust proxy', 1);
+  app.set('trust proxy', app.get<Env>(ENV).TRUST_PROXY);
   app.use(helmet());
   app.use(cookieParser());
   app.use(jsonBody('100kb'));

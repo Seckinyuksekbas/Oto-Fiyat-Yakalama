@@ -14,6 +14,8 @@ export const envSchema = z
     BOT_CONTACT_URL: z.string().url().optional(),
     SCHEDULER_TICK_MS: z.coerce.number().int().min(1000).default(15_000),
     /** Alarm izlemesi (MonitorService) en fazla bu aralıkla çalışır; scheduler tick'inden bağımsız. */
+    /** Kapanışta aktif işlerin bitmesi için beklenen süre; aşılırsa worker zorla kapatılır. */
+    SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(1000).max(600_000).default(30_000),
     MONITOR_INTERVAL_MS: z.coerce.number().int().min(1000).default(60_000),
     SCRAPE_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(2),
     ANALYZE_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),

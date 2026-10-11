@@ -1,7 +1,9 @@
 import { PrismaClient } from '@prisma/client';
 import { seedDemoSource, seedMakeModelAliases, seedPlans, seedSuperAdmin } from '../src/seed-data';
+import { assertSeedEnv } from './seed-env';
 
 async function main(): Promise<void> {
+  assertSeedEnv(process.env);
   const prisma = new PrismaClient();
   try {
     await seedPlans(prisma);
