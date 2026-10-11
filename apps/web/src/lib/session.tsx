@@ -4,7 +4,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
 /**
  * `next` yalnızca iç yol olabilir: "/" ile başlar, "//" ya da "/\" ile başlamaz.
- * Aksi halde panel ana sayfasına döner (open-redirect koruması).
+ * Yalnızca `/app` ve `/admin` kökleri kabul edilir; aksi halde panel ana sayfasına döner (open-redirect koruması).
  */
 export function safeNextPath(next: string | null | undefined, fallback = '/app'): string {
   if (typeof next !== 'string') return fallback;
@@ -14,7 +14,8 @@ export function safeNextPath(next: string | null | undefined, fallback = '/app')
     if (c < 0x20 || c === 0x7f) return fallback;
   }
   const path = next.split(/[?#]/, 1)[0] ?? '';
-  if (path !== '/app' && !path.startsWith('/app/')) return fallback;
+  const allowed = ['/app', '/admin'].some((root) => path === root || path.startsWith(`${root}/`));
+  if (!allowed) return fallback;
   if (path.split('/').includes('..')) return fallback;
   return next;
 }

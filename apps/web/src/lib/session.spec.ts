@@ -36,6 +36,10 @@ describe('safeNextPath', () => {
     ['/app/../giris', '/app'],
     ['/app', '/app'],
     ['/app/ilan/1#x', '/app/ilan/1#x'],
+    ['/admin', '/admin'],
+    ['/admin/kullanicilar?status=SUSPENDED', '/admin/kullanicilar?status=SUSPENDED'],
+    ['/administrator', '/app'],
+    ['/admin/../giris', '/app'],
   ])('%s -> %s', (input, expected) => {
     expect(safeNextPath(input)).toBe(expected);
   });
