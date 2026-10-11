@@ -5,7 +5,7 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['**/dist/**', '**/node_modules/**', '**/.next/**', '**/coverage/**', '**/next-env.d.ts','packages/db/prisma/migrations/**'],
+    ignores: ['**/dist/**', '**/node_modules/**', '**/.next/**', '**/coverage/**', '**/next-env.d.ts', 'packages/db/prisma/migrations/**'],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

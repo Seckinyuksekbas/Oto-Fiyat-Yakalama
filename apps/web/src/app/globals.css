@@ -8,12 +8,16 @@
   --color-surface: #15171a;
   --color-surface-2: #1b1e22;
   --color-border: #262a30;
+  --color-border-strong: #6a7079; /* >=3:1 vs surface (kontrol sınırları) */
   --color-text: #ecedee;
   --color-muted: #9aa0a6;
   --color-accent: #e8a35c;
   --color-accent-fg: #1a1207;
   --color-positive: #4fb286;
   --color-danger: #e5484d;
+  --color-danger-text: #ff8f93; /* tonlu rozet/buton metni */
+  --color-positive-text: #4fb286;
+  --color-warning-text: #e2b340;
   --color-warning: #e2b340;
 
   --font-display: 'Instrument Sans Variable', ui-sans-serif, system-ui, sans-serif;
@@ -30,12 +34,16 @@
   --color-surface: #ffffff;
   --color-surface-2: #f0eee9;
   --color-border: #e4e2dd;
+  --color-border-strong: #7a8088;
   --color-text: #16181b;
   --color-muted: #5f646b;
-  --color-accent: #b86a1e;
+  --color-accent: #8a4a0c; /* AA: bg/surface/surface-2 üzerinde >=5.9:1 */
   --color-accent-fg: #ffffff;
   --color-positive: #1f7a52;
   --color-danger: #c4262b;
+  --color-danger-text: #a81d22;
+  --color-positive-text: #176843;
+  --color-warning-text: #6f4e08;
   --color-warning: #8a6410;
 }
 

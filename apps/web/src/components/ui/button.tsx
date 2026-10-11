@@ -14,7 +14,7 @@ export const buttonVariants = cva(
           'border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-text)] hover:border-[color-mix(in_oklab,var(--color-border)_60%,var(--color-muted))]',
         ghost: 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-text)]',
         danger:
-          'border border-[color-mix(in_oklab,var(--color-danger)_45%,transparent)] bg-[color-mix(in_oklab,var(--color-danger)_14%,transparent)] text-[var(--color-danger)] hover:bg-[color-mix(in_oklab,var(--color-danger)_22%,transparent)]',
+          'border border-[color-mix(in_oklab,var(--color-danger)_45%,transparent)] bg-[color-mix(in_oklab,var(--color-danger)_14%,transparent)] text-[var(--color-danger-text)] hover:bg-[color-mix(in_oklab,var(--color-danger)_22%,transparent)]',
       },
       size: {
         sm: 'h-8 px-3 text-[13px]',

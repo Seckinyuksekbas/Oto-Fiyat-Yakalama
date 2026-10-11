@@ -10,11 +10,11 @@ const badgeVariants = cva(
         accent:
           'border-[color-mix(in_oklab,var(--color-accent)_40%,transparent)] bg-[color-mix(in_oklab,var(--color-accent)_14%,transparent)] text-[var(--color-accent)]',
         positive:
-          'border-[color-mix(in_oklab,var(--color-positive)_40%,transparent)] bg-[color-mix(in_oklab,var(--color-positive)_14%,transparent)] text-[var(--color-positive)]',
+          'border-[color-mix(in_oklab,var(--color-positive)_40%,transparent)] bg-[color-mix(in_oklab,var(--color-positive)_14%,transparent)] text-[var(--color-positive-text)]',
         warning:
-          'border-[color-mix(in_oklab,var(--color-warning)_40%,transparent)] bg-[color-mix(in_oklab,var(--color-warning)_14%,transparent)] text-[var(--color-warning)]',
+          'border-[color-mix(in_oklab,var(--color-warning)_40%,transparent)] bg-[color-mix(in_oklab,var(--color-warning)_14%,transparent)] text-[var(--color-warning-text)]',
         danger:
-          'border-[color-mix(in_oklab,var(--color-danger)_40%,transparent)] bg-[color-mix(in_oklab,var(--color-danger)_14%,transparent)] text-[var(--color-danger)]',
+          'border-[color-mix(in_oklab,var(--color-danger)_40%,transparent)] bg-[color-mix(in_oklab,var(--color-danger)_14%,transparent)] text-[var(--color-danger-text)]',
       },
     },
     defaultVariants: { tone: 'neutral' },

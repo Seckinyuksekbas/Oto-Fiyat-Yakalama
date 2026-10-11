@@ -8,7 +8,7 @@ function BandPreview() {
   const q1 = 28;
   const median = 52;
   const q3 = 78;
-  const price = 14;
+  const price = 25; // (869 - 780) / (1140 - 780) ≈ %25
   return (
     <figure
       className="w-full rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-6 sm:p-8"
@@ -16,7 +16,8 @@ function BandPreview() {
     >
       <figcaption className="flex items-start justify-between gap-6">
         <div>
-          <p className="text-sm text-[var(--color-muted)]">2019 · 62.400 km · Dizel</p>
+          <p className="text-xs font-medium text-[var(--color-muted)]">Örnek ilan, gösterim amaçlıdır</p>
+          <p className="mt-2 text-sm text-[var(--color-muted)]">2019 · 62.400 km · Dizel</p>
           <p className="mt-1 font-[family-name:var(--font-display)] text-xl font-semibold">
             Volkswagen Passat 1.6 TDI
           </p>
@@ -27,7 +28,7 @@ function BandPreview() {
         </div>
       </figcaption>
 
-      <svg viewBox="0 0 400 96" className="mt-8 w-full" role="img" aria-label="İlan fiyatı piyasa bandının altında">
+      <svg viewBox="0 0 400 104" className="mt-8 w-full" role="img" aria-label="İlan fiyatı piyasa bandının altında">
         <rect x="0" y="40" width="400" height="16" rx="8" fill="var(--color-surface-2)" />
         <rect
           x={q1 * 4}
@@ -41,10 +42,10 @@ function BandPreview() {
         <line x1={median * 4} x2={median * 4} y1="34" y2="62" stroke="var(--color-text)" strokeWidth="2" />
         <line x1={price * 4} x2={price * 4} y1="22" y2="74" stroke="var(--color-accent)" strokeWidth="3" strokeLinecap="round" />
         <circle cx={price * 4} cy="48" r="7" fill="var(--color-accent)" />
-        <text x={price * 4} y="12" textAnchor="middle" fontSize="12" fill="var(--color-accent)" className="num">
+        <text x={price * 4} y="14" textAnchor="middle" fontSize="16" fill="var(--color-accent)" className="num">
           869.000 ₺
         </text>
-        <text x={median * 4} y="90" textAnchor="middle" fontSize="11" fill="var(--color-muted)" className="num">
+        <text x={median * 4} y="98" textAnchor="middle" fontSize="15" fill="var(--color-muted)" className="num">
           medyan 972.000 ₺
         </text>
       </svg>
