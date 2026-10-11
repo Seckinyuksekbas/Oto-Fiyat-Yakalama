@@ -21,6 +21,7 @@
     "@oto/shared": "workspace:*",
     "@oto/telegram": "workspace:*",
     "argon2": "^0.41.1",
+    "bullmq": "^5.34.0",
     "cookie-parser": "^1.4.7",
     "express": "^5.0.1",
     "helmet": "^8.0.0",

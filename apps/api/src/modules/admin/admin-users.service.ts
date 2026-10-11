@@ -1,7 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import type { Prisma, User } from '@oto/db';
 import { ErrorCode, type AdminUsersQuery } from '@oto/shared';
-import type { AuditedResult } from '../../common/audit/audited.decorator';
+import type { AuditCtx } from '../../common/audit/audit-ctx.decorator';
+import { AuditService } from '../../common/audit/audit.service';
 import { AppError, Errors } from '../../common/errors/app-error';
 import { PrismaService } from '../../infra/prisma.service';
 import type { AuthUser } from '../auth/auth-user';
@@ -20,14 +21,17 @@ export interface AdminUserDetail {
   counts: { searchProfiles: number; activeSessions: number };
 }
 
-type UserResult = AuditedResult<{ user: PublicUser }>;
+type UserResult = { user: PublicUser };
 
 @Injectable()
 export class AdminUsersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly sessions: SessionService,
+    private readonly audit: AuditService,
   ) {}
+
+  private readonly logger = new Logger(AdminUsersService.name);
 
   async list(q: AdminUsersQuery) {
     const where: Prisma.UserWhereInput = {
@@ -71,24 +75,43 @@ export class AdminUsersService {
     };
   }
 
-  async suspend(actor: AuthUser, id: string): Promise<UserResult> {
+  async suspend(actor: AuthUser, ctx: AuditCtx, id: string): Promise<UserResult> {
     const target = await this.loadManageable(actor, id);
     if (target.id === actor.id) {
       throw new AppError(ErrorCode.INVALID_OPERATION, 409, 'Kendi hesabınızı askıya alamazsınız');
     }
-    const updated =
-      target.status === 'SUSPENDED'
-        ? target
-        : await this.prisma.user.update({ where: { id }, data: { status: 'SUSPENDED' } });
-    await this.sessions.revokeAllForUser(id);
-    return this.result(target, updated);
+    if (target.status === 'SUSPENDED') return { user: toPublicUser(target) };
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const after = await tx.user.update({ where: { id }, data: { status: 'SUSPENDED' } });
+      await this.audit.recordInTx(tx, ctx, {
+        targetType: 'User',
+        targetId: id,
+        before: { status: target.status },
+        after: { status: after.status },
+      });
+      return after;
+    });
+    // Oturum iptali commit sonrası: başarısızsa askıya alma geçerli kalır (RolesGuard/rotate durumu zaten reddeder).
+    await this.sessions.revokeAllForUser(id).catch((err: unknown) => {
+      this.logger.error(`Askıya alınan kullanıcının oturumları iptal edilemedi (${id}): ${err instanceof Error ? err.message : String(err)}`);
+    });
+    return { user: toPublicUser(updated) };
   }
 
-  async activate(actor: AuthUser, id: string): Promise<UserResult> {
+  async activate(actor: AuthUser, ctx: AuditCtx, id: string): Promise<UserResult> {
     const target = await this.loadManageable(actor, id);
-    const updated =
-      target.status === 'ACTIVE' ? target : await this.prisma.user.update({ where: { id }, data: { status: 'ACTIVE' } });
-    return this.result(target, updated);
+    if (target.status === 'ACTIVE') return { user: toPublicUser(target) };
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const after = await tx.user.update({ where: { id }, data: { status: 'ACTIVE' } });
+      await this.audit.recordInTx(tx, ctx, {
+        targetType: 'User',
+        targetId: id,
+        before: { status: target.status },
+        after: { status: after.status },
+      });
+      return after;
+    });
+    return { user: toPublicUser(updated) };
   }
 
   private async loadManageable(actor: AuthUser, id: string): Promise<User> {
@@ -98,10 +121,4 @@ export class AdminUsersService {
     return target;
   }
 
-  private result(before: User, after: User): UserResult {
-    return {
-      result: { user: toPublicUser(after) },
-      audit: { targetType: 'User', targetId: after.id, before: { status: before.status }, after: { status: after.status } },
-    };
-  }
 }

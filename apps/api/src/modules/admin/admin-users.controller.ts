@@ -1,5 +1,6 @@
 import { Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { adminUsersQuerySchema, type AdminUsersQuery } from '@oto/shared';
+import { AuditCtx } from '../../common/audit/audit-ctx.decorator';
 import { Audited } from '../../common/audit/audited.decorator';
 import { CurrentUser } from '../../common/decorators/current-user';
 import { Roles } from '../../common/decorators/roles';
@@ -24,13 +25,13 @@ export class AdminUsersController {
 
   @Post(':id/suspend')
   @Audited('user.suspend')
-  suspend(@CurrentUser() actor: AuthUser, @Param('id') id: string) {
-    return this.users.suspend(actor, id);
+  suspend(@CurrentUser() actor: AuthUser, @AuditCtx() ctx: AuditCtx, @Param('id') id: string) {
+    return this.users.suspend(actor, ctx, id);
   }
 
   @Post(':id/activate')
   @Audited('user.activate')
-  activate(@CurrentUser() actor: AuthUser, @Param('id') id: string) {
-    return this.users.activate(actor, id);
+  activate(@CurrentUser() actor: AuthUser, @AuditCtx() ctx: AuditCtx, @Param('id') id: string) {
+    return this.users.activate(actor, ctx, id);
   }
 }
