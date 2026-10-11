@@ -88,7 +88,7 @@ describe('notification planning inside the match transaction', () => {
     const { l, a } = await deal(1_000_000n);
     await svc.process({ listingId: l.id, analysisId: a.id, event: 'NEW' });
     const drop = await createAnalysis(ref, l.id, { listingPrice: 900_000n });
-    await svc.process({ listingId: l.id, analysisId: drop.id, event: 'PRICE_DROP', previousPrice: '1000000' });
+    await svc.process({ listingId: l.id, analysisId: drop.id, event: 'PRICE_DROP', previousPrice: '1100000' });
     const n = await prisma.notification.findFirstOrThrow({ where: { payload: { path: ['reason'], equals: 'PRICE_DROP' } } });
     expect(n.payload).toMatchObject({ previousPrice: '1000000', listing: { price: '900000' } });
   });

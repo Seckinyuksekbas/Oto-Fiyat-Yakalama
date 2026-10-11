@@ -2,7 +2,7 @@ import type { DynamicModule, Type } from '@nestjs/common';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { Test, type TestingModule } from '@nestjs/testing';
-import { seedMakeModelAliases, seedPlans, type CollectionJob, type NotificationChannel,type DataSource, type Listing, type ListingAnalysis, type SearchProfile, type User } from '@oto/db';
+import { seedMakeModelAliases, seedPlans, type CollectionJob, type NotificationChannel, type DataSource, type Listing, type ListingAnalysis, type SearchProfile, type User } from '@oto/db';
 import { createDemoSite, type DemoSite } from '@oto/demo-site';
 import { Encryptor, hashToken } from '@oto/server-common';
 import { truncateAll } from '@oto/testing';

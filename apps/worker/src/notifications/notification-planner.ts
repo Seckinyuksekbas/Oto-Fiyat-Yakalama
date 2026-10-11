@@ -33,10 +33,11 @@ export async function planNotifications(
   const byUser = new Map<string, PlannedMatch[]>();
   for (const m of input.matches) byUser.set(m.userId, [...(byUser.get(m.userId) ?? []), m]);
   const userIds = [...byUser.keys()].sort();
-  for (const userId of userIds) {
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(${USER_LOCK_NAMESPACE}::int, hashtext(${userId}))`;
-  }
-  const dayStart = startOfIstanbulDay(input.now);
+  // Tüm kilitler tek ifadede, GERÇEK anahtara (hashtext) göre sıralı alınır: iki eşzamanlı eşleştirme birbirini kilitlemez.
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(${USER_LOCK_NAMESPACE}::int, s.k) FROM (SELECT DISTINCT hashtext(u) AS k FROM unnest(${userIds}::text[]) AS u ORDER BY k) s`;
+  // Saat kilitlerden SONRA alınır (now() işlem başlangıcıdır); kota günü ile satır zaman damgası aynı değerden gelir.
+  const [{ now: dbNow }] = await tx.$queryRaw<{ now: Date }[]>`SELECT clock_timestamp() AS now`;
+  const dayStart = startOfIstanbulDay(dbNow);
   for (const userId of userIds) {
     const plan = await resolveUserPlan(tx, userId, input.now);
     const verified = await tx.notificationChannel.findMany({ where: { userId, isEnabled: true, isVerified: true }, select: { type: true } });
@@ -65,8 +66,8 @@ export async function planNotifications(
       for (const c of channels) {
         const status = c === 'IN_APP' ? 'PENDING' : statuses.get(c)!;
         const rows = await tx.$queryRaw<{ id: number }[]>`
-          INSERT INTO "Notification" ("userId", "matchId", "kind", "channel", "status", "payload")
-          VALUES (${userId}, ${m.matchId}::int, 'MATCH'::"NotificationKind", ${c}::"ChannelType", ${status}::"NotificationStatus", ${JSON.stringify(payload)}::jsonb)
+          INSERT INTO "Notification" ("userId", "matchId", "kind", "channel", "status", "payload", "createdAt")
+          VALUES (${userId}, ${m.matchId}::int, 'MATCH'::"NotificationKind", ${c}::"ChannelType", ${status}::"NotificationStatus", ${JSON.stringify(payload)}::jsonb, ${dbNow}::timestamptz)
           ON CONFLICT ("matchId", "channel") DO NOTHING
           RETURNING "id"`;
         if (rows[0]) out.push({ id: rows[0].id, userId, channel: c, status });

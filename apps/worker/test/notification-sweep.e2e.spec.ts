@@ -47,8 +47,10 @@ describe('NotificationSweepService', () => {
     expect(await queues.notifyTelegram.getJob(`notify-${rows[1].id}`)).toBeTruthy();
     expect(await sweep.requeuePending(later)).toBe(0); // tekrar yok
 
-    // SENT satırlar queuedAt=null olsa bile asla yeniden kuyruğa alınmaz.
-    await prisma.notification.updateMany({ data: { status: 'SENT', queuedAt: null } });
-    expect(await sweep.requeuePending(later)).toBe(0);
+    // SENT / SKIPPED_LIMIT / FAILED satırlar queuedAt=null olsa bile asla yeniden kuyruğa alınmaz.
+    for (const status of ['SENT', 'SKIPPED_LIMIT', 'FAILED'] as const) {
+      await prisma.notification.updateMany({ data: { status, queuedAt: null } });
+      expect(await sweep.requeuePending(later)).toBe(0);
+    }
   });
 });
