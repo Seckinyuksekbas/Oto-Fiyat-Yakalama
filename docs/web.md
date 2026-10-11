@@ -97,7 +97,7 @@ pnpm lint && pnpm test && pnpm test:e2e && pnpm build
 API tarafı `apps/api/test/panel.e2e.spec.ts` (Testcontainers) ile test edilir.
 
 ## Görsel smoke
-`apps/web/scripts/screenshots.mjs` (Playwright) çalışan yığına karşı kullanıcı kaydeder, e-postayı DB'den doğrular, profil oluşturur ve ana sayfaların 1440x900 koyu/açık ile 390x844 koyu ekran görüntülerini `apps/web/.screenshots/` altına alır (gitignore); konsol hataları ve 4xx/5xx yanıtları `report.json`'a yazılır.
+`apps/web/scripts/screenshots.mjs` (Playwright) çalışan yığına karşı kullanıcı kaydeder, e-postayı DB'den doğrular, profil oluşturur ve ana sayfaların 1440x900 koyu/açık ile 390x844 koyu ekran görüntülerini `apps/web/.screenshots/` altına alır (gitignore); konsol hataları ve 4xx/5xx yanıtları `report.json`'a yazılır. Plan 07'den beri seed süper admin (`SEED_ADMIN_EMAIL`/`SEED_ADMIN_PASSWORD`, yoksa `.env.example` varsayılanları) ile tüm `/admin` sayfalarını (kullanıcı, ilan, kaynak ve iş detayları dahil) aynı üç görünümde çeker (`admin-*.png`); `SKIP_ADMIN=1` admin sayfalarını atlar. Admin akışları ve kuralları: [admin.md](admin.md).
 ```bash
 pnpm --filter @oto/web exec playwright install chromium
 # yığın: migrate+seed, dev:demo (DEMO_SIZE=2000 DEMO_TICK_MS=0), api, worker, scheduler, web

@@ -69,7 +69,7 @@ Etkin limitler `LimitsService.forUser`: `effectiveLimits(plan.limits, subscripti
 
 - Oluşturma: toplam profil sayısı (ACTIVE + PAUSED) `maxSearchProfiles` altında olmalı; kullanıcı başına advisory kilit altında sayılır, böylece paralel iki istek limiti aşamaz (biri 201, diğeri 403 `LIMIT_REACHED`).
 - **Doğrulanmamış e-posta:** en fazla 1 profil (`details.reason = 'EMAIL_NOT_VERIFIED'`; plan limiti için `'PLAN'`).
-- **Sürdürme (`resume`):** ACTIVE sayısı limitin altında olmalı. Plan düşürülürse fazla ACTIVE profiller çalışmaya devam eder ama yeni sürdürme engellenir (Plan 07'de admin plan düşürme fazlayı otomatik PAUSED yapmalı).
+- **Sürdürme (`resume`):** ACTIVE sayısı limitin altında olmalı. Plan düşürülürse fazla ACTIVE profiller çalışmaya devam eder ama yeni sürdürme engellenir. Plan 07: admin abonelik değişimi ve süresi dolan abonelik süpürmesi fazlayı PAUSED yapar; paket limitlerini düşürmek ise mevcut profilleri korur (yanıtta `usersOverProfileLimit`, bkz. [admin.md](admin.md#paket-limitleri)).
 - Kanallar: plan kanalları ∩ {IN_APP, TELEGRAM}; `IN_APP` daima eklenir; EMAIL ilan bildirimi MVP'de kapalı. Kanal kontrolü güncellemede yalnızca YENİ eklenen kanallar için yapılır.
 - `PATCH` son yazan kazanır (okuma-birleştirme-yazma arasında kilit yok; MVP'de kabul edildi).
 - `GET /me` aboneliği her zaman null olmayan döner; canlı abonelik yoksa FREE planı ve `status: 'FALLBACK'` ile.

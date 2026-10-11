@@ -63,3 +63,11 @@ PUBLIC_BASE_URL=http://localhost:3000 pnpm dev:api   # API :3001
 pnpm dev:web                                          # http://localhost:3000
 ```
 Next.js 15 tabanlı "Gece Showroom" arayüzü; `/api/*` istekleri `API_ORIGIN` (varsayılan `http://localhost:3001`, build zamanında sabitlenir) adresine yönlendirilir. Rotalar, oturum yenileme modeli, SSE istemci kuralları ve tasarım tokenları: [`docs/web.md`](docs/web.md). Görsel smoke: `node apps/web/scripts/screenshots.mjs` (Playwright; ilk kez `pnpm --filter @oto/web exec playwright install chromium`).
+
+## Yönetim paneli (admin)
+`http://localhost:3000/admin` — seed süper admin (`SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`) ile giriş yapın. Kullanıcılar ve abonelikler, ilanlar/analizler (yeniden analiz), veri kaynakları (dry-run test taraması, etkinleştirme/duraklatma), işler, proxy'ler, kuyruklar, worker'lar, bildirimler (yeniden deneme, gecikme p50/p95), paketler, sistem ayarları, denetim ve sistem logları, canlı alarmlar. Yetki matrisi, denetim kuralları, alarmlar ve SSRF kuralları: [`docs/admin.md`](docs/admin.md).
+
+| Değişken | Süreç | Açıklama |
+|---|---|---|
+| `PROXY_CHECK_URL` | api | Proxy sağlık kontrolü hedefi (varsayılan `https://www.gstatic.com/generate_204`) |
+| `MONITOR_INTERVAL_MS` | worker (scheduler) | Alarm monitörünün en kısa çalışma aralığı (varsayılan 60000) |
