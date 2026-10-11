@@ -62,26 +62,43 @@ export function useSessions() {
   });
 }
 
+export class RevokeSessionsError extends Error {
+  readonly failed: number;
+  constructor(failed: number) {
+    super(`${failed} oturum kapatilamadi`);
+    this.name = 'RevokeSessionsError';
+    this.failed = failed;
+  }
+}
+
 export function useRevokeSessions() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (ids: string[]) => {
-      for (const id of ids) await apiFetch<void>(`/me/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const results = await Promise.allSettled(
+        ids.map((id) => apiFetch<void>(`/me/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' })),
+      );
+      const failed = results.filter((r) => r.status === 'rejected').length;
+      if (failed > 0) throw new RevokeSessionsError(failed);
     },
     onSettled: () => qc.invalidateQueries({ queryKey: settingsKeys.sessions }),
   });
 }
 
 export function useDeleteAccount() {
-  const qc = useQueryClient();
   return useMutation({
     mutationFn: (password: string) => apiFetch<void>('/me', { method: 'DELETE', json: { password } }),
-    onSuccess: async () => {
-      emitLoggedOut();
-      await qc.cancelQueries();
-      qc.clear();
-    },
   });
+}
+
+/** Hesap silindikten sonra: önce yönlendirin, sonra bunu çağırın (açık sayfa boş veriyle yeniden çizilmesin). */
+export function usePurgeSession() {
+  const qc = useQueryClient();
+  return async () => {
+    emitLoggedOut();
+    await qc.cancelQueries();
+    qc.clear();
+  };
 }
 
 /** `pollMs` verilirse kanal listesi o aralıkla yoklanır (Telegram bağlama beklemesi). */

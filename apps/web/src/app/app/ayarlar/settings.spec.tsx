@@ -1,6 +1,6 @@
 import { http, HttpResponse } from 'msw';
 import userEvent from '@testing-library/user-event';
-import { act, screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { server } from '@/test/server';
 import { renderWithClient } from '@/test/render';
@@ -44,6 +44,12 @@ describe('device helpers', () => {
     expect(maskIp('88.247.12.34')).toBe('88.247.x.x');
     expect(maskIp('2a01:4f8:c17:1234::1')).toBe('2a01:4f8:x:x');
     expect(maskIp(null)).toBe('Bilinmiyor');
+    expect(maskIp('::ffff:88.247.12.34')).toBe('88.247.x.x');
+    expect(maskIp('::1')).toBe('::1 (yerel)');
+    expect(maskIp('2a01:4f8::1')).toBe('2a01:4f8:x:x');
+    expect(maskIp('::abcd:1')).toBe('::x:x');
+    expect(maskIp('fe80::1%eth0')).toBe('fe80:x:x');
+    expect(maskIp('garbage')).toBe('Bilinmiyor');
   });
   it('shortens user agents', () => {
     expect(
@@ -69,6 +75,7 @@ describe('SubscriptionView', () => {
     renderWithClient(<SubscriptionView />);
     expect(await screen.findByText('Ücretsiz plan')).toBeInTheDocument();
     expect(screen.getByRole('progressbar', { name: /Arama profili/ })).toHaveAttribute('aria-valuenow', '1');
+    expect(screen.getByRole('progressbar', { name: /Arama profili/ })).toHaveAttribute('aria-valuetext', '1 / 2');
     for (const b of screen.getAllByRole('button', { name: /yükselt/i })) expect(b).toBeDisabled();
   });
 
@@ -76,7 +83,7 @@ describe('SubscriptionView', () => {
     server.use(http.get('*/api/v1/me/subscription', () => HttpResponse.json(view())));
     renderWithClient(<SubscriptionView />);
     expect(await screen.findByText('Mevcut planınız')).toBeInTheDocument();
-    expect(screen.getByText('Business')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Business' })).toBeInTheDocument();
     expect(screen.getByText('2.000')).toBeInTheDocument();
   });
 });
@@ -133,6 +140,7 @@ describe('AccountView', () => {
     expect(replace).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole('button', { name: 'Hesabımı kalıcı olarak sil' }));
     await waitFor(() => expect(replace).toHaveBeenCalledWith('/'));
+    expect(toastMock.success).toHaveBeenCalledWith('Hesap silindi');
   });
 });
 
@@ -175,6 +183,16 @@ describe('SecurityView', () => {
     await waitFor(() => expect(revoked).toEqual(['s2']));
   });
 
+  it('reports failures when closing other sessions', async () => {
+    server.use(
+      http.get('*/api/v1/me/sessions', () => HttpResponse.json(sessions)),
+      http.delete('*/api/v1/me/sessions/:id', () => err(500, 'INTERNAL')),
+    );
+    renderWithClient(<SecurityView />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Diğer oturumları kapat' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/1 oturum kapatılamadı/);
+  });
+
   const fill = async (cur: string, next: string) => {
     await userEvent.type(await screen.findByLabelText('Mevcut şifre'), cur);
     await userEvent.type(screen.getByLabelText('Yeni şifre'), next);
@@ -212,7 +230,8 @@ describe('SecurityView', () => {
     );
     renderWithClient(<SecurityView />);
     await fill('old-password', 'short');
-    expect(await screen.findByText('En az 10 karakter olmalı')).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent('En az 10 karakter olmalı');
+    expect(screen.getByLabelText('Yeni şifre')).toHaveAttribute('aria-invalid', 'true');
     expect(post).not.toHaveBeenCalled();
   });
 });
@@ -225,30 +244,75 @@ describe('ChannelsView', () => {
     ],
     telegramAvailable,
   });
-  const useMe = (verified = true, planCode = 'FREE') =>
-    http.get('*/api/v1/me', () =>
-      HttpResponse.json({ ...me(verified), subscription: { planCode, planName: 'X', status: 'ACTIVE', endsAt: null } }),
-    );
+  const useMe = (verified = true, planChannels: string[] = ['IN_APP', 'TELEGRAM']) => [
+    http.get('*/api/v1/me', () => HttpResponse.json(me(verified))),
+    http.get('*/api/v1/me/subscription', () =>
+      HttpResponse.json({
+        planCode: 'FREE',
+        planName: 'Ücretsiz',
+        status: 'ACTIVE',
+        endsAt: null,
+        limits: { maxSearchProfiles: 2, maxNotificationsPerDay: 20, channels: planChannels, opportunitiesDelayHours: 0 },
+        usage: { searchProfiles: 0, notificationsToday: 0 },
+      }),
+    ),
+  ];
 
   it('telegram unavailable', async () => {
-    server.use(useMe(), http.get('*/api/v1/me/channels', () => HttpResponse.json(channels({}, false))));
+    server.use(...useMe(), http.get('*/api/v1/me/channels', () => HttpResponse.json(channels({}, false))));
     renderWithClient(<ChannelsView />);
     expect(await screen.findByText('Telegram bildirimleri şu anda kullanılamıyor')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: "Telegram'ı bağla" })).not.toBeInTheDocument();
   });
 
+  it('linked user keeps toggle and unlink when bot is unavailable', async () => {
+    server.use(
+      ...useMe(),
+      http.get('*/api/v1/me/channels', () =>
+        HttpResponse.json(channels({ linked: true, isVerified: true, isEnabled: true }, false)),
+      ),
+    );
+    renderWithClient(<ChannelsView />);
+    expect(await screen.findByRole('switch', { name: 'Telegram bildirimleri' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Bağlantıyı kaldır' })).toBeInTheDocument();
+    expect(screen.getByText(/yeni bağlantı oluşturulamaz/)).toBeInTheDocument();
+  });
+
+  it('plan without Telegram is explained up front', async () => {
+    server.use(...useMe(true, ['IN_APP']), http.get('*/api/v1/me/channels', () => HttpResponse.json(channels())));
+    renderWithClient(<ChannelsView />);
+    expect(await screen.findByText(/planınız Telegram bildirimlerini içermiyor/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: "Telegram'ı bağla" })).not.toBeInTheDocument();
+  });
+
+  it('linked user after downgrade sees an explanation', async () => {
+    server.use(
+      ...useMe(true, ['IN_APP']),
+      http.get('*/api/v1/me/channels', () =>
+        HttpResponse.json(channels({ linked: true, isVerified: true, isEnabled: true })),
+      ),
+    );
+    renderWithClient(<ChannelsView />);
+    expect(await screen.findByText(/Planınız artık Telegram bildirimlerini içermiyor/)).toBeInTheDocument();
+  });
+
   it('unverified account needs verification', async () => {
-    server.use(useMe(false), http.get('*/api/v1/me/channels', () => HttpResponse.json(channels())));
+    server.use(...useMe(false), http.get('*/api/v1/me/channels', () => HttpResponse.json(channels())));
     renderWithClient(<ChannelsView />);
     expect(await screen.findByText(/Telegram bağlamak için e-posta adresinizi doğrulayın/)).toBeInTheDocument();
   });
 
-  it('linked: toggles and unlinks with confirmation', async () => {
+  const linkedChannels = () =>
+    http.get('*/api/v1/me/channels', () =>
+      HttpResponse.json(channels({ linked: true, isVerified: true, isEnabled: true })),
+    );
+
+  it('linked: toggles and unlinks with confirmation; cancel does not unlink', async () => {
     let patched: unknown;
     let removed = false;
     server.use(
-      useMe(),
-      http.get('*/api/v1/me/channels', () => HttpResponse.json(channels({ linked: true, isVerified: true, isEnabled: true }))),
+      ...useMe(),
+      linkedChannels(),
       http.patch('*/api/v1/me/channels/TELEGRAM', async ({ request }) => {
         patched = await request.json();
         return HttpResponse.json({ type: 'TELEGRAM' });
@@ -262,9 +326,33 @@ describe('ChannelsView', () => {
     await userEvent.click(await screen.findByRole('switch', { name: 'Telegram bildirimleri' }));
     await waitFor(() => expect(patched).toEqual({ isEnabled: false }));
     await userEvent.click(screen.getByRole('button', { name: 'Bağlantıyı kaldır' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Vazgeç' }));
     expect(removed).toBe(false);
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: 'Bağlantıyı kaldır' }));
     await userEvent.click(screen.getByRole('button', { name: 'Evet, kaldır' }));
     await waitFor(() => expect(removed).toBe(true));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('unlink failure keeps the dialog open with an error', async () => {
+    server.use(
+      ...useMe(),
+      linkedChannels(),
+      http.delete('*/api/v1/me/channels/telegram', () => err(500, 'INTERNAL')),
+    );
+    renderWithClient(<ChannelsView />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Bağlantıyı kaldır' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Evet, kaldır' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(/sorun oluştu/);
+  });
+
+  it('toggle failure shows an error', async () => {
+    server.use(...useMe(), linkedChannels(), http.patch('*/api/v1/me/channels/TELEGRAM', () => err(500, 'INTERNAL')));
+    renderWithClient(<ChannelsView />);
+    await userEvent.click(await screen.findByRole('switch', { name: 'Telegram bildirimleri' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/sorun oluştu/);
   });
 
   it.each([
@@ -273,7 +361,7 @@ describe('ChannelsView', () => {
     [503, 'FEATURE_DISABLED', /Telegram bildirimleri şu anda kullanılamıyor/],
   ])('link error %s %s', async (status, code, text) => {
     server.use(
-      useMe(),
+      ...useMe(),
       http.get('*/api/v1/me/channels', () => HttpResponse.json(channels())),
       http.post('*/api/v1/me/channels/telegram/link', () => err(status, code)),
     );
@@ -282,70 +370,121 @@ describe('ChannelsView', () => {
     expect(await screen.findByText(text)).toBeInTheDocument();
   });
 
+  it('rejects a deepLink that is not a t.me https link', async () => {
+    server.use(
+      ...useMe(),
+      http.get('*/api/v1/me/channels', () => HttpResponse.json(channels())),
+      http.post('*/api/v1/me/channels/telegram/link', () =>
+        HttpResponse.json(
+          { deepLink: 'https://evil.example/x', expiresAt: new Date(Date.now() + 600_000).toISOString() },
+          { status: 201 },
+        ),
+      ),
+    );
+    renderWithClient(<ChannelsView />);
+    await userEvent.click(await screen.findByRole('button', { name: "Telegram'ı bağla" }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/oluşturulamadı/);
+    expect(screen.queryByRole('link', { name: /Telegram'ı aç/ })).not.toBeInTheDocument();
+  });
+
   describe('linking flow', () => {
+    // Yalnızca aralık zamanlayıcıları ve saat sahte: ağ (MSW) gerçek zamanlayıcılarla çalışır.
     beforeEach(() => {
-      vi.useFakeTimers({ shouldAdvanceTime: true });
+      vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
     });
     afterEach(() => {
       vi.useRealTimers();
     });
 
+    const advance = (ms: number) =>
+      act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+
+    const linkHandler = (ttlMs: number) =>
+      http.post('*/api/v1/me/channels/telegram/link', () =>
+        HttpResponse.json(
+          { deepLink: 'https://t.me/bot?start=abc', expiresAt: new Date(Date.now() + ttlMs).toISOString() },
+          { status: 201 },
+        ),
+      );
+
     it('counts down, polls and shows success', async () => {
-      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
       let linked = false;
       server.use(
-        useMe(),
+        ...useMe(),
         http.get('*/api/v1/me/channels', () =>
           HttpResponse.json(channels(linked ? { linked: true, isVerified: true, isEnabled: true } : {})),
         ),
-        http.post('*/api/v1/me/channels/telegram/link', () =>
-          HttpResponse.json(
-            { deepLink: 'https://t.me/bot?start=abc', expiresAt: new Date(Date.now() + 600_000).toISOString() },
-            { status: 201 },
-          ),
-        ),
+        linkHandler(600_000),
       );
       renderWithClient(<ChannelsView />);
-      await user.click(await screen.findByRole('button', { name: "Telegram'ı bağla" }));
+      await userEvent.click(await screen.findByRole('button', { name: "Telegram'ı bağla" }));
       const open = await screen.findByRole('link', { name: /Telegram'ı aç/ });
       expect(open).toHaveAttribute('href', 'https://t.me/bot?start=abc');
       expect(open).toHaveAttribute('target', '_blank');
       expect(open.getAttribute('rel')).toContain('noopener');
       expect(screen.getByText(/Bağlantı bekleniyor/)).toBeInTheDocument();
       expect(screen.getByText('10:00')).toBeInTheDocument();
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(3000);
-      });
+      await advance(3000);
       expect(screen.getByText('09:57')).toBeInTheDocument();
 
       linked = true;
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(6000);
-      });
-      await waitFor(() => expect(toastMock.success).toHaveBeenCalledWith('Telegram bağlandı'));
+      await advance(5000);
+      await screen.findByText('Bağlandı');
+      expect(toastMock.success).toHaveBeenCalledWith('Telegram bağlandı');
       expect(screen.queryByText(/Bağlantı bekleniyor/)).not.toBeInTheDocument();
     });
 
     it('expires and offers a new link', async () => {
-      server.use(
-        useMe(),
-        http.get('*/api/v1/me/channels', () => HttpResponse.json(channels())),
-        http.post('*/api/v1/me/channels/telegram/link', () =>
-          HttpResponse.json(
-            { deepLink: 'https://t.me/bot?start=abc', expiresAt: new Date(Date.now() + 10_000).toISOString() },
-            { status: 201 },
-          ),
-        ),
-      );
+      server.use(...useMe(), http.get('*/api/v1/me/channels', () => HttpResponse.json(channels())), linkHandler(10_000));
       renderWithClient(<ChannelsView />);
-      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-      await user.click(await screen.findByRole('button', { name: "Telegram'ı bağla" }));
+      await userEvent.click(await screen.findByRole('button', { name: "Telegram'ı bağla" }));
       await screen.findByText(/Bağlantı bekleniyor/);
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(11_000);
-      });
+      await advance(11_000);
       expect(await screen.findByRole('button', { name: 'Yeni bağlantı oluştur' })).toBeInTheDocument();
       expect(screen.queryByText(/Bağlantı bekleniyor/)).not.toBeInTheDocument();
+    });
+
+    it('does a final refetch at expiry and catches a late link', async () => {
+      let linked = false;
+      server.use(
+        ...useMe(),
+        http.get('*/api/v1/me/channels', () =>
+          HttpResponse.json(channels(linked ? { linked: true, isVerified: true, isEnabled: true } : {})),
+        ),
+        linkHandler(7_000),
+      );
+      renderWithClient(<ChannelsView />);
+      await userEvent.click(await screen.findByRole('button', { name: "Telegram'ı bağla" }));
+      await screen.findByText(/Bağlantı bekleniyor/);
+      await advance(6_000); // 5 sn'lik yoklama bağlı değil görür
+      linked = true; // ikinci yoklamadan önce bağlanır
+      await advance(2_000); // süre dolar, son yenileme çalışır
+      await screen.findByText('Bağlandı');
+      expect(toastMock.success).toHaveBeenCalledWith('Telegram bağlandı');
+      expect(screen.queryByRole('button', { name: 'Yeni bağlantı oluştur' })).not.toBeInTheDocument();
+    });
+
+    it('stops polling on unmount', async () => {
+      let polls = 0;
+      server.use(
+        ...useMe(),
+        http.get('*/api/v1/me/channels', () => {
+          polls += 1;
+          return HttpResponse.json(channels());
+        }),
+        linkHandler(600_000),
+      );
+      const { unmount } = renderWithClient(<ChannelsView />);
+      await userEvent.click(await screen.findByRole('button', { name: "Telegram'ı bağla" }));
+      await screen.findByText(/Bağlantı bekleniyor/);
+      await advance(5_100);
+      await waitFor(() => expect(polls).toBeGreaterThanOrEqual(2));
+      unmount();
+      const after = polls;
+      await advance(20_000);
+      expect(polls).toBe(after);
     });
   });
 });

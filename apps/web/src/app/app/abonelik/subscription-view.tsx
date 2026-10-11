@@ -19,11 +19,11 @@ interface PlanRow {
 // packages/db/src/seed-data.ts ile aynı değerler; fiyatlar ödeme entegrasyonuyla gelecek.
 const PLANS: PlanRow[] = [
   { code: 'FREE', name: 'Ücretsiz', profiles: 2, perDay: 20, channels: ['Uygulama içi', 'Telegram'] },
-  { code: 'PRO', name: 'Pro', profiles: 10, perDay: 200, channels: ['Uygulama içi', 'Telegram', 'E-posta'] },
-  { code: 'BUSINESS', name: 'Business', profiles: 50, perDay: 2000, channels: ['Uygulama içi', 'Telegram', 'E-posta'] },
+  { code: 'PRO', name: 'Pro', profiles: 10, perDay: 200, channels: ['Uygulama içi', 'Telegram', 'E-posta (yalnızca hesap e-postaları)'] },
+  { code: 'BUSINESS', name: 'Business', profiles: 50, perDay: 2000, channels: ['Uygulama içi', 'Telegram', 'E-posta (yalnızca hesap e-postaları)'] },
 ];
 
-const CHANNEL_LABEL: Record<string, string> = { IN_APP: 'Uygulama içi', TELEGRAM: 'Telegram', EMAIL: 'E-posta' };
+const CHANNEL_LABEL: Record<string, string> = { IN_APP: 'Uygulama içi', TELEGRAM: 'Telegram', EMAIL: 'E-posta (yalnızca hesap e-postaları)' };
 const STATUS_LABEL: Record<string, string> = {
   ACTIVE: 'Etkin',
   TRIALING: 'Deneme',
@@ -35,6 +35,7 @@ const STATUS_LABEL: Record<string, string> = {
 const nf = new Intl.NumberFormat('tr-TR');
 
 function Usage({ label, used, max }: { label: string; used: number; max: number }) {
+  const now = Math.min(Math.max(used, 0), max);
   const pct = max > 0 ? Math.min(100, Math.round((used / max) * 100)) : 0;
   const high = pct >= 90;
   return (
@@ -50,7 +51,8 @@ function Usage({ label, used, max }: { label: string; used: number; max: number 
         aria-label={label}
         aria-valuemin={0}
         aria-valuemax={max}
-        aria-valuenow={used}
+        aria-valuenow={now}
+        aria-valuetext={`${used} / ${max}`}
         className="h-1.5 overflow-hidden rounded-full bg-surface-2"
       >
         <div className={cn('h-full rounded-full', high ? 'bg-warning' : 'bg-accent')} style={{ width: `${pct}%` }} />
@@ -156,10 +158,13 @@ export function SubscriptionView() {
                     {current ? null : (
                       <Tooltip>
                         <TooltipTrigger asChild>
-                          <span tabIndex={0} className="inline-block w-full">
-                            <Button variant="secondary" className="w-full" disabled aria-label={`${p.name} planına yükselt`}>
-                              Yükselt
+                          <span tabIndex={0} aria-describedby={`soon-${p.code}`} className="inline-block w-full">
+                            <Button variant="secondary" className="w-full" disabled>
+                              Yükselt<span className="sr-only"> {p.name}</span>
                             </Button>
+                            <span id={`soon-${p.code}`} className="sr-only">
+                              Ödeme yakında
+                            </span>
                           </span>
                         </TooltipTrigger>
                         <TooltipContent>Ödeme yakında</TooltipContent>

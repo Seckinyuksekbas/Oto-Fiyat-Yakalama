@@ -11,7 +11,7 @@ import { ApiError } from '@/lib/api';
 import { maskIp, shortUserAgent } from '@/lib/device';
 import { formatRelative } from '@/lib/format';
 import { NETWORK_MESSAGE, RATE_LIMIT_MESSAGE, apiErrorMessage } from '@/lib/messages';
-import { useChangePassword, useRevokeSessions, useSessions } from '@/lib/settings-queries';
+import { RevokeSessionsError, useChangePassword, useRevokeSessions, useSessions } from '@/lib/settings-queries';
 
 function passwordErrorMessage(err: unknown): string {
   if (err instanceof ApiError) {
@@ -64,8 +64,13 @@ function PasswordForm() {
             autoComplete="current-password"
             value={current}
             onChange={(e) => setCurrent(e.target.value)}
+            aria-invalid={local?.field === 'current' ? true : undefined}
           />
-          {local?.field === 'current' ? <p className="text-sm text-danger-text">{local.msg}</p> : null}
+          {local?.field === 'current' ? (
+            <p role="alert" className="text-sm text-danger-text">
+              {local.msg}
+            </p>
+          ) : null}
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="pw-new">Yeni şifre</Label>
@@ -76,11 +81,16 @@ function PasswordForm() {
             value={next}
             onChange={(e) => setNext(e.target.value)}
             aria-describedby="pw-hint"
+            aria-invalid={local?.field === 'next' ? true : undefined}
           />
           <p id="pw-hint" className="text-xs text-muted">
             En az 10 karakter. Daha önce sızdırılmış şifreler kabul edilmez.
           </p>
-          {local?.field === 'next' ? <p className="text-sm text-danger-text">{local.msg}</p> : null}
+          {local?.field === 'next' ? (
+            <p role="alert" className="text-sm text-danger-text">
+              {local.msg}
+            </p>
+          ) : null}
         </div>
         <div aria-live="polite">
           {serverError ? (
@@ -169,7 +179,9 @@ function Sessions() {
       )}
       {revoke.isError ? (
         <p role="alert" className="mt-3 text-sm text-danger-text">
-          {apiErrorMessage(revoke.error)}
+          {revoke.error instanceof RevokeSessionsError
+            ? `${revoke.error.failed} oturum kapatılamadı. Tekrar deneyin.`
+            : apiErrorMessage(revoke.error)}
         </p>
       ) : null}
     </Card>

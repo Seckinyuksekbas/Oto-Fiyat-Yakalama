@@ -21,7 +21,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { ApiError } from '@/lib/api';
 import { NETWORK_MESSAGE, RATE_LIMIT_MESSAGE, apiErrorMessage } from '@/lib/messages';
 import { useMe } from '@/lib/queries';
-import { useDeleteAccount, useUpdateName } from '@/lib/settings-queries';
+import { useDeleteAccount, usePurgeSession, useUpdateName } from '@/lib/settings-queries';
 
 function deleteErrorMessage(err: unknown): string {
   if (err instanceof ApiError) {
@@ -36,6 +36,7 @@ function deleteErrorMessage(err: unknown): string {
 function DeleteAccount() {
   const router = useRouter();
   const del = useDeleteAccount();
+  const purge = usePurgeSession();
   const [open, setOpen] = useState(false);
   const [password, setPassword] = useState('');
   const [local, setLocal] = useState<string | null>(null);
@@ -47,7 +48,14 @@ function DeleteAccount() {
       return;
     }
     setLocal(null);
-    del.mutate(password, { onSuccess: () => router.replace('/') });
+    del.mutate(password, {
+      onSuccess: () => {
+        // Önce yönlendir, sonra önbelleği boşalt: açık sayfa boş veriyle yeniden çizilmesin.
+        router.replace('/');
+        toast.success('Hesap silindi');
+        void purge();
+      },
+    });
   };
   const error = local ?? (del.error ? deleteErrorMessage(del.error) : null);
 

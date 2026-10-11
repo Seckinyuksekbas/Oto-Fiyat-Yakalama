@@ -23,6 +23,7 @@ import {
   useChannels,
   useLinkTelegram,
   usePatchChannel,
+  useSubscription,
   useUnlinkTelegram,
   type TelegramLink,
 } from '@/lib/settings-queries';
@@ -54,10 +55,32 @@ function Notice({ children }: { children: React.ReactNode }) {
   );
 }
 
-function UnlinkDialog({ onConfirm, pending }: { onConfirm: () => void; pending: boolean }) {
+function UnlinkDialog({ onConfirm }: { onConfirm: () => Promise<unknown> }) {
   const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const confirm = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await onConfirm();
+      setOpen(false);
+    } catch (e) {
+      setError(apiErrorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o);
+        if (!o) setError(null);
+      }}
+    >
       <DialogTrigger asChild>
         <Button variant="ghost" size="sm">
           Bağlantıyı kaldır
@@ -71,18 +94,16 @@ function UnlinkDialog({ onConfirm, pending }: { onConfirm: () => void; pending: 
             bağlayabilirsiniz.
           </DialogDescription>
         </DialogHeader>
+        {error ? (
+          <p role="alert" className="text-sm text-danger-text">
+            {error}
+          </p>
+        ) : null}
         <DialogFooter>
           <Button variant="ghost" onClick={() => setOpen(false)}>
             Vazgeç
           </Button>
-          <Button
-            variant="danger"
-            disabled={pending}
-            onClick={() => {
-              onConfirm();
-              setOpen(false);
-            }}
-          >
+          <Button variant="danger" disabled={busy} onClick={() => void confirm()}>
             Evet, kaldır
           </Button>
         </DialogFooter>
@@ -96,6 +117,8 @@ function TelegramCard() {
   const link = useLinkTelegram();
   const patch = usePatchChannel();
   const unlink = useUnlinkTelegram();
+  const sub = useSubscription();
+  const [badLink, setBadLink] = useState(false);
   const [pending, setPending] = useState<TelegramLink | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
@@ -114,6 +137,12 @@ function TelegramCard() {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, [waiting]);
+
+  // Süre dolduğunda son bir yenileme: bağlama tam bitiş anında tamamlanmış olabilir.
+  const refetchChannels = channels.refetch;
+  useEffect(() => {
+    if (expired) void refetchChannels();
+  }, [expired, refetchChannels]);
 
   useEffect(() => {
     if (pending && isLinked) {
@@ -134,9 +163,17 @@ function TelegramCard() {
   const available = channels.data?.telegramAvailable ?? false;
   const verified = Boolean(me.data?.user.emailVerifiedAt);
 
+  // Plan bilgisi yüklenemezse engellemeyiz; sunucu LIMIT_REACHED ile yine reddeder.
+  const planLacksTelegram = sub.data ? !sub.data.limits.channels.includes('TELEGRAM') : false;
+
   const start = () => {
+    setBadLink(false);
     link.mutate(undefined, {
       onSuccess: (res) => {
+        if (!res.deepLink.startsWith('https://t.me/')) {
+          setBadLink(true);
+          return;
+        }
         setNow(Date.now());
         setPending(res);
       },
@@ -144,25 +181,41 @@ function TelegramCard() {
   };
 
   let body: React.ReactNode;
-  if (!available) {
-    body = <Notice>{UNAVAILABLE_MSG}</Notice>;
-  } else if (isLinked) {
+  if (isLinked) {
     body = (
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <label className="flex items-center gap-3 text-sm">
-          <Switch
-            aria-label="Telegram bildirimleri"
-            checked={tg?.isEnabled ?? false}
-            disabled={patch.isPending}
-            onCheckedChange={(v) => patch.mutate({ type: 'TELEGRAM', isEnabled: v })}
-          />
-          <span>{tg?.isEnabled ? 'Bildirimler açık' : 'Bildirimler kapalı'}</span>
-        </label>
-        <UnlinkDialog pending={unlink.isPending} onConfirm={() => unlink.mutate()} />
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <label className="flex items-center gap-3 text-sm">
+            <Switch
+              aria-label="Telegram bildirimleri"
+              checked={tg?.isEnabled ?? false}
+              disabled={patch.isPending}
+              onCheckedChange={(v) => patch.mutate({ type: 'TELEGRAM', isEnabled: v })}
+            />
+            <span>{tg?.isEnabled ? 'Bildirimler açık' : 'Bildirimler kapalı'}</span>
+          </label>
+          <UnlinkDialog onConfirm={() => unlink.mutateAsync()} />
+        </div>
+        {!available ? (
+          <Notice>
+            Telegram bildirimleri şu anda kullanılamıyor: yeni bağlantı oluşturulamaz. Mevcut bağlantınızı yine de
+            yönetebilirsiniz.
+          </Notice>
+        ) : null}
+        {planLacksTelegram ? (
+          <Notice>
+            Planınız artık Telegram bildirimlerini içermiyor; yeni fırsatlar Telegram&apos;a gönderilmez. Bağlantınız
+            korunur ve plan yükseltilince yeniden çalışır.
+          </Notice>
+        ) : null}
       </div>
     );
+  } else if (!available) {
+    body = <Notice>{UNAVAILABLE_MSG}</Notice>;
   } else if (!verified) {
     body = <Notice>{VERIFY_MSG}</Notice>;
+  } else if (planLacksTelegram) {
+    body = <Notice>{NO_PLAN_MSG}</Notice>;
   } else if (waiting && pending) {
     body = (
       <div className="space-y-4">
@@ -205,7 +258,14 @@ function TelegramCard() {
     );
   }
 
-  const linkError = !isLinked && !waiting && link.isError ? linkErrorMessage(link.error) : null;
+  const linkError =
+    isLinked || waiting
+      ? null
+      : badLink
+        ? 'Telegram bağlantısı oluşturulamadı. Lütfen tekrar deneyin.'
+        : link.isError
+          ? linkErrorMessage(link.error)
+          : null;
   const patchError = patch.isError ? apiErrorMessage(patch.error) : null;
 
   return (
