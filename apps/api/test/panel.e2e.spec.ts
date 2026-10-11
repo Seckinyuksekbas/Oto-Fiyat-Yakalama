@@ -138,6 +138,37 @@ describe('GET /me/opportunities', () => {
     expect(ids(await A.agent.get('/api/v1/me/opportunities'))).toEqual([old.listingId]);
   });
 
+  it('rejects an overflowing maxPrice with 400', async () => {
+    const A = await registerUser(app);
+    const res = await A.agent.get('/api/v1/me/opportunities?maxPrice=99999999999999999999');
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('VALIDATION_FAILED');
+  });
+
+  it('paginates the recent sort with mixed timestamps and ties across page boundaries', async () => {
+    const A = await registerUser(app);
+    const base = Date.now() - 10_000_000;
+    const stamps = [0, 0, 1000, 1000, 1000, 2000, 2000];
+    const created: number[] = [];
+    for (const off of stamps) created.push((await seedListing(app, { listing: { firstSeenAt: new Date(base + off) } })).listingId);
+    const expected = created
+      .map((id, i) => ({ id, t: stamps[i] }))
+      .sort((a, b) => b.t - a.t || b.id - a.id)
+      .map((x) => x.id);
+    for (const limit of [2, 3]) {
+      const seen: number[] = [];
+      let cursor: string | null = null;
+      let guard = 0;
+      do {
+        const res: Page = await A.agent.get(`/api/v1/me/opportunities?sort=recent&limit=${limit}${cursor ? `&cursor=${cursor}` : ''}`);
+        seen.push(...res.body.items.map((i) => i.id));
+        cursor = res.body.nextCursor;
+        guard += 1;
+      } while (cursor && guard < 10);
+      expect(seen, `limit ${limit}`).toEqual(expected);
+    }
+  });
+
   it('marks favorites', async () => {
     const A = await registerUser(app);
     const l = await seedListing(app);
@@ -219,6 +250,34 @@ describe('GET /me/listings/:id', () => {
     }
   });
 
+  it('skips malformed comparables and applies the 30 limit after joining existing listings', async () => {
+    const A = await registerUser(app);
+    const real: number[] = [];
+    for (let i = 0; i < 40; i += 1) real.push((await seedListing(app)).listingId);
+    const ok = (id: number) => ({ id, price: 1_000_000, year: 2019, km: 50_000, damaged: false, adjusted: 1_000_000, clamped: false, outlier: false });
+    const target = await seedListing(app, {
+      analysis: {
+        explanation: {
+          comparables: [
+            { ...ok(real[0]), year: 'x' },
+            { ...ok(real[1]), adjusted: null },
+            { ...ok(real[2]), km: 'many' },
+            { ...ok(real[3]), damaged: 'no' },
+            { ...ok(real[4]), outlier: 1 },
+            'junk',
+            null,
+            // existing olmayan 40 id önce gelir; sınır birleştirmeden sonra uygulanır
+            ...Array.from({ length: 40 }, (_, i) => ok(900_000 + i)),
+            ...real.slice(5).map(ok),
+          ],
+        },
+      },
+    });
+    const res = await A.agent.get(`/api/v1/me/listings/${target.listingId}`);
+    expect(res.status).toBe(200);
+    expect(res.body.comparables.map((c: { id: number }) => c.id)).toEqual(real.slice(5, 35));
+  });
+
   it('listing without analysis returns analysis null and explanation null', async () => {
     const A = await registerUser(app);
     const l = await seedListing(app);
@@ -230,3 +289,4 @@ describe('GET /me/listings/:id', () => {
     expect(res.body.comparables).toEqual([]);
   });
 });
+

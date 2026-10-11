@@ -22,8 +22,12 @@ export interface OpportunityRow {
   listing: Listing;
   analysis: ListingAnalysis | null;
   isFavorite: boolean;
-  /** Bu satırdan devam etmek için sıralama anahtarı */
-  key: number | string;
+}
+
+export interface OpportunityPage {
+  items: OpportunityRow[];
+  /** Sonraki sayfa varsa, ham sayfanın son satırının (anahtar, id) değeri */
+  nextKey: { k: number | string; id: number } | null;
 }
 
 interface KeyRow {
@@ -35,7 +39,7 @@ interface KeyRow {
 const KEY_EXPR: Record<OpportunitySort, Prisma.Sql> = {
   score: Prisma.sql`a."opportunityScore"`,
   recent: Prisma.sql`l."firstSeenAt"`,
-  discount: Prisma.sql`COALESCE(a."discountPct", -1)`,
+  discount: Prisma.sql`COALESCE(a."discountPct", -1000)`,
 };
 
 /** Fırsat akışına erişim. Yalnızca favori işareti kullanıcıya özeldir ve userId ile kapsamlanır. */
@@ -43,7 +47,7 @@ const KEY_EXPR: Record<OpportunitySort, Prisma.Sql> = {
 export class OpportunitiesRepository {
   constructor(private readonly prisma: PrismaService) {}
 
-  async list(userId: string, f: OpportunityFilter): Promise<OpportunityRow[]> {
+  async list(userId: string, f: OpportunityFilter): Promise<OpportunityPage> {
     const key = KEY_EXPR[f.sort];
     const conds: Prisma.Sql[] = [
       Prisma.sql`l.status = 'ACTIVE'`,
@@ -72,19 +76,24 @@ export class OpportunitiesRepository {
       WHERE ${Prisma.join(conds, ' AND ')}
       ORDER BY ${key} DESC, l.id DESC
       LIMIT ${f.limit + 1}`;
-    if (rows.length === 0) return [];
+    // hasMore ve imleç ham anahtar satırlarından hesaplanır; kartlar arada silinse bile sayfalama bozulmaz
+    const hasMore = rows.length > f.limit;
+    const pageRows = rows.slice(0, f.limit);
+    if (pageRows.length === 0) return { items: [], nextKey: null };
 
     const listings = await this.prisma.listing.findMany({
-      where: { id: { in: rows.map((r) => r.id) } },
+      where: { id: { in: pageRows.map((r) => r.id) } },
       include: { latestAnalysis: true, favorites: { where: { userId }, select: { userId: true } } },
     });
     const byId = new Map(listings.map((l) => [l.id, l]));
-    return rows.flatMap((r) => {
+    const items = pageRows.flatMap((r) => {
       const l = byId.get(r.id);
       if (!l) return [];
       const { latestAnalysis, favorites, ...listing } = l;
-      const k = r.k instanceof Date ? r.k.toISOString() : r.k;
-      return [{ listing, analysis: latestAnalysis, isFavorite: favorites.length > 0, key: f.sort === 'score' ? Number(k) : String(k) }];
+      return [{ listing, analysis: latestAnalysis, isFavorite: favorites.length > 0 }];
     });
+    const last = pageRows[pageRows.length - 1];
+    const k = last.k instanceof Date ? last.k.toISOString() : last.k;
+    return { items, nextKey: hasMore ? { k: f.sort === 'score' ? Number(k) : String(k), id: last.id } : null };
   }
 }

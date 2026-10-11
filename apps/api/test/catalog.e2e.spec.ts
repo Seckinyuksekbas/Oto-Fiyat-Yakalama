@@ -39,6 +39,7 @@ describe('GET /catalog', () => {
     await seedListing(app, { listing: { make: 'BMW', model: '3 Serisi' } });
     await seedListing(app, { listing: { make: 'BMW', model: '5 Serisi' } });
     await seedListing(app, { listing: { make: 'Audi', model: 'A4' } });
+    await seedListing(app, { listing: { make: 'BMW', model: 'X5', status: 'REMOVED' } });
     const res = await A.agent.get('/api/v1/catalog/makes/bmw/models');
     expect(res.status).toBe(200);
     expect(res.body.items).toEqual([

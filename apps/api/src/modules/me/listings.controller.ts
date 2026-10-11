@@ -20,10 +20,17 @@ interface RawComparable {
 function parseComparables(explanation: unknown): RawComparable[] {
   const list = (explanation as { comparables?: unknown } | null)?.comparables;
   if (!Array.isArray(list)) return [];
-  return list.filter(
-    (c): c is RawComparable =>
-      c !== null && typeof c === 'object' && Number.isInteger((c as RawComparable).id) && typeof (c as RawComparable).price === 'number',
-  );
+  const num = (v: unknown) => typeof v === 'number' && Number.isFinite(v);
+  return list
+    .filter((c): c is RawComparable => {
+      if (c === null || typeof c !== 'object') return false;
+      const r = c as Record<string, unknown>;
+      return (
+        Number.isInteger(r.id) && num(r.price) && num(r.year) && num(r.km) && num(r.adjusted) &&
+        typeof r.damaged === 'boolean' && typeof r.clamped === 'boolean' && typeof r.outlier === 'boolean'
+      );
+    })
+    .slice(0, 200);
 }
 
 @Controller('me/listings')
@@ -41,9 +48,12 @@ export class ListingsController {
 
     // Uç değer olmayanlar önce (sıra korunur), en fazla 30
     const raw = parseComparables(analysis?.explanation);
-    const ordered = [...raw.filter((c) => !c.outlier), ...raw.filter((c) => c.outlier)].slice(0, 30);
+    const ordered = [...raw.filter((c) => !c.outlier), ...raw.filter((c) => c.outlier)];
     const joined = new Map((await this.listings.findComparableListings(ordered.map((c) => c.id))).map((c) => [c.id, c]));
-    const comparables = ordered.flatMap((c) => {
+    const comparables = ordered
+      .filter((c) => joined.has(c.id))
+      .slice(0, 30)
+      .flatMap((c) => {
       const j = joined.get(c.id);
       if (!j) return [];
       return [

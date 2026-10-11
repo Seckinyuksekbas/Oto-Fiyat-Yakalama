@@ -47,7 +47,7 @@ export const opportunitiesQuerySchema = z
     make: z.string().min(1).max(100).optional(),
     model: z.string().min(1).max(100).optional(),
     city: z.string().min(1).max(100).optional(),
-    maxPrice: z.string().regex(/^\d+$/).optional(),
+    maxPrice: z.string().regex(/^\d{1,15}$/).optional(),
     minScore: z.coerce.number().int().min(60).max(100).optional(),
     confidence: z.enum(['MEDIUM', 'HIGH']).optional(),
     sort: z.enum(['score', 'recent', 'discount']).default('score'),

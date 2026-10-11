@@ -14,6 +14,8 @@ describe('panel contracts', () => {
     expect(opportunitiesQuerySchema.safeParse({ minScore: '59' }).success).toBe(false);
     expect(opportunitiesQuerySchema.safeParse({ confidence: 'LOW' }).success).toBe(false);
     expect(opportunitiesQuerySchema.safeParse({ maxPrice: '1.5' }).success).toBe(false);
+    expect(opportunitiesQuerySchema.safeParse({ maxPrice: '99999999999999999999' }).success).toBe(false);
+    expect(opportunitiesQuerySchema.safeParse({ maxPrice: '999999999999999' }).success).toBe(true);
     expect(opportunitiesQuerySchema.safeParse({ limit: '51' }).success).toBe(false);
     expect(opportunitiesQuerySchema.safeParse({ foo: '1' }).success).toBe(false);
   });

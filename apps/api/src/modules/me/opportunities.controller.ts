@@ -14,7 +14,7 @@ const id = z.number().int().min(1).max(2147483647);
 const cursorSchemas = {
   score: z.object({ s: z.literal('score'), k: z.number().int().min(0).max(100), id }).strict(),
   recent: z.object({ s: z.literal('recent'), k: z.string().datetime(), id }).strict(),
-  discount: z.object({ s: z.literal('discount'), k: z.string().regex(/^-?\d{1,3}(\.\d{1,4})?$/), id }).strict(),
+  discount: z.object({ s: z.literal('discount'), k: z.string().regex(/^-?\d{1,4}(\.\d{1,4})?$/), id }).strict(),
 };
 
 @Controller('me/opportunities')
@@ -34,7 +34,7 @@ export class OpportunitiesController {
     }
     const { limits } = await this.limits.forUser(user.id);
     const visibleBefore = new Date(Date.now() - limits.opportunitiesDelayHours * 3_600_000);
-    const rows = await this.repo.list(user.id, {
+    const page = await this.repo.list(user.id, {
       make: q.make,
       model: q.model,
       city: q.city,
@@ -46,11 +46,9 @@ export class OpportunitiesController {
       limit: q.limit,
       visibleBefore,
     });
-    const page = rows.slice(0, q.limit);
-    const last = page[page.length - 1];
     return {
-      items: page.map((r) => toListingCard(r.listing, r.analysis, r.isFavorite)),
-      nextCursor: rows.length > q.limit && last ? encodeCursor({ s: q.sort, k: last.key, id: last.listing.id }) : null,
+      items: page.items.map((r) => toListingCard(r.listing, r.analysis, r.isFavorite)),
+      nextCursor: page.nextKey ? encodeCursor({ s: q.sort, k: page.nextKey.k, id: page.nextKey.id }) : null,
     };
   }
 }
