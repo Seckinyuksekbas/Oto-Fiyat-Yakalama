@@ -158,7 +158,7 @@ function Sessions() {
                     {s.current ? <Badge tone="accent">Bu cihaz</Badge> : null}
                   </p>
                   <p className="text-xs text-muted">
-                    <span className="font-mono">{maskIp(s.ip)}</span> · Son kullanım {formatRelative(s.lastUsedAt)}
+                    <span className="tnum">{maskIp(s.ip)}</span> · Son kullanım {formatRelative(s.lastUsedAt)}
                   </p>
                 </div>
                 {s.current ? null : (

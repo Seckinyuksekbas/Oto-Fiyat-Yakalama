@@ -171,7 +171,7 @@ export function AccountView() {
           <div className="space-y-1.5">
             <p className="text-sm font-medium">E-posta</p>
             <div className="flex flex-wrap items-center gap-2">
-              <span className="font-mono text-sm">{user.email}</span>
+              <span className="text-sm">{user.email}</span>
               {verified ? (
                 <Badge tone="positive">
                   <BadgeCheck aria-hidden className="size-3.5" />

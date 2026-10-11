@@ -189,7 +189,7 @@ export function ExplanationPanel({ detail }: { detail: ListingDetail }) {
         <Fact label={insufficient ? 'Denenen en geniş kapsam' : 'Emsal kapsamı'}>
           {scope !== null && ex.level !== null ? (
             <>
-              <span className="num font-medium">{`Seviye ${ex.level}`}</span>
+              <span className="tnum font-medium">{`Seviye ${ex.level}`}</span>
               {` · ${scope}`}
             </>
           ) : (
@@ -273,7 +273,7 @@ export function ExplanationPanel({ detail }: { detail: ListingDetail }) {
                     <CompTitle c={c} />
                     <CompBadges c={c} />
                   </div>
-                  <p className="num mt-1 text-xs text-muted">
+                  <p className="tnum mt-1 text-xs text-muted">
                     {`${c.year} · ${formatKm(c.km)}${c.city ? ` · ${c.city}` : ''}`}
                   </p>
                   <p className="num mt-1">

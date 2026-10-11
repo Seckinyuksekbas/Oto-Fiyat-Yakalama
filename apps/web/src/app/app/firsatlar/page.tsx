@@ -167,7 +167,7 @@ function OpportunitiesInner() {
         />
       ) : (
         <>
-          <p className="num text-xs text-muted" aria-live="polite">
+          <p className="tnum text-xs text-muted" aria-live="polite">
             {q.isPlaceholderData ? 'Güncelleniyor…' : `${rows.length} ilan${hasNextPage ? ' · devamı var' : ''}`}
           </p>
           <div aria-busy={q.isPlaceholderData || undefined} className={q.isPlaceholderData ? 'opacity-60 transition-opacity' : 'transition-opacity'}>

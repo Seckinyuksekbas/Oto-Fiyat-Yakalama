@@ -113,7 +113,7 @@ export function ListingCardView({ card, highlight, onToggleFavorite }: ListingCa
             </h3>
             {a && <ScoreRing score={a.opportunityScore} size={44} />}
           </div>
-          <p className="num mt-0.5 text-xs text-muted">{meta.join(' · ')}</p>
+          <p className="tnum mt-0.5 text-xs text-muted">{meta.join(' · ')}</p>
           <div className="mt-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-1">
             <span className="num text-lg font-semibold leading-none">{formatTl(card.price)}</span>
             <DiscountText pct={a?.discountPct} />
@@ -133,7 +133,7 @@ export function ListingCardView({ card, highlight, onToggleFavorite }: ListingCa
       />
 
       <div className="flex items-center justify-between gap-2">
-        <p className="num min-w-0 truncate text-xs text-muted">
+        <p className="tnum min-w-0 truncate text-xs text-muted">
           {[a ? `${a.comparableCount} emsal` : null, formatRelative(card.firstSeenAt), card.city].filter(Boolean).join(' · ')}
         </p>
         <div className="relative z-10 flex shrink-0 items-center">

@@ -161,7 +161,7 @@ export default function ProfilesPage() {
           <h1 className="font-display text-2xl font-semibold tracking-tight">Arama profilleri</h1>
           <p className="mt-1 max-w-[60ch] text-sm text-muted">
             Her profil bir arama ölçütüdür; uyan yeni ilanlar size bildirilir.
-            {limits && q.data ? <span className="num ml-2 text-text">{`${items.length}/${limits.maxProfiles} profil`}</span> : null}
+            {limits && q.data ? <span className="tnum ml-2 text-text">{`${items.length}/${limits.maxProfiles} profil`}</span> : null}
           </p>
         </div>
         <NewProfileAction limits={limits} used={items.length} />

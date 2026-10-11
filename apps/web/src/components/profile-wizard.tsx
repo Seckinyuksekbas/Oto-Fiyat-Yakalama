@@ -76,7 +76,7 @@ function Field({ label, htmlFor, error, hint, children, className }: {
       {error ? (
         <p id={htmlFor ? `${htmlFor}-err` : undefined} aria-live="polite" className="text-[13px] text-danger-text">{error}</p>
       ) : hint ? (
-        <p className="num text-xs text-muted">{hint}</p>
+        <p className="tnum text-xs text-muted">{hint}</p>
       ) : null}
     </div>
   );
@@ -270,15 +270,15 @@ function VehicleStep({ form, set, errors }: StepProps) {
       <div className="grid gap-4 sm:grid-cols-3">
         <Field label="En eski model yılı" htmlFor="pf-year-min" error={errors.yearMin}>
           <Input id="pf-year-min" inputMode="numeric" maxLength={4} placeholder="2015" value={form.yearMin} {...dby('pf-year-min', errors.yearMin)}
-            onChange={(e) => set({ yearMin: digits(e.target.value) })} className="num" />
+            onChange={(e) => set({ yearMin: digits(e.target.value) })} className="tnum" />
         </Field>
         <Field label="En yeni model yılı" htmlFor="pf-year-max" error={errors.yearMax}>
           <Input id="pf-year-max" inputMode="numeric" maxLength={4} placeholder="2024" value={form.yearMax} {...dby('pf-year-max', errors.yearMax)}
-            onChange={(e) => set({ yearMax: digits(e.target.value) })} className="num" />
+            onChange={(e) => set({ yearMax: digits(e.target.value) })} className="tnum" />
         </Field>
         <Field label="Azami km" htmlFor="pf-km" error={errors.kmMax}>
           <Input id="pf-km" inputMode="numeric" maxLength={7} placeholder="150000" value={form.kmMax} {...dby('pf-km', errors.kmMax)}
-            onChange={(e) => set({ kmMax: digits(e.target.value) })} className="num" />
+            onChange={(e) => set({ kmMax: digits(e.target.value) })} className="tnum" />
         </Field>
       </div>
 
@@ -362,11 +362,11 @@ function CriteriaStep({ form, set, errors }: StepProps) {
 
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="En düşük fiyat (₺)" htmlFor="pf-price-min" error={errors.priceMin} hint={form.priceMin ? formatTl(digits(form.priceMin) || '0') : undefined}>
-          <Input id="pf-price-min" inputMode="numeric" value={form.priceMin} {...dby('pf-price-min', errors.priceMin)} className="num"
+          <Input id="pf-price-min" inputMode="numeric" value={form.priceMin} {...dby('pf-price-min', errors.priceMin)} className="tnum"
             onChange={(e) => set({ priceMin: digits(e.target.value) })} />
         </Field>
         <Field label="En yüksek fiyat (₺)" htmlFor="pf-price-max" error={errors.priceMax} hint={form.priceMax ? formatTl(digits(form.priceMax) || '0') : undefined}>
-          <Input id="pf-price-max" inputMode="numeric" value={form.priceMax} {...dby('pf-price-max', errors.priceMax)} className="num"
+          <Input id="pf-price-max" inputMode="numeric" value={form.priceMax} {...dby('pf-price-max', errors.priceMax)} className="tnum"
             onChange={(e) => set({ priceMax: digits(e.target.value) })} />
         </Field>
       </div>
@@ -378,7 +378,7 @@ function CriteriaStep({ form, set, errors }: StepProps) {
           checked={form.notifyOnPriceDrop} onChange={(v) => set({ notifyOnPriceDrop: v })}>
           {form.notifyOnPriceDrop && (
             <Field label="Düşüş eşiği (%)" htmlFor="pf-drop-pct" error={errors.priceDropPct} className="max-w-[10rem]">
-              <Input id="pf-drop-pct" type="number" min={1} max={50} value={form.priceDropPct} {...dby('pf-drop-pct', errors.priceDropPct)} className="num"
+              <Input id="pf-drop-pct" type="number" min={1} max={50} value={form.priceDropPct} {...dby('pf-drop-pct', errors.priceDropPct)} className="tnum"
                 onChange={(e) => set({ priceDropPct: Number(e.target.value) })} />
             </Field>
           )}
@@ -600,7 +600,7 @@ export function ProfileWizard({ profile }: ProfileWizardProps) {
                     i === step ? 'border-accent text-text' : i < step ? 'border-accent/40 text-muted hover:text-text' : 'border-border text-muted hover:text-text',
                   )}
                 >
-                  <span className="num text-xs text-muted">Adım {i + 1}</span>
+                  <span className="tnum text-xs text-muted">Adım {i + 1}</span>
                   <span className="font-medium">{s}</span>
                 </button>
               </li>

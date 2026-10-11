@@ -82,7 +82,7 @@ export function PriceBand({ band, price, confidence, insufficientReason, size = 
       >
         {pMed !== null && median !== null && (
           <span
-            className="num absolute top-0 whitespace-nowrap text-[11px] leading-none text-muted"
+            className="tnum absolute top-0 whitespace-nowrap text-[11px] leading-none text-muted"
             style={{ left: labelLeft(pMed), transform: 'translateX(-50%)' }}
           >
             {`medyan ${formatShortTl(median)}`}

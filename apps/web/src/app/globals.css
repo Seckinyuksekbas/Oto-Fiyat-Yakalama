@@ -72,6 +72,10 @@ h3 {
   letter-spacing: -0.02em;
 }
 
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
 .num {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;

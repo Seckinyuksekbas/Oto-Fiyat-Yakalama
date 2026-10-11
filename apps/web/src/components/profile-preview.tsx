@@ -21,7 +21,7 @@ function MiniCard({ item }: { item: PreviewItem }) {
         >
           {[item.make, item.model].filter(Boolean).join(' ')}
         </Link>
-        <p className="num mt-0.5 truncate text-xs text-muted">{meta}</p>
+        <p className="tnum mt-0.5 truncate text-xs text-muted">{meta}</p>
         <p className="mt-1 flex items-baseline gap-2">
           <span className="num text-sm font-semibold">{formatTl(item.price)}</span>
           <DiscountText pct={item.analysis.discountPct} />

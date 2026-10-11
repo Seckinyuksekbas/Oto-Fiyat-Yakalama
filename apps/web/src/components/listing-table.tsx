@@ -74,7 +74,7 @@ export function ListingTable({ rows, onToggleFavorite }: { rows: ListingCard[]; 
                         <Link href={`/app/ilan/${c.id}`} className="font-medium hover:text-accent">
                           {listingTitle(c)}
                         </Link>
-                        <p className="num text-xs text-muted">{[formatKm(c.km), c.city].filter(Boolean).join(' · ')}</p>
+                        <p className="tnum text-xs text-muted">{[formatKm(c.km), c.city].filter(Boolean).join(' · ')}</p>
                         {c.status === 'REMOVED' && <Badge tone="danger" className="mt-1">Yayından kalktı</Badge>}
                       </div>
                     </div>
@@ -95,7 +95,7 @@ export function ListingTable({ rows, onToggleFavorite }: { rows: ListingCard[]; 
                   <td className="px-3 py-2">
                     {a ? <ConfidenceMeter confidence={a.confidence} comparableCount={a.comparableCount} compact /> : <span className="text-muted">—</span>}
                   </td>
-                  <td className="num px-3 py-2 text-xs text-muted">{formatRelative(c.firstSeenAt)}</td>
+                  <td className="tnum px-3 py-2 text-xs text-muted">{formatRelative(c.firstSeenAt)}</td>
                   <td className="px-3 py-2">
                     <div className="flex items-center justify-end">
                       <FavoriteButton listingId={c.id} isFavorite={c.isFavorite} title={listingTitle(c)} onChange={onToggleFavorite && ((next) => onToggleFavorite(c.id, next))} />

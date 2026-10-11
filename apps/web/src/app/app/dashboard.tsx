@@ -10,11 +10,17 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useDashboard, useMe } from '@/lib/queries';
 
-function Metric({ label, value, hint }: { label: string; value: string; hint?: string }) {
+function Metric({ label, value, hint, numeric = true }: { label: string; value: string; hint?: string; numeric?: boolean }) {
   return (
     <div role="group" aria-label={label} className="flex min-w-0 flex-col gap-1 bg-surface px-5 py-4">
       <span className="text-[13px] text-muted">{label}</span>
-      <span className="truncate font-mono text-[28px] font-medium leading-none tabular-nums tracking-tight">{value}</span>
+      <span
+        className={
+          'truncate text-[28px] font-medium leading-none tabular-nums tracking-tight ' + (numeric ? 'font-mono' : 'font-display')
+        }
+      >
+        {value}
+      </span>
       {hint ? <span className="text-xs text-muted">{hint}</span> : null}
     </div>
   );
@@ -45,8 +51,13 @@ function MatchSeries({ series }: { series: Dashboard['series'] }) {
     <figure
       role="img"
       aria-label={`7 günlük eşleşme grafiği. ${summary}`}
-      className="m-0 h-[168px] w-full min-w-0"
+      className="relative m-0 h-[168px] w-full min-w-0"
     >
+      {peak === 0 && (
+        <figcaption className="pointer-events-none absolute inset-x-0 top-6 z-10 text-center text-sm text-muted">
+          Son 7 günde eşleşme yok
+        </figcaption>
+      )}
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={data} margin={{ top: 8, right: 0, bottom: 0, left: 0 }} barCategoryGap="28%">
           <XAxis
@@ -125,7 +136,7 @@ export function DashboardView() {
         <Metric label="Aktif profil" value={`${d.profiles.active}/${d.profiles.max}`} />
         <Metric label="Bugünkü bildirim" value={`${d.notifications.today}/${d.notifications.limit}`} />
         <Metric label="7 günlük eşleşme" value={String(weekTotal)} />
-        <Metric label="Plan" value={planLabel(me)} />
+        <Metric label="Plan" value={planLabel(me)} numeric={false} />
       </section>
 
       <section aria-labelledby="seri-baslik" className="rounded-lg border border-border bg-surface p-5">

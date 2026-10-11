@@ -141,7 +141,7 @@ export function AppShell({ children, bellSlot }: { children: ReactNode; bellSlot
       >
         İçeriğe geç
       </a>
-      <aside className="sticky top-0 hidden h-dvh flex-col gap-6 border-r border-border bg-surface px-3 py-5 md:flex">
+      <aside className="sticky top-0 hidden h-dvh flex-col gap-6 overflow-y-auto border-r border-border bg-surface px-3 py-5 md:flex">
         <div className="px-1">
           <Brand />
         </div>

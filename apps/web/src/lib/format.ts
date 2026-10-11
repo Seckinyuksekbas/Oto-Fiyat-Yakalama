@@ -13,14 +13,14 @@ export function formatTl(v: string | bigint | number): string {
   return `${neg && digits !== '0' ? '-' : ''}${groupThousands(digits)}\u00A0₺`;
 }
 
-/** Bant etiketi için kısa biçim: `1,2 Mn ₺`, `960 B ₺`. */
+/** Bant etiketi için kısa biçim: `1,2 Mn ₺`, `960 bin ₺`. */
 export function formatShortTl(n: number): string {
   if (!Number.isFinite(n)) return '—';
   const trim = (x: number) => String(Math.round(x * 10) / 10).replace('.', ',');
   const abs = Math.abs(n);
   const sign = n < 0 ? '-' : '';
-  if (abs >= 1_000_000 || Math.round((abs / 1_000) * 10) / 10 >= 1000) return `${sign}${trim(abs / 1_000_000)}\u00A0Mn\u00A0₺`;
-  if (abs >= 1_000) return `${sign}${trim(abs / 1_000)}\u00A0B\u00A0₺`;
+  if (abs >= 999_500) return `${sign}${trim(abs / 1_000_000)}\u00A0Mn\u00A0₺`;
+  if (abs >= 1_000) return `${sign}${Math.round(abs / 1_000)}\u00A0bin\u00A0₺`;
   return `${sign}${Math.round(abs)}\u00A0₺`;
 }
 

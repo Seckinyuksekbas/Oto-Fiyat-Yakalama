@@ -57,7 +57,7 @@ function BandPreview() {
         </div>
         <div>
           <dt className="text-[var(--color-muted)]">Emsal</dt>
-          <dd className="num mt-0.5">34 ilan</dd>
+          <dd className="tnum mt-0.5">34 ilan</dd>
         </div>
         <div>
           <dt className="text-[var(--color-muted)]">Güven</dt>

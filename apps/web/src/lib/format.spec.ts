@@ -18,9 +18,10 @@ describe('format', () => {
   });
   it('short money', () => {
     expect(formatShortTl(1_200_000)).toBe('1,2\u00A0Mn\u00A0₺');
-    expect(formatShortTl(960_000)).toBe('960\u00A0B\u00A0₺');
+    expect(formatShortTl(960_000)).toBe('960\u00A0bin\u00A0₺');
     expect(formatShortTl(1_000_000)).toBe('1\u00A0Mn\u00A0₺');
     expect(formatShortTl(999_999)).toBe('1\u00A0Mn\u00A0₺');
+    expect(formatShortTl(494_400)).toBe('494'+' bin ₺');
     expect(formatShortTl(Number.NaN)).toBe('—');
   });
   it('relative and Istanbul date time', () => {

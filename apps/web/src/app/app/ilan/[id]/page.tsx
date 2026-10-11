@@ -1,7 +1,8 @@
 'use client';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { ArrowLeft, ExternalLink, SearchX } from 'lucide-react';
+import { useState } from 'react';
+import { ArrowLeft, Car, ExternalLink, SearchX } from 'lucide-react';
 import type { ListingDetail } from '@oto/shared';
 import { EmptyState } from '@/components/empty-state';
 import { ConfidenceMeter } from '@/components/confidence-meter';
@@ -44,23 +45,22 @@ function NotFoundView() {
 }
 
 function Hero({ d }: { d: ListingDetail }) {
-  const initial = (d.make[0] ?? '?').toLocaleUpperCase('tr-TR');
-  return d.imageUrl ? (
+  const [failed, setFailed] = useState(false);
+  return d.imageUrl && !failed ? (
     <img
       src={d.imageUrl}
       alt={listingTitle(d)}
       referrerPolicy="no-referrer"
+      onError={() => setFailed(true)}
       className="aspect-[4/3] w-full rounded-lg border border-border bg-surface-2 object-cover"
     />
   ) : (
     <div
       role="img"
       aria-label="Görsel yok"
-      className="grid aspect-[4/3] w-full place-items-center rounded-lg border border-border bg-surface-2"
+      className="grid aspect-[4/3] w-full place-items-center rounded-lg border border-border bg-surface-2 text-border-strong"
     >
-      <span aria-hidden className="font-display text-7xl font-semibold text-border-strong">
-        {initial}
-      </span>
+      <Car aria-hidden className="size-14" />
     </div>
   );
 }
@@ -69,7 +69,7 @@ function Spec({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex items-baseline justify-between gap-4 border-b border-border py-2 last:border-b-0">
       <dt className="text-sm text-muted">{label}</dt>
-      <dd className="num text-right text-sm">{value}</dd>
+      <dd className="tnum text-right text-sm">{value}</dd>
     </div>
   );
 }

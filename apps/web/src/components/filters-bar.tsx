@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useId, useRef, useState } from 'react';
-import { RotateCcw } from 'lucide-react';
+import { ChevronDown, RotateCcw, SlidersHorizontal } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -100,14 +100,38 @@ export function FiltersBar({ value, onChange, onReset }: FiltersBarProps) {
   const [score, setScore] = useDebouncedDraft(value.minScore ?? '60', (v) =>
     onChange({ minScore: v === '60' ? undefined : v }),
   );
-  const dirty = Object.entries(value).some(([k, v]) => v !== undefined && !(k === 'sort' && v === 'score'));
+  const activeCount = Object.entries(value).filter(([k, v]) => v !== undefined && !(k === 'sort' && v === 'score')).length;
+  const dirty = activeCount > 0;
+  const [open, setOpen] = useState(false);
+  const panelId = useId();
 
   return (
+    <div className="flex flex-col gap-2">
+    <button
+      type="button"
+      aria-expanded={open}
+      aria-controls={panelId}
+      onClick={() => setOpen((o) => !o)}
+      className="flex h-11 items-center justify-between gap-2 rounded-lg border border-border bg-surface px-3 text-sm font-medium sm:hidden"
+    >
+      <span className="flex items-center gap-2">
+        <SlidersHorizontal aria-hidden className="size-4 text-muted" />
+        Filtreler
+        {activeCount > 0 && (
+          <span className="num grid h-5 min-w-5 place-items-center rounded-full bg-accent px-1.5 text-[11px] font-semibold text-accent-fg">
+            {activeCount}
+            <span className="sr-only"> etkin filtre</span>
+          </span>
+        )}
+      </span>
+      <ChevronDown aria-hidden className={'size-4 text-muted transition-transform ' + (open ? 'rotate-180' : '')} />
+    </button>
     <form
+      id={panelId}
       role="search"
       aria-label="Fırsat filtreleri"
       onSubmit={(e) => e.preventDefault()}
-      className="grid gap-3 rounded-lg border border-border bg-surface p-3 sm:grid-cols-2 lg:grid-cols-4"
+      className={(open ? 'grid' : 'hidden sm:grid') + ' gap-3 rounded-lg border border-border bg-surface p-3 sm:grid-cols-2 lg:grid-cols-4'}
     >
       <FilterSelect
         label="Marka"
@@ -140,7 +164,7 @@ export function FiltersBar({ value, onChange, onReset }: FiltersBarProps) {
           value={maxPrice}
           onChange={(e) => setMaxPrice(e.target.value.replace(/\D/g, '').slice(0, 15))}
           placeholder="Sınır yok"
-          className="num"
+          className="tnum"
         />
       </div>
       <div className="flex flex-col gap-1.5">
@@ -201,5 +225,6 @@ export function FiltersBar({ value, onChange, onReset }: FiltersBarProps) {
         </Button>
       </div>
     </form>
+    </div>
   );
 }

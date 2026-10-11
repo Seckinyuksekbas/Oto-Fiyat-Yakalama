@@ -38,7 +38,7 @@ function MatchItem({ m }: { m: MatchRow }) {
             {`${l.make} ${l.model} · ${l.year}`}
           </Link>
         </h3>
-        <p className="num mt-0.5 flex flex-wrap items-baseline gap-x-2 text-sm">
+        <p className="tnum mt-0.5 flex flex-wrap items-baseline gap-x-2 text-sm">
           <span className="font-semibold">{formatTl(m.matchedPrice)}</span>
           {m.analysis.confidence === 'INSUFFICIENT' ? (
             discount && <span className="text-xs text-muted">{`${discount} (zayıf tahmin)`}</span>
