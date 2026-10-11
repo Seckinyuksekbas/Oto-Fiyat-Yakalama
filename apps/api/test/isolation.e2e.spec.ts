@@ -144,7 +144,7 @@ const CASES: Record<string, Case> = {
     await A.agent.post('/api/v1/me/search-profiles').send({ name: 'A' });
     const bView = await B.agent.get('/api/v1/me/subscription');
     expect(bView.status).toBe(200);
-    expect(bView.body.usage.searchProfiles).toBe(0);
+    expect(bView.body.usage).toEqual({ searchProfiles: 0, notificationsToday: 0 });
     expect((await A.agent.get('/api/v1/me/subscription')).body.usage.searchProfiles).toBe(1);
   },
   'GET /me/dashboard': async ({ A, B }) => {

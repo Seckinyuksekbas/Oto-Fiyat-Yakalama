@@ -24,14 +24,20 @@ export class FavoritesRepository {
     return l !== null;
   }
 
-  /** `note` verilmezse mevcut not korunur; id/createdAt değişmez. */
-  upsert(userId: string, listingId: number, note: string | null | undefined): Promise<FavoriteRow> {
-    return this.prisma.favorite.upsert({
-      where: { userId_listingId: { userId, listingId } },
-      create: { userId, listingId, note: note ?? null },
-      update: note === undefined ? {} : { note },
-      include: { listing: { include: { latestAnalysis: true } } },
-    });
+  /** `note` verilmezse mevcut not korunur, null silinir; id/createdAt değişmez. */
+  async upsert(userId: string, listingId: number, note: string | null | undefined): Promise<FavoriteRow | null> {
+    try {
+      return await this.prisma.favorite.upsert({
+        where: { userId_listingId: { userId, listingId } },
+        create: { userId, listingId, note: note ?? null },
+        update: note === undefined ? {} : { note },
+        include: { listing: { include: { latestAnalysis: true } } },
+      });
+    } catch (e) {
+      // İlan, varlık kontrolü ile yazma arasında silindi (FK ihlali)
+      if ((e as { code?: string }).code === 'P2003') return null;
+      throw e;
+    }
   }
 
   async remove(userId: string, listingId: number): Promise<boolean> {

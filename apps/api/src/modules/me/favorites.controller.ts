@@ -48,7 +48,9 @@ export class FavoritesController {
   ): Promise<FavoriteItem> {
     const listingId = parseListingId(raw);
     if (!(await this.favorites.listingExists(listingId))) throw Errors.notFound();
-    return toItem(await this.favorites.upsert(user.id, listingId, body.note));
+    const row = await this.favorites.upsert(user.id, listingId, body.note);
+    if (!row) throw Errors.notFound();
+    return toItem(row);
   }
 
   @Delete(':listingId')

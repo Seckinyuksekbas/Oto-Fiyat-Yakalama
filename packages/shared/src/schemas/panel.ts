@@ -109,7 +109,15 @@ export const favoritesQuerySchema = z
 export type FavoritesQuery = z.infer<typeof favoritesQuerySchema>;
 
 export const putFavoriteSchema = z
-  .object({ note: z.string().trim().max(280).nullable().optional() })
+  .object({
+    note: z
+      .string()
+      .trim()
+      .max(280)
+      .transform((v) => (v === '' ? null : v))
+      .nullable()
+      .optional(),
+  })
   .strict();
 export type PutFavorite = z.infer<typeof putFavoriteSchema>;
 

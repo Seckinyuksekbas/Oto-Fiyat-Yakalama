@@ -34,7 +34,7 @@ export class DashboardRepository {
   /** İstanbul gününe göre günlük eşleşme sayısı (yalnızca eşleşme olan günler). */
   matchesPerDay(userId: string, since: Date): Promise<{ day: string; matches: number }[]> {
     return this.prisma.$queryRaw<{ day: string; matches: number }[]>`
-      SELECT to_char(("createdAt" AT TIME ZONE 'Europe/Istanbul')::date, 'YYYY-MM-DD') AS day, count(*)::int AS matches
+      SELECT to_char((("createdAt" AT TIME ZONE 'UTC') AT TIME ZONE 'Europe/Istanbul')::date, 'YYYY-MM-DD') AS day, count(*)::int AS matches
       FROM "ListingMatch" WHERE "userId" = ${userId} AND "createdAt" >= ${since}
       GROUP BY 1`;
   }

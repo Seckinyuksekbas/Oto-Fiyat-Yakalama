@@ -352,6 +352,21 @@ describe('GET /me/dashboard', () => {
     expect(res.body.notifications.limit).toBeGreaterThan(0);
   });
 
+  it('buckets matches by Istanbul day across the UTC+3 boundary', async () => {
+    const A = await registerUser(app);
+    const p = (await A.agent.post('/api/v1/me/search-profiles').send({ name: 'p' })).body.id;
+    const d = new Date(Date.now() - 3 * 86_400_000).toISOString().slice(0, 10);
+    const next = new Date(Date.parse(`${d}T12:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
+    const before = await seedMatch(app, A.user.id, p);
+    const after = await seedMatch(app, A.user.id, p);
+    const prisma = app.get(PrismaService);
+    await prisma.listingMatch.update({ where: { id: before }, data: { createdAt: new Date(`${d}T20:59:59Z`) } });
+    await prisma.listingMatch.update({ where: { id: after }, data: { createdAt: new Date(`${d}T22:30:00Z`) } });
+    const series = (await A.agent.get('/api/v1/me/dashboard')).body.series as { day: string; matches: number }[];
+    expect(series.find((s) => s.day === d)?.matches).toBe(1);
+    expect(series.find((s) => s.day === next)?.matches).toBe(1);
+  });
+
   it('caps recent matches at 8', async () => {
     const A = await registerUser(app);
     const p = (await A.agent.post('/api/v1/me/search-profiles').send({ name: 'p' })).body.id;

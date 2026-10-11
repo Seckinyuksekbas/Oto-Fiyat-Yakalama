@@ -46,6 +46,16 @@ describe('favorites', () => {
     expect((await A.agent.put(url(l.listingId)).send({})).status).toBe(200);
   });
 
+  it('blank note becomes null; note:null clears; omitted note keeps', async () => {
+    const A = await registerUser(app);
+    const l = await seedListing(app);
+    expect((await A.agent.put(url(l.listingId)).send({ note: '   ' })).body.note).toBeNull();
+    expect((await A.agent.put(url(l.listingId)).send({ note: 'x' })).body.note).toBe('x');
+    expect((await A.agent.put(url(l.listingId)).send({})).body.note).toBe('x');
+    expect((await A.agent.put(url(l.listingId)).send({ note: null })).body.note).toBeNull();
+    expect((await A.agent.get('/api/v1/me/favorites')).body.items[0].note).toBeNull();
+  });
+
   it('unknown listing → 404; invalid listingId → 404', async () => {
     const A = await registerUser(app);
     expect((await A.agent.put(url(999_999)).send({})).status).toBe(404);
@@ -85,7 +95,9 @@ describe('favorites', () => {
     } while (cursor && pages < 10);
     expect(pages).toBe(3);
     expect(seen).toEqual([...created].reverse());
-    expect((await A.agent.get('/api/v1/me/favorites?cursor=abc')).status).toBe(400);
+    for (const c of ['abc', '0', '2147483648', '-1']) {
+      expect((await A.agent.get(`/api/v1/me/favorites?cursor=${c}`)).status, c).toBe(400);
+    }
   });
 
   it('REMOVED listing stays a favorite and shows status REMOVED', async () => {
