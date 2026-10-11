@@ -1,6 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { findMatchingProfiles, type ListingFacts } from '@oto/db';
 import type { MatchEvent, MatchJobData } from '@oto/shared';
+import { ENV } from '../config/config.module';
+import type { Env } from '../config/env';
 import { PrismaService } from '../infra/prisma.service';
 import { NotificationDispatcher } from '../notifications/notification-dispatcher';
 import { planNotifications, type PlannedMatch, type PlannedNotification } from '../notifications/notification-planner';
@@ -27,6 +29,7 @@ export class MatchService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly dispatcher: NotificationDispatcher,
+    @Inject(ENV) private readonly env: Env,
   ) {}
 
   async process(data: MatchJobData): Promise<MatchOutcome> {
@@ -86,7 +89,7 @@ export class MatchService {
           }
         }
         const notifications = created.length
-          ? await planNotifications(tx, { listing, analysis: effective, matches: planned, now: new Date() })
+          ? await planNotifications(tx, { listing, analysis: effective, matches: planned, now: new Date(), telegramEnabled: Boolean(this.env.TELEGRAM_BOT_TOKEN) })
           : [];
         return { status: 'MATCHED', created, candidates: candidates.length, notifications } as const;
       },

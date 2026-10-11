@@ -5,6 +5,7 @@ import { ENV } from '../config/config.module';
 import type { Env } from '../config/env';
 import { bullConnection } from '../infra/bull';
 import { notifyBackoffMs, RetryableNotifyError } from '../notifications/backoff';
+import { PrismaService } from '../infra/prisma.service';
 import { NotifyService } from '../notifications/notify.service';
 
 export const NOTIFY_WORKER_AUTOSTART = Symbol('NOTIFY_WORKER_AUTOSTART');
@@ -16,6 +17,7 @@ export class NotifyWorkerHost implements OnModuleInit, OnModuleDestroy {
 
   constructor(
     private readonly notify: NotifyService,
+    private readonly prisma: PrismaService,
     @Inject(ENV) private readonly env: Env,
     @Optional() @Inject(NOTIFY_WORKER_AUTOSTART) private readonly autostart: boolean = true,
   ) {}
@@ -53,8 +55,24 @@ export class NotifyWorkerHost implements OnModuleInit, OnModuleDestroy {
     ];
     for (const w of this.workers) {
       w.on('error', (err) => this.logger.error(`Bildirim worker hatası: ${err.message}`));
-      w.on('failed', (job, err) => this.logger.warn(`Bildirim işi ${job?.id} başarısız (deneme ${job?.attemptsMade}): ${err.message}`));
+      w.on('failed', (job, err) => {
+        this.logger.warn(`Bildirim işi ${job?.id} başarısız (deneme ${job?.attemptsMade}): ${err.message}`);
+        void this.failIfExhausted(job, err).catch((e: unknown) => this.logger.error(`Tükenen iş kaydedilemedi: ${String(e)}`));
+      });
     }
+  }
+
+  /** İş tükendi (veya stalled sınırını aştı) ama satır hâlâ PENDING ise yetim kalmasın: FAILED yapılır (token yok). */
+  async failIfExhausted(job: Job<NotifyJobData> | undefined, err: Error): Promise<void> {
+    if (!job) return;
+    const exhausted = job.attemptsMade >= (job.opts.attempts ?? 1);
+    if (!exhausted && !/stalled/i.test(err.message)) return;
+    const id = (job.data as Partial<NotifyJobData> | undefined)?.notificationId;
+    if (typeof id !== 'number') return;
+    await this.prisma.notification.updateMany({
+      where: { id, status: 'PENDING' },
+      data: { status: 'FAILED', lastError: err.message.slice(0, 500) },
+    });
   }
 
   async onModuleDestroy(): Promise<void> {

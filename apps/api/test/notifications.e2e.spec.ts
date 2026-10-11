@@ -95,7 +95,7 @@ describe('/me/notifications', () => {
   it('SSE: sends ready, then live notifications for the owner only, and cleans up listeners', async () => {
     const A = await registerUser(app);
     const B = await registerUser(app);
-    await seedNotification(app, A.user.id);
+    const first = await seedNotification(app, A.user.id);
     const events = app.get(UserEventsService);
     const base = events.listenerCount();
 
@@ -103,8 +103,8 @@ describe('/me/notifications', () => {
     const sb = await openSse(app, await loginCookie(app, B.email, B.password));
     open.push(sa, sb);
     expect(sa.status).toBe(200);
-    expect((await sa.waitFor((e) => e.event === 'ready')).data).toEqual({ unreadCount: 1 });
-    expect((await sb.waitFor((e) => e.event === 'ready')).data).toEqual({ unreadCount: 0 });
+    expect((await sa.waitFor((e) => e.event === 'ready')).data).toEqual({ unreadCount: 1, lastId: first.id });
+    expect((await sb.waitFor((e) => e.event === 'ready')).data).toEqual({ unreadCount: 0, lastId: null });
     await until(() => events.listenerCount() === base + 2);
     await sleep(300); // psubscribe'ın oturması için
 

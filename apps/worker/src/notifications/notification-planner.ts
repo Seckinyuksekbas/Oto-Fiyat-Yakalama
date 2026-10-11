@@ -22,19 +22,20 @@ export interface PlannedNotification {
 }
 
 /**
- * Eşleşmeyle AYNI transaction'da çalışır (çağıran açar). Kullanıcı kilitleri id sırasıyla alınır:
- * aynı kullanıcıları kapsayan iki eşzamanlı eşleştirme birbirini kilitlemez (deadlock yok).
+ * Eşleşmeyle AYNI transaction'da çalışır (çağıran açar). Kullanıcı kilitleri hashtext anahtar sırasıyla
+ * tek ifadede alınır: aynı kullanıcıları kapsayan iki eşzamanlı eşleştirme birbirini kilitlemez (deadlock yok).
+ * telegramEnabled=false (worker'da bot token yok) ise TELEGRAM kanalı hiç planlanmaz.
  */
 export async function planNotifications(
   tx: Prisma.TransactionClient,
-  input: { listing: Listing; analysis: ListingAnalysis; matches: PlannedMatch[]; now: Date },
+  input: { listing: Listing; analysis: ListingAnalysis; matches: PlannedMatch[]; now: Date; telegramEnabled: boolean },
 ): Promise<PlannedNotification[]> {
   const out: PlannedNotification[] = [];
   const byUser = new Map<string, PlannedMatch[]>();
   for (const m of input.matches) byUser.set(m.userId, [...(byUser.get(m.userId) ?? []), m]);
   const userIds = [...byUser.keys()].sort();
   // Tüm kilitler tek ifadede, GERÇEK anahtara (hashtext) göre sıralı alınır: iki eşzamanlı eşleştirme birbirini kilitlemez.
-  await tx.$executeRaw`SELECT pg_advisory_xact_lock(${USER_LOCK_NAMESPACE}::int, s.k) FROM (SELECT DISTINCT hashtext(u) AS k FROM unnest(${userIds}::text[]) AS u ORDER BY k) s`;
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(${USER_LOCK_NAMESPACE}::int, s.k) FROM (SELECT DISTINCT hashtext(u) AS k FROM unnest(${userIds}::text[]) AS u) s ORDER BY s.k`;
   // Saat kilitlerden SONRA alınır (now() işlem başlangıcıdır); kota günü ile satır zaman damgası aynı değerden gelir.
   const [{ now: dbNow }] = await tx.$queryRaw<{ now: Date }[]>`SELECT clock_timestamp() AS now`;
   const dayStart = startOfIstanbulDay(dbNow);
@@ -49,7 +50,7 @@ export async function planNotifications(
     for (const m of byUser.get(userId)!) {
       const channels = [...new Set(['IN_APP', ...m.profile.channels])].filter(
         (c) => DELIVERABLE.has(c) && allowed.has(c) && open.has(c),
-      ) as Array<'IN_APP' | 'TELEGRAM'>;
+      ).filter((c) => c !== 'TELEGRAM' || input.telegramEnabled) as Array<'IN_APP' | 'TELEGRAM'>;
       const external = channels.filter((c) => c !== 'IN_APP');
       const statuses = new Map<string, 'PENDING' | 'SKIPPED_LIMIT'>();
       for (const c of external) {

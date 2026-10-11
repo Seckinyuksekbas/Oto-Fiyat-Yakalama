@@ -80,9 +80,9 @@ export class NotificationsController {
       const ping = interval(SSE_PING_MS).subscribe(() => subscriber.next({ type: 'ping', data: {} } as MessageEvent));
       void (async () => {
         await this.events.subscribed();
-        const unreadCount = await this.repo.unreadCount(user.id);
+        const snapshot = await this.repo.readySnapshot(user.id);
         if (subscriber.closed) return;
-        subscriber.next({ type: 'ready', data: { unreadCount } } as MessageEvent);
+        subscriber.next({ type: 'ready', data: snapshot } as MessageEvent);
         isReady = true;
         for (const m of buffer.splice(0)) subscriber.next(m);
       })().catch((err: unknown) => subscriber.error(err));

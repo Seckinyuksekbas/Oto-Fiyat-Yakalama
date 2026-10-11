@@ -252,6 +252,26 @@ describe('NotifyService', () => {
     expect(sentTimes[1] - sentTimes[0]).toBeGreaterThanOrEqual(900);
   });
 
+  it('host failed listener: exhausted (or stalled) jobs mark a still-PENDING row FAILED, others are left alone', async () => {
+    const { u } = await setup(['TELEGRAM']);
+    await makeMatch(u.id);
+    const [n] = await rowFor(u.id, 'TELEGRAM');
+    const host = ref.get(NotifyWorkerHost);
+    const job = (attemptsMade: number) => ({ attemptsMade, opts: { attempts: 5 }, data: { notificationId: n.id } }) as never;
+    await host.failIfExhausted(job(2), new Error('boom'));
+    expect((await prisma.notification.findUniqueOrThrow({ where: { id: n.id } })).status).toBe('PENDING');
+    await host.failIfExhausted(job(5), new Error('x'.repeat(900)));
+    const row = await prisma.notification.findUniqueOrThrow({ where: { id: n.id } });
+    expect(row.status).toBe('FAILED');
+    expect(row.lastError!.length).toBeLessThanOrEqual(500);
+
+    const [inApp] = await rowFor(u.id, 'IN_APP');
+    await host.failIfExhausted(job(1), new Error('job stalled more than allowable limit'));
+    expect((await prisma.notification.findUniqueOrThrow({ where: { id: inApp.id } })).status).toBe('PENDING'); // yanlış satır etkilenmez
+    await host.failIfExhausted({ attemptsMade: 1, opts: { attempts: 5 }, data: { notificationId: inApp.id } } as never, new Error('job stalled more than allowable limit'));
+    expect((await prisma.notification.findUniqueOrThrow({ where: { id: inApp.id } })).status).toBe('FAILED');
+  });
+
   it('corrupt channel config fails permanently without retries', async () => {
     const { u, ch } = await setup(['TELEGRAM']);
     await makeMatch(u.id);

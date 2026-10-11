@@ -27,7 +27,7 @@ kanallar = ({IN_APP} ∪ profil.channels) ∩ ({IN_APP} ∪ geçerli plan.channe
 ## Günlük limit ve kilitler
 
 - Sayılan: bugün (Europe/Istanbul) oluşturulmuş, `SKIPPED_LIMIT` olmayan, IN_APP dışı `MATCH` bildirimleri (`/me` kullanım sayacıyla aynı tanım). Sınır: planın `maxNotificationsPerDay` değeri.
-- Karar, eşleşme transaction'ı içinde kullanıcı başına `pg_advisory_xact_lock(4243, hashtext(userId))` altında DB sayımıyla verilir; kullanıcı kilitleri id sırasıyla alınır (deadlock yok). Redis sayacı kullanılmaz.
+- Karar, eşleşme transaction'ı içinde kullanıcı başına `pg_advisory_xact_lock(4243, hashtext(userId))` altında DB sayımıyla verilir; tüm kullanıcı kilitleri tek ifadede hashtext anahtar sırasıyla alınır (deadlock yok). Redis sayacı kullanılmaz.
 - Limit aşılırsa harici kanal satırı `SKIPPED_LIMIT` olur; IN_APP satırı yine `PENDING` oluşur ve `payload.limitExceeded = true` taşır (kullanıcı fırsatı panelde görür).
 
 ## Yeniden deneme
@@ -54,9 +54,11 @@ kanallar = ({IN_APP} ∪ profil.channels) ∩ ({IN_APP} ∪ geçerli plan.channe
 
 | Olay | Veri | Not |
 |---|---|---|
-| `ready` | `{ unreadCount }` | İlk olay; okunmamış IN_APP sayısı |
+| `ready` | `{ unreadCount, lastId }` | İlk olay; okunmamış IN_APP sayısı ve o anki en büyük IN_APP bildirim id'si (yoksa `null`) |
 | `notification` | bildirim özeti (`id, kind, channel, status, payload, createdAt`) | Redis `user:<id>` kanalından; yalnızca kendi kullanıcınızın olayları |
 | `ping` | `{}` | 25 sn'de bir |
+
+İstemci kuralları: `id <= lastId` olan `notification` olayları sayaca eklenmez (zaten `unreadCount` içindedir); olaylar id ile tekilleştirilir; her `ready` ve yeniden bağlanmada liste yeniden çekilir (Redis bağlantısı koptuğu sürede yayımlanan olaylar tekrar oynatılmaz).
 
 Akış **15 dk sonra sunucu tarafından kapatılır**; istemci yeniden bağlanır. Kimlik doğrulama yalnızca bağlantı kurulurken yapılır: akış açıkken kullanıcı çıkış yapsa (logout) bile açık akış kapanmaz ve 15 dk'lık ömür dolana kadar o bağlantıya olay gelmeye devam eder. İstemci çıkışta akışı kendisi kapatmalıdır. Yeni bağlantı için geçerli oturum gerekir.
 
@@ -72,7 +74,7 @@ Akış **15 dk sonra sunucu tarafından kapatılır**; istemci yeniden bağlanı
 ## Telegram kurulumu
 
 1. Telegram'da **@BotFather** ile `/newbot`; bot token'ını ve kullanıcı adını alın.
-2. Ortam değişkenleri: `TELEGRAM_BOT_TOKEN` (API ve worker); API'de ayrıca `TELEGRAM_BOT_USERNAME` (token varken zorunlu), `TELEGRAM_MODE` (`polling` | `webhook`), `TELEGRAM_WEBHOOK_SECRET` (webhook modunda zorunlu, 32-256 karakter `[A-Za-z0-9_-]`), isteğe bağlı `TELEGRAM_API_BASE`. Token yoksa bağlama 503 döner ve TELEGRAM bildirimi planlanmaz.
+2. Ortam değişkenleri: `TELEGRAM_BOT_TOKEN` (API ve worker); API'de ayrıca `TELEGRAM_BOT_USERNAME` (token varken zorunlu), `TELEGRAM_MODE` (`polling` | `webhook`), `TELEGRAM_WEBHOOK_SECRET` (webhook modunda zorunlu, 32-256 karakter `[A-Za-z0-9_-]`), isteğe bağlı `TELEGRAM_API_BASE`. Token yoksa bağlama 503 döner ve TELEGRAM bildirimi planlanmaz. **Token hem API'de hem worker'da ayarlı olmalıdır:** worker'da yoksa planlayıcı TELEGRAM satırı üretmez (yalnızca IN_APP), API'de yoksa bağlama yapılamaz. Üretimde `TELEGRAM_API_BASE` (worker dahil) https olmalıdır.
 3. **Geliştirme:** `TELEGRAM_MODE=polling` — API içinde `getUpdates` döngüsü çalışır (409 çakışmasında 30 sn bekler).
 4. **Üretim:** `TELEGRAM_MODE=webhook` ve webhook'u bir kez kurun:
 

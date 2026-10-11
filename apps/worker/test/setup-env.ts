@@ -9,6 +9,7 @@ Object.assign(process.env, {
   DATABASE_URL: inject('databaseUrl'),
   REDIS_URL: inject('redisUrl'),
   DATA_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
+  TELEGRAM_BOT_TOKEN: '123456:test-token',
   BOT_CONTACT_URL: 'http://localhost:3000/bot',
 });
 

@@ -25,6 +25,15 @@ export class NotificationsRepository {
     return this.prisma.notification.count({ where: { userId, channel: 'IN_APP', readAt: null } });
   }
 
+  /** SSE "ready": okunmamış sayı ve aynı anda görülen en büyük IN_APP bildirim id'si (yoksa null). */
+  async readySnapshot(userId: string): Promise<{ unreadCount: number; lastId: number | null }> {
+    const [unreadCount, last] = await this.prisma.$transaction([
+      this.prisma.notification.count({ where: { userId, channel: 'IN_APP', readAt: null } }),
+      this.prisma.notification.aggregate({ where: { userId, channel: 'IN_APP' }, _max: { id: true } }),
+    ]);
+    return { unreadCount, lastId: last._max.id ?? null };
+  }
+
   async markRead(userId: string, input: MarkNotificationsReadInput): Promise<number> {
     const res = await this.prisma.notification.updateMany({
       where: { userId, channel: 'IN_APP', readAt: null, ...('ids' in input ? { id: { in: input.ids } } : {}) },

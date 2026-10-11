@@ -31,20 +31,20 @@ export function renderMatchMessage(p: MatchNotificationPayload, opts: { publicBa
           : '🆕 <b>Yeni ilan</b>';
   const rawName = [l.make, l.model, l.trim].filter(Boolean).join(' ');
   const buildText = (name: string): string => {
-  const lines = [
-    head + tail,
-    `<b>${name} · ${l.year}</b>`,
-    `💰 ${formatTl(l.price)} TL` + (a.estimatedPrice && isDeal ? `   (Piyasa ≈ ${formatTl(a.estimatedPrice)} TL)` : ''),
-  ];
-  if (isDeal && a.priceDiff && BigInt(a.priceDiff) > 0n) lines.push(`📉 ${formatTl(a.priceDiff)} TL altında · %${Math.round((a.discountPct ?? 0) * 100)}`);
-  lines.push(
-    [`🛣 ${formatTl(BigInt(l.km))} km`, escapeHtml(FUEL[l.fuel] ?? l.fuel), escapeHtml(GEAR[l.transmission] ?? l.transmission), l.city ? escapeHtml(clip(l.city, 60)) : null]
-      .filter(Boolean)
-      .join(' · '),
-  );
-  if (a.comparableCount > 0) lines.push(`📊 ${a.comparableCount} benzer ilan ile karşılaştırıldı`);
-  lines.push(`🕒 İlk görülme: ${formatIstanbulDateTime(l.firstSeenAt)}`, '', `<i>${DISCLAIMER}</i>`);
-  return lines.join('\n');
+    const lines = [
+      head + tail,
+      `<b>${name} · ${l.year}</b>`,
+      `💰 ${formatTl(l.price)} TL` + (a.estimatedPrice && isDeal ? `   (Piyasa ≈ ${formatTl(a.estimatedPrice)} TL)` : ''),
+    ];
+    if (isDeal && a.priceDiff && BigInt(a.priceDiff) > 0n) lines.push(`📉 ${formatTl(a.priceDiff)} TL altında · %${Math.round((a.discountPct ?? 0) * 100)}`);
+    lines.push(
+      [`🛣 ${formatTl(BigInt(l.km))} km`, escapeHtml(FUEL[l.fuel] ?? l.fuel), escapeHtml(GEAR[l.transmission] ?? l.transmission), l.city ? escapeHtml(clip(l.city, 60)) : null]
+        .filter(Boolean)
+        .join(' · '),
+    );
+    if (a.comparableCount > 0) lines.push(`📊 ${a.comparableCount} benzer ilan ile karşılaştırıldı`);
+    lines.push(`🕒 İlk görülme: ${formatIstanbulDateTime(l.firstSeenAt)}`, '', `<i>${DISCLAIMER}</i>`);
+    return lines.join('\n');
   };
   let nameMax = Array.from(rawName).length;
   let text = buildText(escapeHtml(rawName));

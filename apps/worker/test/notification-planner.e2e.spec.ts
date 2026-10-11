@@ -1,5 +1,7 @@
 import type { TestingModule } from '@nestjs/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { ENV } from '../src/config/config.module';
+import type { Env } from '../src/config/env';
 import { PrismaService } from '../src/infra/prisma.service';
 import { MatchingModule } from '../src/matching/matching.module';
 import { MatchService } from '../src/matching/match.service';
@@ -45,6 +47,23 @@ describe('notification planning inside the match transaction', () => {
     expect(rows.every((r) => r.queuedAt !== null)).toBe(true);
     expect(await ref.get(QueueRegistry).notify.getJob(`notify-${rows[0].id}`)).toBeTruthy();
     expect(await ref.get(QueueRegistry).notifyTelegram.getJob(`notify-${rows[1].id}`)).toBeTruthy();
+  });
+
+  it('drops TELEGRAM entirely when this worker has no bot token', async () => {
+    const env = ref.get<Env>(ENV);
+    const token = env.TELEGRAM_BOT_TOKEN;
+    env.TELEGRAM_BOT_TOKEN = undefined;
+    try {
+      const u = await createUser(ref);
+      await createChannel(ref, u.id);
+      await createProfile(ref, u.id, { channels: ['IN_APP', 'TELEGRAM'] });
+      const { l, a } = await deal();
+      await svc.process({ listingId: l.id, analysisId: a.id, event: 'NEW' });
+      const rows = await prisma.notification.findMany();
+      expect(rows.map((r) => [r.channel, r.status])).toEqual([['IN_APP', 'PENDING']]);
+    } finally {
+      env.TELEGRAM_BOT_TOKEN = token;
+    }
   });
 
   it('drops TELEGRAM when the channel is unverified/disabled or the plan lacks it', async () => {

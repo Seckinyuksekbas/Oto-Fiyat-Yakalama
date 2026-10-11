@@ -23,6 +23,9 @@ export const envSchema = z
   })
   .superRefine((env, ctx) => {
     if (env.NODE_ENV !== 'production') return;
+    if (!env.TELEGRAM_API_BASE.startsWith('https://')) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['TELEGRAM_API_BASE'], message: 'production ortamında https olmalı' });
+    }
     const local = ['localhost', '127.0.0.1', '[::1]', '::1'];
     for (const key of ['BOT_CONTACT_URL', 'PUBLIC_BASE_URL'] as const) {
       const fail = (message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, path: [key], message });
