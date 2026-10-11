@@ -135,6 +135,98 @@ describe('SchedulerService.tick', () => {
     expect(await ref.get(QueueRegistry).scrape.getJob(scrapeQueueJobId(queued[0].id))).toBeTruthy();
   });
 
+  describe('orphaned QUEUED jobs (no BullMQ job) are recovered', () => {
+    const ORPHAN_AGE = 2 * 60_000;
+
+    it('a tx that commits but reports "transaction already closed" does not abort the tick; the next tick past 2 min re-enqueues it', async () => {
+      const source = await createSource(ref, demo.baseUrl, { intervalSec: 60 });
+      const other = await createSource(ref, demo.baseUrl, { intervalSec: 60 });
+      let failed = false;
+      // İlk kaynağın tx'i commit olur ama Prisma "already closed" fırlatır (yük altında görülen durum): kuyruğa eklenmez.
+      const flaky = new Proxy(prisma, {
+        get(target, key) {
+          if (key === '$transaction') {
+            return async (fn: (tx: unknown) => Promise<unknown>, opts?: unknown) => {
+              const result = await (target.$transaction as (f: typeof fn, o?: unknown) => Promise<unknown>)(
+                fn,
+                opts,
+              );
+              if (!failed) {
+                failed = true;
+                throw new Error(
+                  'Transaction already closed: A commit cannot be executed on an expired transaction.',
+                );
+              }
+              return result;
+            };
+          }
+          const value: unknown = Reflect.get(target, key);
+          return typeof value === 'function' ? (value as (...a: unknown[]) => unknown).bind(target) : value;
+        },
+      });
+      const flakyScheduler = new SchedulerService(flaky, ref.get(QueueRegistry));
+      expect(await flakyScheduler.tick(T0)).toBe(1); // diğer kaynak yine de kuyruğa girer
+      const [orphan] = await prisma.collectionJob.findMany({ where: { sourceId: source.id } });
+      expect(orphan).toMatchObject({ status: 'QUEUED' });
+      expect(await ref.get(QueueRegistry).scrape.getJob(scrapeQueueJobId(orphan.id))).toBeUndefined();
+      expect(await prisma.collectionJob.count({ where: { sourceId: other.id, status: 'QUEUED' } })).toBe(1);
+
+      // 2 dk dolmadan dokunulmaz (API/scheduler henüz kuyruğa ekliyor olabilir)
+      await scheduler.tick(plus(ORPHAN_AGE - 1000));
+      expect(await ref.get(QueueRegistry).scrape.getJob(scrapeQueueJobId(orphan.id))).toBeUndefined();
+
+      await scheduler.tick(plus(ORPHAN_AGE + 1000));
+      const requeued = await ref.get(QueueRegistry).scrape.getJob(scrapeQueueJobId(orphan.id));
+      expect(requeued?.data).toEqual({ collectionJobId: orphan.id, sourceId: source.id });
+      expect(await prisma.collectionJob.findUniqueOrThrow({ where: { id: orphan.id } })).toMatchObject({
+        status: 'QUEUED',
+      });
+
+      // idempotent: tekrar eden tick yeni iş/satır üretmez
+      await scheduler.tick(plus(ORPHAN_AGE + 5000));
+      expect(
+        await ref.get(QueueRegistry).scrape.getJobCountByTypes('waiting', 'delayed', 'active', 'prioritized'),
+      ).toBe(2);
+      expect(await prisma.collectionJob.count({ where: { sourceId: source.id } })).toBe(1);
+    });
+
+    it('marks the orphan FAILED ("Kuyruğa eklenemedi") when re-enqueueing fails, so the source is free again', async () => {
+      const source = await createSource(ref, demo.baseUrl, { intervalSec: 60 });
+      const orphan = await prisma.collectionJob.create({
+        data: { sourceId: source.id, trigger: 'SCHEDULED', createdAt: T0 },
+      });
+      const spy = vi
+        .spyOn(ref.get(QueueRegistry).scrape, 'add')
+        .mockRejectedValueOnce(new Error('redis down'));
+      let enqueued = 0;
+      try {
+        // Aynı tick'te yetim FAILED olur ve kaynak serbest kalınca yeni zamanlanmış iş üretilir (mockRejectedValueOnce)
+        enqueued = await scheduler.tick(plus(ORPHAN_AGE + 1000));
+      } finally {
+        spy.mockRestore();
+      }
+      expect(await prisma.collectionJob.findUniqueOrThrow({ where: { id: orphan.id } })).toMatchObject({
+        status: 'FAILED',
+        errorSummary: expect.stringContaining('Kuyruğa eklenemedi'),
+      });
+      expect(enqueued).toBe(1);
+      expect(await prisma.collectionJob.count({ where: { sourceId: source.id, status: 'QUEUED' } })).toBe(1);
+    });
+
+    it('leaves a QUEUED job that has its BullMQ job alone', async () => {
+      const source = await createSource(ref, demo.baseUrl, { intervalSec: 60 });
+      expect(await scheduler.tick(T0)).toBe(1);
+      const add = vi.spyOn(ref.get(QueueRegistry).scrape, 'add');
+      try {
+        await scheduler.tick(plus(ORPHAN_AGE + 1000));
+        expect(add).not.toHaveBeenCalled();
+      } finally {
+        add.mockRestore();
+      }
+      expect(await prisma.collectionJob.count({ where: { sourceId: source.id, status: 'QUEUED' } })).toBe(1);
+    });
+  });
+
   it('keeps a recent RUNNING job alone', async () => {
     const source = await createSource(ref, demo.baseUrl);
     await prisma.collectionJob.create({ data: { sourceId: source.id, trigger: 'SCHEDULED', status: 'RUNNING', createdAt: plus(-5 * 60_000) } });
