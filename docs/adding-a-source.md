@@ -23,14 +23,14 @@ Kod yazmadan önce aşağıdakilerin **hepsi** yazılı olarak doğrulanmalıdı
 4. Yeni marka/model yazımları için `MakeModelAlias` kayıtları ekle.
 
 ## 3. Kayıt
-`DataSource` satırı: `adapterKey`, `kind`, `permissionType`, `permissionNote`, `permissionVerifiedAt`, `intervalSec`, `minRequestGapMs` (kaynağın izin verdiği sıklığa göre), `config`. Admin paneli Plan 07'de gelir; o zamana kadar seed veya SQL ile.
+`DataSource` satırı: `adapterKey`, `kind`, `permissionType`, `permissionNote`, `permissionVerifiedAt`, `intervalSec`, `minRequestGapMs` (kaynağın izin verdiği sıklığa göre), `config`. Admin API'si (`/admin/sources`) ile oluşturulur (`isActive=false` başlar; `config.baseUrl` production'da iç ağ adreslerini gösteremez). Etkinleştirme için `permissionVerifiedAt` dolu olmalıdır (aksi halde 409). `POST /admin/sources/:id/test-scrape {dryRun:true}` en fazla 2 liste sayfasını çekip ilk 20 normalize ilanı `CollectionJob.dryRunResult` içine yazar; ilan/sağlık/analiz değişmez (kaynak başına dakikada 1).
 
 ## 4. İzleme
 - `CollectionJob`: her taramanın sayaçları ve durumu.
 - `ScrapeError`: ağ/engel hataları. `ListingIssue`: ayrıştırılamayan/doğrulanamayan ilanlar.
 - `SystemLog` + admin panel bildirimi: engellenme, ardışık hata, %20 üzeri ayrıştırma hatası.
 - Kaynaktan kaynaklanmayan worker hataları (DB/Redis erişimi, kurulum) işi `Altyapı hatası` / `Kurulum hatası` mesajıyla FAILED yapar ve kaynağın sağlık durumunu etkilemez.
-- Duraklatılmış kaynağı yeniden açmak (Plan 07'ye kadar): `UPDATE "DataSource" SET health='HEALTHY', "consecutiveFailures"=0 WHERE code='<kod>';` — önce engelin nedenini ve izni kontrol edin.
+- Duraklatılmış kaynağı yeniden açmak: `POST /admin/sources/:id/activate` (health `HEALTHY`, `consecutiveFailures=0`) — önce engelin nedenini ve izni kontrol edin.
 
 ## İlk gerçek kaynaktan önce (zorunlu)
 Demo kaynağı bu maddeleri gerektirmez; ilk gerçek kaynak canlıya alınmadan **hepsi** kapatılmalıdır:

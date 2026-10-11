@@ -31,6 +31,10 @@ class InfraError extends Error {
 export const MASS_REMOVAL_MIN = 20;
 export const MASS_REMOVAL_RATIO = 0.3;
 
+/** Dry-run en fazla bu kadar liste sayfası çeker ve ilk bu kadar ilan/sorun saklar. */
+export const DRY_RUN_MAX_PAGES = 2;
+const DRY_RUN_SAMPLE = 20;
+
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 @Injectable()
@@ -72,7 +76,7 @@ export class ScrapeRunner {
       await this.prisma.collectionJob.update({ where: { id: job.id }, data: { status: 'FAILED', finishedAt: new Date(), errorSummary: reason } });
       return null;
     };
-    if (job.dryRun) return refuse('Dry-run henüz desteklenmiyor (Plan 07)');
+    if (job.dryRun) return this.runDry(job, source, refuse);
     if (!source.isActive || !source.permissionVerifiedAt || source.health === 'PAUSED') {
       return refuse('Kaynak pasif, izinsiz veya duraklatılmış');
     }
@@ -227,5 +231,82 @@ export class ScrapeRunner {
       }
     }
     return { status, pages: c.pages, cards: c.cards, created: c.created, updated: c.updated, removed: c.removed, failed: c.failed };
+  }
+
+  /**
+   * Dry-run: liste sayfalarını aynı politika kurallarıyla (robots, aralık, proxy) çeker, ayrıştırıp normalize eder;
+   * ingest, kaldırma, analiz, ScrapeError ve kaynak sağlığı DEĞİŞTİRİLMEZ. En fazla DRY_RUN_MAX_PAGES sayfa.
+   * Kaynak etkin olmasa da çalışır, ancak izin doğrulaması (permissionVerifiedAt) zorunludur.
+   */
+  private async runDry(
+    job: { id: number },
+    source: Prisma.DataSourceGetPayload<{ include: { proxyConfig: true } }>,
+    refuse: (reason: string) => Promise<null>,
+  ): Promise<RunSummary | null> {
+    if (!source.permissionVerifiedAt) return refuse('Kaynağın izni doğrulanmamış');
+    let adapter: SourceAdapter;
+    try {
+      adapter = getAdapter(source.adapterKey);
+    } catch (err) {
+      return refuse(message(err));
+    }
+    const claimed = await this.prisma.collectionJob.updateMany({ where: { id: job.id, status: 'QUEUED' }, data: { status: 'RUNNING', startedAt: new Date() } });
+    if (claimed.count !== 1) return null;
+
+    const startedAt = Date.now();
+    const c = { pages: 0, cards: 0, failed: 0 };
+    const items: Record<string, unknown>[] = [];
+    const problems: ListingProblem[] = [];
+    let fatal: unknown = null;
+    let http: PoliteHttpClient | null = null;
+    try {
+      http = new PoliteHttpClient({
+        sourceId: source.id,
+        minRequestGapMs: source.minRequestGapMs,
+        userAgent: this.userAgent,
+        blockPrivateAddresses: this.blockPrivateAddresses,
+        redis: this.redis,
+        proxyUrl: source.proxyConfig?.isEnabled ? this.encryptor.decrypt(source.proxyConfig.urlEncrypted) : null,
+        isBlockedPage: adapter.isBlockedPage ? (html) => adapter.isBlockedPage!(html) : undefined,
+      });
+      const resolve = await this.aliases.resolver();
+      for await (const page of adapter.listPages({ http, config: source.config })) {
+        c.pages += 1;
+        const parsed = adapter.parseList(page);
+        c.cards += parsed.listings.length + parsed.problems.length;
+        c.failed += parsed.problems.length;
+        problems.push(...parsed.problems);
+        for (const raw of parsed.listings) {
+          const normalized = normalizeListing(raw, resolve);
+          if (!normalized.ok) {
+            c.failed += 1;
+            problems.push(...normalized.problems);
+            continue;
+          }
+          if (items.length < DRY_RUN_SAMPLE) items.push({ ...normalized.listing, price: normalized.listing.price.toString() });
+        }
+        if (c.pages >= DRY_RUN_MAX_PAGES) break;
+      }
+    } catch (err) {
+      fatal = err;
+    } finally {
+      await http?.close().catch(() => undefined);
+    }
+
+    const durationMs = Date.now() - startedAt;
+    const status: JobStatus = fatal ? 'FAILED' : 'SUCCEEDED';
+    const dryRunResult = { pages: c.pages, items, problems: problems.slice(0, DRY_RUN_SAMPLE), durationMs } as unknown as Prisma.InputJsonValue;
+    await this.closeJob(job.id, {
+      status,
+      finishedAt: new Date(),
+      pagesFetched: c.pages,
+      listingsSeen: c.cards,
+      errorsCount: c.failed + (fatal ? 1 : 0),
+      avgResponseMs: http && http.stats.requests > 0 ? Math.round(http.stats.totalMs / http.stats.requests) : null,
+      errorSummary: fatal ? message(fatal).slice(0, 500) : null,
+      dryRunResult,
+    });
+    if (fatal) this.logger.warn(`Kaynak ${source.code} dry-run başarısız: ${message(fatal)}`);
+    return { status, pages: c.pages, cards: c.cards, created: 0, updated: 0, removed: 0, failed: c.failed };
   }
 }

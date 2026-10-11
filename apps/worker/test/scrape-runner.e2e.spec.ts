@@ -173,13 +173,85 @@ describe('ScrapeRunner', () => {
     }
   });
 
-  it('refuses dry-run jobs before touching the network', async () => {
-    const source = await createSource(ref, demo.baseUrl);
-    const queued = await prisma.collectionJob.create({ data: { sourceId: source.id, trigger: 'SCHEDULED', dryRun: true } });
-    expect(await runner.run(queued.id)).toBeNull();
-    const job = await prisma.collectionJob.findUniqueOrThrow({ where: { id: queued.id } });
-    expect(job).toMatchObject({ status: 'FAILED', errorSummary: 'Dry-run henüz desteklenmiyor (Plan 07)', pagesFetched: 0 });
-    expect(await prisma.listing.count()).toBe(0);
+  describe('dry-run', () => {
+    const queuedDry = (sourceId: number) => prisma.collectionJob.create({ data: { sourceId, trigger: 'MANUAL', dryRun: true } });
+    const counts = async () => ({
+      listings: await prisma.listing.count(),
+      issues: await prisma.listingIssue.count(),
+      errors: await prisma.scrapeError.count(),
+      logs: await prisma.systemLog.count(),
+      notifications: await prisma.notification.count(),
+    });
+
+    it('parses at most 2 pages, stores the first 20 items as strings and changes nothing else (even for an inactive source)', async () => {
+      const source = await createSource(ref, demo.baseUrl, { isActive: false, health: 'DEGRADED', consecutiveFailures: 2 });
+      const before = await prisma.dataSource.findUniqueOrThrow({ where: { id: source.id } });
+      const queued = await queuedDry(source.id);
+      const summary = await runner.run(queued.id);
+      expect(summary).toMatchObject({ status: 'SUCCEEDED', pages: 2, created: 0, updated: 0, removed: 0 });
+
+      const job = await prisma.collectionJob.findUniqueOrThrow({ where: { id: queued.id } });
+      expect(job).toMatchObject({ status: 'SUCCEEDED', dryRun: true, pagesFetched: 2, listingsSeen: 40, listingsNew: 0, listingsUpdated: 0, listingsRemoved: 0 });
+      const result = job.dryRunResult as { pages: number; items: Record<string, unknown>[]; problems: unknown[]; durationMs: number };
+      expect(result.pages).toBe(2);
+      expect(result.items).toHaveLength(20);
+      expect(result.items.length).toBeGreaterThan(0);
+      expect(typeof result.items[0]?.price).toBe('string');
+      expect(result.items[0]).toMatchObject({ externalId: expect.any(String), make: expect.any(String), currency: 'TRY' });
+      expect(result.problems).toEqual([]);
+      expect(result.durationMs).toBeGreaterThanOrEqual(0);
+
+      expect(await counts()).toEqual({ listings: 0, issues: 0, errors: 0, logs: 0, notifications: 0 });
+      expect(await prisma.dataSource.findUniqueOrThrow({ where: { id: source.id } })).toMatchObject({
+        isActive: false, health: 'DEGRADED', consecutiveFailures: 2, lastSuccessAt: before.lastSuccessAt, lastErrorAt: before.lastErrorAt,
+      });
+    });
+
+    it('never marks existing listings removed or touches them, and enqueues no analysis', async () => {
+      const source = await createSource(ref, demo.baseUrl);
+      await runOnce(source.id);
+      const snapshot = (await prisma.listing.findMany({ orderBy: { id: 'asc' }, select: { id: true, status: true, lastSeenAt: true, price: true, latestAnalysisId: true } }));
+      expect(snapshot).toHaveLength(45);
+      const [gone] = demo.site.store.active();
+      demo.site.store.patch(gone.id, { status: 'REMOVED' });
+      demo.site.store.patch(demo.site.store.active()[1].id, { price: 1 });
+      const analyze = ref.get(QueueRegistry).analyze;
+      const waitingBefore = await analyze.getJobCounts('waiting', 'delayed', 'active');
+
+      const queued = await queuedDry(source.id);
+      await runner.run(queued.id);
+      expect(await prisma.collectionJob.findUniqueOrThrow({ where: { id: queued.id } })).toMatchObject({ status: 'SUCCEEDED', listingsRemoved: 0 });
+      expect(await prisma.listing.findMany({ orderBy: { id: 'asc' }, select: { id: true, status: true, lastSeenAt: true, price: true, latestAnalysisId: true } })).toEqual(snapshot);
+      expect(await prisma.listingPriceHistory.count()).toBe(45);
+      expect(await analyze.getJobCounts('waiting', 'delayed', 'active')).toEqual(waitingBefore);
+    });
+
+    it('records fetch failures as a FAILED job without ScrapeError rows or health changes', async () => {
+      const source = await createSource(ref, 'http://127.0.0.1:1');
+      const queued = await queuedDry(source.id);
+      await runner.run(queued.id);
+      const job = await prisma.collectionJob.findUniqueOrThrow({ where: { id: queued.id } });
+      expect(job.status).toBe('FAILED');
+      expect(job.errorSummary).toBeTruthy();
+      expect(job.errorsCount).toBe(1);
+      expect(await counts()).toEqual({ listings: 0, issues: 0, errors: 0, logs: 0, notifications: 0 });
+      expect(await prisma.dataSource.findUniqueOrThrow({ where: { id: source.id } })).toMatchObject({ health: 'HEALTHY', consecutiveFailures: 0 });
+    });
+
+    it('requires permissionVerifiedAt and refuses before touching the network', async () => {
+      const source = await createSource(ref, demo.baseUrl, { permissionVerifiedAt: null, isActive: false });
+      const queued = await queuedDry(source.id);
+      expect(await runner.run(queued.id)).toBeNull();
+      expect(await prisma.collectionJob.findUniqueOrThrow({ where: { id: queued.id } })).toMatchObject({ status: 'FAILED', pagesFetched: 0, errorSummary: 'Kaynağın izni doğrulanmamış' });
+      expect(demo.site.store.active().length).toBeGreaterThan(0);
+    });
+
+    it('is not re-run when the job is no longer QUEUED', async () => {
+      const source = await createSource(ref, demo.baseUrl);
+      const queued = await queuedDry(source.id);
+      await runner.run(queued.id);
+      expect(await runner.run(queued.id)).toBeNull();
+    });
   });
 
   it('does not overwrite a job that was closed (reaped) while the crawl was running', async () => {

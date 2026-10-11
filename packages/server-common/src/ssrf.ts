@@ -11,6 +11,8 @@ export class UnsafeUrlError extends Error {
 
 export interface SsrfOptions {
   allowPrivate: boolean;
+  /** Proxy URL'leri gibi kimlik bilgisi taşıması meşru olan URL için (varsayılan: reddet). */
+  allowCredentials?: boolean;
   /** Test için enjekte edilebilir; tüm çözülen adresleri döndürmelidir. */
   lookup?: (host: string) => Promise<string[]>;
 }
@@ -100,7 +102,7 @@ export async function assertPublicHttpUrl(url: string, opts: SsrfOptions): Promi
     throw new UnsafeUrlError('Geçersiz URL');
   }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new UnsafeUrlError('Yalnızca http/https URL kabul edilir');
-  if (u.username || u.password) throw new UnsafeUrlError('URL kimlik bilgisi içeremez');
+  if (!opts.allowCredentials && (u.username || u.password)) throw new UnsafeUrlError('URL kimlik bilgisi içeremez');
   if (opts.allowPrivate) return;
   const host = u.hostname.replace(/^\[|\]$/g, '');
   if (!host) throw new UnsafeUrlError('Geçersiz URL');

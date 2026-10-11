@@ -35,6 +35,8 @@ describe('assertPublicHttpUrl', () => {
   it('rejects bad schemes, credentials and internal DNS results', async () => {
     await expect(assertPublicHttpUrl('ftp://8.8.8.8/', { allowPrivate: false })).rejects.toBeInstanceOf(UnsafeUrlError);
     await expect(assertPublicHttpUrl('http://u:p@8.8.8.8/', { allowPrivate: true })).rejects.toBeInstanceOf(UnsafeUrlError);
+    await expect(assertPublicHttpUrl('http://u:p@8.8.8.8/', { allowPrivate: false, allowCredentials: true })).resolves.toBeUndefined();
+    await expect(assertPublicHttpUrl('http://u:p@10.0.0.1/', { allowPrivate: false, allowCredentials: true })).rejects.toBeInstanceOf(UnsafeUrlError);
     await expect(assertPublicHttpUrl('http://x.example/', { allowPrivate: false, lookup: async () => ['8.8.8.8', '10.0.0.1'] })).rejects.toBeInstanceOf(UnsafeUrlError);
     await expect(assertPublicHttpUrl('http://x.example/', { allowPrivate: false, lookup: async () => ['8.8.8.8'] })).resolves.toBeUndefined();
     await expect(assertPublicHttpUrl('http://127.0.0.1/', { allowPrivate: true })).resolves.toBeUndefined();
