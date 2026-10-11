@@ -50,7 +50,11 @@ export class SchedulerLoop implements OnApplicationBootstrap, OnModuleDestroy {
     if (this.cleanupTimer) clearInterval(this.cleanupTimer);
   }
 
-  /** Lider değilse hiçbir şey yapmaz; liderlik tick ortasında kaybedilirse kalan adımlar atlanır. */
+  /**
+   * Lider değilse hiçbir şey yapmaz; liderlik tick ortasında kaybedilirse kalan adımlar atlanır.
+   * O anda yürüyen adım (ör. `scheduler.tick`) ve süren bir temizlik koşusu yarıda kesilmez, bitmesine izin verilir:
+   * hepsi idempotent ve satır/advisory kilitleriyle korunur, yeni lider ile kısa bir örtüşme çift iş üretmez.
+   */
   async safeTick(): Promise<void> {
     if (this.ticking || !this.leader.isLeader()) return;
     this.ticking = true;

@@ -48,11 +48,23 @@ describe('LeaderLockService', () => {
   });
 
   it('renews its own lock with CAS (TTL refreshed) and stays leader', async () => {
-    const a = lock({ ttlMs: 1000 });
+    const a = lock({ ttlMs: 10_000 });
     expect(await a.tryAcquire()).toBe(true);
     await sleep(400);
+    const before = await redis.pttl(LEADER_LOCK_KEY);
     expect(await a.tryAcquire()).toBe(true);
-    expect(await redis.pttl(LEADER_LOCK_KEY)).toBeGreaterThan(900);
+    const after = await redis.pttl(LEADER_LOCK_KEY);
+    expect(after).toBeGreaterThan(9000);
+    expect(after).toBeGreaterThan(before);
+    expect(a.isLeader()).toBe(true);
+  });
+
+  it('re-acquires in the same call when its own lock expired (renew CAS returned 0)', async () => {
+    const a = lock({ ttlMs: 300 });
+    expect(await a.tryAcquire()).toBe(true);
+    await sleep(450); // anahtar süresi doldu, kimse almadı
+    expect(await a.tryAcquire()).toBe(true);
+    expect(await redis.get(LEADER_LOCK_KEY)).toBe(a.value);
   });
 
   it('logs "scheduler leader acquired" once and the standby transition once, at info', async () => {
@@ -150,7 +162,7 @@ describe('SchedulerLoop leader gating', () => {
       leader as never,
       { ...env, MONITOR_INTERVAL_MS: 60_000 },
     );
-    return { loop, tick, monitor, retention };
+    return { loop, tick, monitor, retention, leader };
   }
 
   it('a non-leader loop never ticks, monitors or cleans up', async () => {
@@ -169,6 +181,23 @@ describe('SchedulerLoop leader gating', () => {
     expect(tick).toHaveBeenCalledTimes(1);
     expect(monitor.check).toHaveBeenCalledTimes(1);
     expect(retention.run).toHaveBeenCalledTimes(1);
+  });
+
+  it('bootstrap wiring: starts the lock and runs cleanup when leadership is acquired', async () => {
+    let onAcquired: (() => void) | undefined;
+    const { loop, retention, leader } = loopWith(() => true);
+    leader.onAcquired.mockImplementation((fn: () => void) => {
+      onAcquired = fn;
+    });
+    await loop.onApplicationBootstrap();
+    try {
+      expect(leader.start).toHaveBeenCalledTimes(1);
+      expect(onAcquired).toBeDefined();
+      onAcquired?.();
+      await vi.waitFor(() => expect(retention.run).toHaveBeenCalledTimes(1));
+    } finally {
+      loop.onModuleDestroy();
+    }
   });
 
   it('stops the remaining tick steps as soon as leadership is lost', async () => {

@@ -4,7 +4,7 @@ import { notifyJobSchema, QueueName, type NotifyJobData } from '@oto/shared';
 import { DelayedError, UnrecoverableError, Worker, type Job } from 'bullmq';
 import { closeWithTimeout } from '../common/close-with-timeout';
 import { ENV } from '../config/config.module';
-import type { Env } from '../config/env';
+import { NOTIFY_TELEGRAM_CONCURRENCY, type Env } from '../config/env';
 import { bullConnection } from '../infra/bull';
 import { notifyBackoffMs, RetryableNotifyError } from '../notifications/backoff';
 import { PrismaService } from '../infra/prisma.service';
@@ -53,7 +53,7 @@ export class NotifyWorkerHost implements OnModuleInit, OnModuleDestroy {
     };
     this.workers = [
       new Worker<NotifyJobData>(QueueName.NOTIFY, processor, { ...common, concurrency: this.env.NOTIFY_CONCURRENCY }),
-      new Worker<NotifyJobData>(QueueName.NOTIFY_TELEGRAM, processor, { ...common, concurrency: 5, limiter: { max: 25, duration: 1000 } }),
+      new Worker<NotifyJobData>(QueueName.NOTIFY_TELEGRAM, processor, { ...common, concurrency: NOTIFY_TELEGRAM_CONCURRENCY, limiter: { max: 25, duration: 1000 } }),
     ];
     for (const w of this.workers) {
       w.on('error', (err) => this.logger.error(`Bildirim worker hatası: ${err.message}`));

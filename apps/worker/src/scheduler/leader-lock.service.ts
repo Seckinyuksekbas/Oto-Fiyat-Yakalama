@@ -36,8 +36,12 @@ export class LeaderLockService implements OnApplicationShutdown {
   private readonly redis: Redis;
   private readonly ttlMs: number;
   private readonly renewMs: number;
+  private readonly leaseMs: number;
   private leader = false;
-  /** Bu ana kadar kilidin bizde olduğu kesin (son başarılı SET/PEXPIRE başlangıcı + TTL). */
+  /**
+   * Bu ana kadar kilidin bizde olduğu kesin: son başarılı SET/PEXPIRE başlangıcı + TTL − güvenlik payı
+   * (saat kayması / Redis gecikmesi için 1 sn; çok kısa test TTL'lerinde TTL'nin %10'u).
+   */
   private leaseUntil = 0;
   /** null: henüz bir durum loglanmadı (ilk standby da loglanır). */
   private announced: 'leader' | 'standby' | null = null;
@@ -49,6 +53,7 @@ export class LeaderLockService implements OnApplicationShutdown {
   constructor(@Inject(ENV) env: Env, @Optional() @Inject(LEADER_LOCK_OPTIONS) opts?: LeaderLockOptions) {
     this.ttlMs = opts?.ttlMs ?? LEADER_LOCK_TTL_MS;
     this.renewMs = opts?.renewMs ?? LEADER_LOCK_RENEW_MS;
+    this.leaseMs = this.ttlMs - Math.min(1000, Math.floor(this.ttlMs / 10));
     this.redis = new Redis(env.REDIS_URL, { maxRetriesPerRequest: 3 });
     this.redis.on('error', (err: Error) => this.logger.error(`Lider kilidi Redis hatası: ${err.message}`));
   }
@@ -113,20 +118,20 @@ export class LeaderLockService implements OnApplicationShutdown {
     if (this.leader) {
       const renewed = await this.redis.eval(RENEW_SCRIPT, 1, LEADER_LOCK_KEY, this.value, String(this.ttlMs));
       if (renewed === 1) {
-        this.leaseUntil = startedAt + this.ttlMs;
+        this.leaseUntil = startedAt + this.leaseMs;
         return true;
       }
       this.leader = false;
       this.leaseUntil = 0;
       this.announced = 'standby';
       this.logger.warn('scheduler leader lock lost; ticking stopped, retrying as standby');
-      return false;
+      // Kilit yalnız süresi dolduğu için kaybolduysa (ör. uzun GC duraklaması) aynı çağrıda yeniden alınmayı dener.
     }
     if (this.stopped) return false;
     const ok = await this.redis.set(LEADER_LOCK_KEY, this.value, 'PX', this.ttlMs, 'NX');
     if (ok === 'OK') {
       this.leader = true;
-      this.leaseUntil = startedAt + this.ttlMs;
+      this.leaseUntil = startedAt + this.leaseMs;
       this.announced = 'leader';
       this.logger.log('scheduler leader acquired');
       for (const listener of this.acquiredListeners) listener();

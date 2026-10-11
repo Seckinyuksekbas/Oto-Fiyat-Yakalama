@@ -14,8 +14,11 @@ export const envSchema = z
     /** Bot User-Agent'ında yayınlanan iletişim adresi (kaynak sahipleri bize ulaşabilsin). */
     BOT_CONTACT_URL: z.string().url().optional(),
     SCHEDULER_TICK_MS: z.coerce.number().int().min(1000).default(15_000),
-    /** Kapanışta aktif işlerin bitmesi için beklenen süre; aşılırsa worker zorla kapatılır. */
-    SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(1000).max(600_000).default(30_000),
+    /**
+     * Kapanışta aktif işlerin bitmesi için beklenen süre; aşılırsa worker zorla kapatılır.
+     * En fazla 40 sn: zorla kapatma payı (5 sn) eklenince compose `stop_grace_period: 45s` içinde kalır (aksi halde SIGKILL).
+     */
+    SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(1000).max(40_000).default(30_000),
     /** Alarm izlemesi (MonitorService) en fazla bu aralıkla çalışır; scheduler tick'inden bağımsız. */
     MONITOR_INTERVAL_MS: z.coerce.number().int().min(1000).default(60_000),
     SCRAPE_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(2),
@@ -44,12 +47,24 @@ export const envSchema = z
   .transform((env) => ({ ...env, BOT_CONTACT_URL: env.BOT_CONTACT_URL ?? 'http://localhost:3000/bot', PUBLIC_BASE_URL: env.PUBLIC_BASE_URL ?? 'http://localhost:3000' }));
 export type Env = z.infer<typeof envSchema>;
 
-type PoolInputs = Pick<Env, 'DATABASE_URL' | 'SCRAPE_CONCURRENCY' | 'ANALYZE_CONCURRENCY' | 'MATCH_CONCURRENCY' | 'NOTIFY_CONCURRENCY'>;
+/** `notify-telegram` kuyruğunun sabit paralelliği (Bot API hız sınırı ayrıca limiter ile uygulanır). */
+export const NOTIFY_TELEGRAM_CONCURRENCY = 5;
+/** Her süreçte iş dışı kullanım payı (sweep/heartbeat/alarm sorguları). */
+const POOL_HEADROOM = 3;
 
-/** Worker'ın Prisma havuzunda ihtiyaç duyduğu en az bağlantı: her eşzamanlı iş bir bağlantı + scheduler/sweep/heartbeat payı. */
+type PoolInputs = Pick<Env, 'ROLE' | 'DATABASE_URL' | 'SCRAPE_CONCURRENCY' | 'ANALYZE_CONCURRENCY' | 'MATCH_CONCURRENCY' | 'NOTIFY_CONCURRENCY'>;
+
+/**
+ * Prisma havuzunda gereken en az bağlantı. Worker: her eşzamanlı iş bir bağlantı tutar
+ * (SCRAPE+ANALYZE+MATCH+NOTIFY+NOTIFY_TELEGRAM) + 3 pay. Scheduler kuyruk tüketmez: yalnız 3 pay.
+ */
 export function requiredConnectionLimit(env: Omit<PoolInputs, 'DATABASE_URL'>): number {
-  return env.SCRAPE_CONCURRENCY + env.ANALYZE_CONCURRENCY + env.MATCH_CONCURRENCY + env.NOTIFY_CONCURRENCY + 3;
+  if (env.ROLE === 'scheduler') return POOL_HEADROOM;
+  return env.SCRAPE_CONCURRENCY + env.ANALYZE_CONCURRENCY + env.MATCH_CONCURRENCY + env.NOTIFY_CONCURRENCY + NOTIFY_TELEGRAM_CONCURRENCY + POOL_HEADROOM;
 }
+
+const formulaFor = (role: Env['ROLE']) =>
+  role === 'scheduler' ? 'ROLE=scheduler için 3' : `SCRAPE+ANALYZE+MATCH+NOTIFY_CONCURRENCY + NOTIFY_TELEGRAM(${NOTIFY_TELEGRAM_CONCURRENCY}) + 3`;
 
 /**
  * `DATABASE_URL` sorgu dizgisindeki `connection_limit` yetersizse nedenini döndürür (yoksa `null`).
@@ -57,8 +72,9 @@ export function requiredConnectionLimit(env: Omit<PoolInputs, 'DATABASE_URL'>): 
  */
 export function connectionLimitProblem(env: PoolInputs): string | null {
   const min = requiredConnectionLimit(env);
-  const rule = `en az ${min} olmalı (SCRAPE+ANALYZE+MATCH+NOTIFY_CONCURRENCY + 3)`;
-  const raw = URL.canParse(env.DATABASE_URL) ? new URL(env.DATABASE_URL).searchParams.get('connection_limit') : null;
+  const rule = `en az ${min} olmalı (${formulaFor(env.ROLE)})`;
+  if (!URL.canParse(env.DATABASE_URL)) return `ayrıştırılamadı (parolayı percent-encode edin); connection_limit ${rule}`;
+  const raw = new URL(env.DATABASE_URL).searchParams.get('connection_limit');
   if (raw === null) return `connection_limit sorgu parametresi eksik; ${rule}`;
   if (!/^\d+$/.test(raw)) return `connection_limit pozitif tamsayı olmalı; ${rule}`;
   if (Number(raw) < min) return `connection_limit ${rule}`;

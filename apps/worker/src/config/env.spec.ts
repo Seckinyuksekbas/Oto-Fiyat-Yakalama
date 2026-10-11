@@ -4,8 +4,8 @@ import { parseEnv } from './env';
 
 const DB_NO_LIMIT = 'postgresql://u:p@localhost:5433/db';
 const base = {
-  // Production kuralları connection_limit ister (varsayılan concurrency toplamı 18 + 3)
-  DATABASE_URL: `${DB_NO_LIMIT}?connection_limit=21`,
+  // Production kuralları connection_limit ister (varsayılan: 2+4+4+8 + NOTIFY_TELEGRAM 5 + 3 = 26)
+  DATABASE_URL: `${DB_NO_LIMIT}?connection_limit=26`,
   REDIS_URL: 'redis://localhost:6380',
   DATA_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
 };
@@ -17,10 +17,12 @@ describe('worker env', () => {
     expect(parseEnv(base).MATCH_CONCURRENCY).toBe(4);
   });
 
-  it('defaults SHUTDOWN_TIMEOUT_MS to 30000 and bounds it', () => {
+  it('defaults SHUTDOWN_TIMEOUT_MS to 30000 and bounds it (max 40000: compose grace 45 s)', () => {
     expect(parseEnv(base).SHUTDOWN_TIMEOUT_MS).toBe(30_000);
     expect(parseEnv({ ...base, SHUTDOWN_TIMEOUT_MS: '5000' }).SHUTDOWN_TIMEOUT_MS).toBe(5000);
     expect(() => parseEnv({ ...base, SHUTDOWN_TIMEOUT_MS: '0' })).toThrow(/SHUTDOWN_TIMEOUT_MS/);
+    expect(parseEnv({ ...base, SHUTDOWN_TIMEOUT_MS: '40000' }).SHUTDOWN_TIMEOUT_MS).toBe(40_000);
+    expect(() => parseEnv({ ...base, SHUTDOWN_TIMEOUT_MS: '40001' })).toThrow(/SHUTDOWN_TIMEOUT_MS/);
   });
 
   it('never echoes an invalid value in the error message', () => {
@@ -102,7 +104,7 @@ describe('worker env', () => {
 
   describe('DATABASE_URL connection_limit', () => {
     const prodOk = { ...base, NODE_ENV: 'production', BOT_CONTACT_URL: 'https://oto.example/bot', PUBLIC_BASE_URL: 'https://oto.example' };
-    // Varsayılan concurrency toplamı 2+4+4+8 = 18 → gereken en az 21
+    // Varsayılan: 2+4+4+8 + NOTIFY_TELEGRAM 5 = 23 → gereken en az 26
     const withLimit = (n: string) => `${DB_NO_LIMIT}?schema=public&connection_limit=${n}`;
 
     it('fails in production when connection_limit is missing, without echoing the URL or password', () => {
@@ -118,15 +120,34 @@ describe('worker env', () => {
     });
 
     it('fails in production when connection_limit is below the concurrency sum + 3', () => {
-      expect(() => parseEnv({ ...prodOk, DATABASE_URL: withLimit('5') }, () => undefined)).toThrow(/DATABASE_URL: .*connection_limit.*21/);
-      expect(() => parseEnv({ ...prodOk, DATABASE_URL: withLimit('20') }, () => undefined)).toThrow(/connection_limit/);
+      expect(() => parseEnv({ ...prodOk, DATABASE_URL: withLimit('5') }, () => undefined)).toThrow(/DATABASE_URL: .*connection_limit.*26.*NOTIFY_TELEGRAM/);
+      expect(() => parseEnv({ ...prodOk, DATABASE_URL: withLimit('25') }, () => undefined)).toThrow(/connection_limit/);
       expect(() => parseEnv({ ...prodOk, DATABASE_URL: withLimit('abc') }, () => undefined)).toThrow(/connection_limit/);
-      expect(parseEnv({ ...prodOk, DATABASE_URL: withLimit('21') }, () => undefined).NODE_ENV).toBe('production');
+      expect(parseEnv({ ...prodOk, DATABASE_URL: withLimit('26') }, () => undefined).NODE_ENV).toBe('production');
     });
 
     it('accounts for configured concurrency', () => {
-      const env = { ...prodOk, DATABASE_URL: withLimit('21'), NOTIFY_CONCURRENCY: '9' };
-      expect(() => parseEnv(env, () => undefined)).toThrow(/connection_limit.*22/);
+      const env = { ...prodOk, DATABASE_URL: withLimit('26'), NOTIFY_CONCURRENCY: '9' };
+      expect(() => parseEnv(env, () => undefined)).toThrow(/connection_limit.*27/);
+    });
+
+    it('is role-aware: the scheduler only needs 3 connections', () => {
+      const scheduler = { ...prodOk, ROLE: 'scheduler' };
+      expect(parseEnv({ ...scheduler, DATABASE_URL: withLimit('3') }, () => undefined).ROLE).toBe('scheduler');
+      expect(() => parseEnv({ ...scheduler, DATABASE_URL: withLimit('2') }, () => undefined)).toThrow(/connection_limit.*en az 3.*ROLE=scheduler/);
+      expect(() => parseEnv({ ...scheduler, DATABASE_URL: DB_NO_LIMIT }, () => undefined)).toThrow(/connection_limit/);
+    });
+
+    it('reports an unparseable DATABASE_URL without echoing it', () => {
+      const secret = 'p#ss';
+      let message = '';
+      try {
+        parseEnv({ ...prodOk, DATABASE_URL: `postgresql://u:${secret}@db/oto?connection_limit=26` }, () => undefined);
+      } catch (e) {
+        message = (e as Error).message;
+      }
+      expect(message).toMatch(/DATABASE_URL: .*ayrıştırılamadı \(parolayı percent-encode edin\)/);
+      expect(message).not.toContain(secret);
     });
 
     it('only warns in development and test', () => {
@@ -137,7 +158,7 @@ describe('worker env', () => {
         expect(warn.mock.calls[0][0]).toMatch(/connection_limit/);
         expect(warn.mock.calls[0][0]).not.toContain('u:p@');
         const quiet = vi.fn();
-        parseEnv({ ...base, NODE_ENV, DATABASE_URL: withLimit('21') }, quiet);
+        parseEnv({ ...base, NODE_ENV, DATABASE_URL: withLimit('26') }, quiet);
         expect(quiet).not.toHaveBeenCalled();
       }
     });
