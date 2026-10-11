@@ -25,7 +25,8 @@ export function UserMenu() {
   const user = me.data?.user;
 
   const signOut = () => {
-    logout.mutate(undefined, { onSettled: () => router.replace('/giris') });
+    router.replace('/giris');
+    logout.mutate();
   };
 
   return (

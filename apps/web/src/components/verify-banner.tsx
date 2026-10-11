@@ -1,4 +1,5 @@
 'use client';
+import { useEffect, useState } from 'react';
 import { MailWarning } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ApiError } from '@/lib/api';
@@ -8,6 +9,14 @@ export function VerifyBanner() {
   const me = useMe();
   const resend = useResendVerification();
   const user = me.data?.user;
+  const [wait, setWait] = useState(0);
+
+  useEffect(() => {
+    if (wait <= 0) return;
+    const t = setTimeout(() => setWait((w) => w - 1), 1000);
+    return () => clearTimeout(t);
+  }, [wait]);
+
   if (!user || user.emailVerifiedAt) return null;
 
   const failure = resend.error
@@ -29,9 +38,15 @@ export function VerifyBanner() {
       </p>
       <div className="flex items-center gap-3">
         <span role="status" aria-live="polite" className="text-[13px] text-muted">
-          {resend.isSuccess ? `Bağlantı gönderildi: ${user.email}` : failure}
+          {resend.isSuccess && wait > 0
+            ? `Bağlantı gönderildi: ${user.email}. Yeniden göndermek için ${wait} sn bekleyin.`
+            : resend.isSuccess
+              ? `Bağlantı gönderildi: ${user.email}`
+              : failure}
         </span>
-        <Button variant="secondary" size="sm" disabled={resend.isPending} onClick={() => resend.mutate(user.email)}>
+        <Button variant="secondary" size="sm" disabled={resend.isPending || wait > 0}
+          onClick={() => resend.mutate(user.email, { onSuccess: () => setWait(60) })}
+        >
           Bağlantıyı yeniden gönder
         </Button>
       </div>

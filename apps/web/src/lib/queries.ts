@@ -31,8 +31,11 @@ export function useLogout() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () => apiFetch<void>('/auth/logout', { method: 'POST' }),
-    onSettled: () => {
+    // Oturum kapanırken uçuştaki /me istekleri 401 → refresh → yönlendirme zinciri başlatmasın.
+    onMutate: () => qc.cancelQueries(),
+    onSettled: async () => {
       emitLoggedOut();
+      await qc.cancelQueries();
       qc.clear();
     },
   });

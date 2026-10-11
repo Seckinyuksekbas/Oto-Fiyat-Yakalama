@@ -1,11 +1,11 @@
 'use client';
 import Link from 'next/link';
-import { Bar, BarChart, Cell, XAxis, YAxis, Tooltip as ChartTooltip } from 'recharts';
-import { ResponsiveContainer } from 'recharts';
+import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip as ChartTooltip, XAxis, YAxis } from 'recharts';
 import { ArrowRight, Radar, SlidersHorizontal } from 'lucide-react';
 import type { Dashboard } from '@oto/shared';
 import { EmptyState } from '@/components/empty-state';
 import { ListingCardView } from '@/components/listing-card';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useDashboard, useMe } from '@/lib/queries';
@@ -18,6 +18,19 @@ function Metric({ label, value, hint }: { label: string; value: string; hint?: s
       {hint ? <span className="text-xs text-muted">{hint}</span> : null}
     </div>
   );
+}
+
+const REASON: Record<Dashboard['recentMatches'][number]['reason'], { label: string; tone: 'accent' | 'positive' | 'neutral' }> = {
+  NEW: { label: 'Yeni', tone: 'accent' },
+  PRICE_DROP: { label: 'Fiyat düştü', tone: 'positive' },
+  RELIST: { label: 'Yeniden yayında', tone: 'neutral' },
+};
+
+function planLabel(me: ReturnType<typeof useMe>): string {
+  if (me.isPending) return '…';
+  const sub = me.data?.subscription;
+  if (!sub) return '—';
+  return sub.status === 'FALLBACK' ? 'Ücretsiz plan' : sub.planName;
 }
 
 const dayFmt = new Intl.DateTimeFormat('tr-TR', { weekday: 'short', timeZone: 'Europe/Istanbul' });
@@ -112,7 +125,7 @@ export function DashboardView() {
         <Metric label="Aktif profil" value={`${d.profiles.active}/${d.profiles.max}`} />
         <Metric label="Bugünkü bildirim" value={`${d.notifications.today}/${d.notifications.limit}`} />
         <Metric label="7 günlük eşleşme" value={String(weekTotal)} />
-        <Metric label="Plan" value={me.data?.subscription?.planName ?? '—'} />
+        <Metric label="Plan" value={planLabel(me)} />
       </section>
 
       <section aria-labelledby="seri-baslik" className="rounded-lg border border-border bg-surface p-5">
@@ -166,7 +179,13 @@ export function DashboardView() {
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {d.recentMatches.slice(0, 8).map((m) => (
-              <ListingCardView key={m.id} card={m.listing} />
+              <div key={m.id} className="flex flex-col gap-1.5">
+                <div className="flex items-center justify-between gap-2 px-1 text-[13px] text-muted">
+                  <span className="min-w-0 truncate">{m.profile.name}</span>
+                  <Badge tone={REASON[m.reason].tone}>{REASON[m.reason].label}</Badge>
+                </div>
+                <ListingCardView card={m.listing} />
+              </div>
             ))}
           </div>
         )}

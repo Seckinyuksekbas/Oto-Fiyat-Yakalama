@@ -1,5 +1,5 @@
 'use client';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
@@ -123,8 +123,24 @@ export function AppShell({ children, bellSlot }: { children: ReactNode; bellSlot
   const pathname = usePathname() ?? '/app';
   const [open, setOpen] = useState(false);
 
+  // Görünüm masaüstü genişliğine geçince açık çekmece kapanır.
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 768px)');
+    const onChange = (e: MediaQueryListEvent) => {
+      if (e.matches) setOpen(false);
+    };
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+
   return (
     <div className="min-h-dvh md:grid md:grid-cols-[248px_1fr]">
+      <a
+        href="#icerik"
+        className="sr-only z-50 rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-fg focus:not-sr-only focus:fixed focus:left-4 focus:top-4"
+      >
+        İçeriğe geç
+      </a>
       <aside className="sticky top-0 hidden h-dvh flex-col gap-6 border-r border-border bg-surface px-3 py-5 md:flex">
         <div className="px-1">
           <Brand />
@@ -165,7 +181,7 @@ export function AppShell({ children, bellSlot }: { children: ReactNode; bellSlot
         </header>
 
         <VerifyBanner />
-        <main id="icerik" className="min-w-0 flex-1 px-4 py-6 md:px-8 md:py-8">
+        <main id="icerik" tabIndex={-1} className="min-w-0 flex-1 px-4 py-6 outline-none md:px-8 md:py-8">
           {children}
         </main>
       </div>

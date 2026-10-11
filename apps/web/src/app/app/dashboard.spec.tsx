@@ -1,8 +1,8 @@
 import { cloneElement } from 'react';
 import { http, HttpResponse } from 'msw';
 import userEvent from '@testing-library/user-event';
-import { screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Dashboard, ListingCard } from '@oto/shared';
 import { server } from '@/test/server';
 import { renderWithClient } from '@/test/render';
@@ -117,6 +117,14 @@ beforeEach(() => {
   pathname = '/app';
 });
 
+const realMatchMedia = window.matchMedia;
+const realWidth = window.innerWidth;
+afterEach(() => {
+  window.matchMedia = realMatchMedia;
+  window.innerWidth = realWidth;
+  vi.useRealTimers();
+});
+
 describe('Dashboard', () => {
   it('shows the four metrics and recent matches', async () => {
     useApi();
@@ -178,8 +186,7 @@ describe('AppShell', () => {
     expect(screen.queryByText(/E-postanızı doğrulayın/)).not.toBeInTheDocument();
   });
 
-  it('opens the mobile drawer with the hamburger and closes it with Esc', async () => {
-    window.innerWidth = 375;
+  it('opens the drawer with the hamburger and closes it with Esc', async () => {
     useApi();
     page();
     await userEvent.click(screen.getByRole('button', { name: 'Menüyü aç' }));
@@ -204,6 +211,127 @@ describe('AppShell', () => {
     await userEvent.click(screen.getByRole('menuitem', { name: 'Çıkış' }));
     await waitFor(() => expect(replace).toHaveBeenCalledWith('/giris'));
     expect(called).toBe(true);
+  });
+
+  it('puts a skip link first and targets the focusable main region', async () => {
+    useApi();
+    page();
+    await userEvent.tab();
+    const skip = screen.getByRole('link', { name: 'İçeriğe geç' });
+    expect(skip).toHaveFocus();
+    expect(skip).toHaveAttribute('href', '#icerik');
+    expect(screen.getByRole('main')).toHaveAttribute('id', 'icerik');
+    expect(screen.getByRole('main')).toHaveAttribute('tabindex', '-1');
+  });
+
+  it('closes the drawer when the viewport grows past md', async () => {
+    useApi();
+    let listener: ((e: { matches: boolean }) => void) | undefined;
+    window.matchMedia = ((q: string) => ({
+      matches: false,
+      media: q,
+      addEventListener: (_: string, fn: (e: { matches: boolean }) => void) => {
+        if (q.includes('min-width')) listener = fn;
+      },
+      removeEventListener: () => {},
+    })) as unknown as typeof window.matchMedia;
+    page();
+    await userEvent.click(screen.getByRole('button', { name: 'Menüyü aç' }));
+    await screen.findByRole('dialog', { name: 'Menü' });
+    act(() => listener?.({ matches: true }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('does not refetch /me after logout', async () => {
+    let meCalls = 0;
+    let loggedOut = false;
+    server.use(
+      http.get('*/api/v1/me', () => {
+        meCalls++;
+        return HttpResponse.json(meBody());
+      }),
+      http.get('*/api/v1/me/dashboard', () => HttpResponse.json(dash())),
+      http.post('*/api/v1/auth/logout', () => {
+        loggedOut = true;
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    page();
+    await userEvent.click(await screen.findByRole('button', { name: /Hesap menüsü/ }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Çıkış' }));
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/giris'));
+    await waitFor(() => expect(loggedOut).toBe(true));
+    await new Promise((r) => setTimeout(r, 100));
+    const before = meCalls;
+    await new Promise((r) => setTimeout(r, 200));
+    expect(meCalls).toBe(before);
+  });
+
+  it('explains a rate-limited resend (429)', async () => {
+    useApi({ verified: false });
+    server.use(
+      http.post('*/api/v1/auth/resend-verification', () =>
+        HttpResponse.json({ error: { code: 'RATE_LIMITED', message: 'x' } }, { status: 429 }),
+      ),
+    );
+    page();
+    await userEvent.click(await screen.findByRole('button', { name: 'Bağlantıyı yeniden gönder' }));
+    expect(await screen.findByText(/Çok sık denediniz/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Bağlantıyı yeniden gönder' })).toBeEnabled();
+  });
+
+  it('shows a generic failure on 500 and keeps the button usable', async () => {
+    useApi({ verified: false });
+    server.use(
+      http.post('*/api/v1/auth/resend-verification', () =>
+        HttpResponse.json({ error: { code: 'INTERNAL', message: 'x' } }, { status: 500 }),
+      ),
+    );
+    page();
+    await userEvent.click(await screen.findByRole('button', { name: 'Bağlantıyı yeniden gönder' }));
+    expect(await screen.findByText(/Bağlantı gönderilemedi/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Bağlantıyı yeniden gönder' })).toBeEnabled();
+  });
+
+  it('disables resend for 60 seconds with a countdown after success', async () => {
+    useApi({ verified: false });
+    server.use(
+      http.post('*/api/v1/auth/resend-verification', () => new HttpResponse(null, { status: 204 })),
+    );
+    page();
+    const btn = await screen.findByRole('button', { name: 'Bağlantıyı yeniden gönder' });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    await user.click(btn);
+    expect(await screen.findByText(/60 sn bekleyin/)).toBeInTheDocument();
+    expect(btn).toBeDisabled();
+    for (let i = 0; i < 60; i++) {
+      await act(async () => {
+        vi.advanceTimersByTime(1000);
+      });
+    }
+    await waitFor(() => expect(btn).toBeEnabled());
+  });
+
+  it('shows the profile name and reason badge on recent matches', async () => {
+    const d = dash();
+    d.recentMatches[1] = { ...d.recentMatches[1]!, reason: 'PRICE_DROP' };
+    useApi({ dashboard: d });
+    page();
+    expect((await screen.findAllByText('Günlük araç')).length).toBe(2);
+    expect(screen.getByText('Yeni')).toBeInTheDocument();
+    expect(screen.getByText('Fiyat düştü')).toBeInTheDocument();
+  });
+
+  it('labels the fallback plan as free', async () => {
+    server.use(
+      http.get('*/api/v1/me', () =>
+        HttpResponse.json({ ...meBody(), subscription: { planCode: 'FREE', planName: 'Free', status: 'FALLBACK', endsAt: null } }),
+      ),
+      http.get('*/api/v1/me/dashboard', () => HttpResponse.json(dash())),
+    );
+    page();
+    await waitFor(() => expect(within(screen.getByRole('group', { name: 'Plan' })).getByText('Ücretsiz plan')).toBeInTheDocument());
   });
 
   it('leaves a slot for the notification bell', () => {
