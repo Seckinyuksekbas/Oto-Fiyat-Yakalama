@@ -1,0 +1,20 @@
+# Derleme bağlamı: yalnız kaynak + lockfile. Sırlar, yerel çıktılar ve araç durumları imaja girmez.
+**/node_modules
+**/dist
+**/.next
+**/coverage
+**/*.tsbuildinfo
+**/*.log
+**/.env
+**/.env.*
+!**/.env.example
+.git
+.github
+.superpowers
+.claude
+graphify-out
+docs
+apps/web/.screenshots
+apps/e2e/test-results
+apps/e2e/playwright-report
+**/.DS_Store
