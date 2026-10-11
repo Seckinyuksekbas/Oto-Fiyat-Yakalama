@@ -1,5 +1,6 @@
 import express, { type Express } from 'express';
 import { renderCaptchaPage, renderDetail, renderListPage } from './render';
+import { IMAGE_ID_PATTERN, listingImagePng } from './image';
 import { DemoStore, type StoreOptions } from './store';
 
 export type DemoMode = 'normal' | 'broken' | 'captcha' | 'forbidden';
@@ -69,6 +70,15 @@ export function createDemoSite(opts: StoreOptions & { pageSize?: number }): Demo
     const listing = store.get(req.params.id);
     if (!listing || listing.status !== 'ACTIVE') return void res.status(404).type('html').send('<h1>İlan bulunamadı</h1>');
     res.type('html').send(renderDetail(listing));
+  });
+
+  // İlan görseli: kimlikten türetilen deterministik küçük PNG. URL (`/img/<id>.jpg`) adapter ve kayıtlı imageUrl'lerle
+  // uyumlu kalsın diye .jpg uzantılıdır; içerik türü dürüstçe image/png'dir. Bilinmeyen ama biçimi geçerli kimlik de
+  // görsel alır (sade ve deterministik); biçimsiz kimlik 400.
+  app.get('/img/:file', (req, res) => {
+    const m = /^(.+).jpg$/.exec(req.params.file);
+    if (!m || !IMAGE_ID_PATTERN.test(m[1]!)) return void res.status(400).type('text/plain').send('invalid image id');
+    res.set('Cache-Control', 'public, max-age=3600').type('image/png').send(listingImagePng(m[1]!));
   });
 
   app.post('/__tick', (_req, res) => void res.json(store.tick()));

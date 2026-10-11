@@ -127,3 +127,32 @@ describe('demo site HTTP', () => {
     expect(res.body.price).toBeGreaterThanOrEqual(50_000);
   });
 });
+
+describe('demo site listing images', () => {
+  const png = (res: request.Response) => Buffer.from(res.body as Buffer);
+
+  it('serves a deterministic cacheable PNG for a well-formed id', async () => {
+    const s = site();
+    const id = s.store.active()[0].id;
+    const a = await request(s.app).get(`/img/${id}.jpg`).buffer(true);
+    expect(a.status).toBe(200);
+    expect(a.headers['content-type']).toMatch(/^image\/png/);
+    expect(a.headers['cache-control']).toBe('public, max-age=3600');
+    expect(png(a).subarray(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    // IHDR: 64x48
+    expect(png(a).readUInt32BE(16)).toBe(64);
+    expect(png(a).readUInt32BE(20)).toBe(48);
+    const again = await request(site().app).get(`/img/${id}.jpg`).buffer(true);
+    expect(png(again)).toEqual(png(a));
+    const other = await request(s.app).get('/img/D999999.jpg').buffer(true);
+    expect(other.status).toBe(200);
+    expect(png(other)).not.toEqual(png(a));
+  });
+
+  it('rejects malformed ids with 400', async () => {
+    const app = site().app;
+    for (const path of ['/img/bad%20id.jpg', '/img/D000001.png', '/img/.jpg', `/img/${'a'.repeat(65)}.jpg`, '/img/a%2Fb.jpg']) {
+      expect((await request(app).get(path)).status, path).toBe(400);
+    }
+  });
+});
