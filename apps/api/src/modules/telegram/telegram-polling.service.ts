@@ -3,13 +3,12 @@ import { TelegramApiError, type TelegramClient, type TelegramUpdate } from '@oto
 import { ENV } from '../../config/config.module';
 import type { Env } from '../../config/env';
 import { TELEGRAM_API, TELEGRAM_POLLING_AUTOSTART } from './telegram.config';
+import { HANDLER_MAX_ATTEMPTS } from './telegram-errors';
 import { TelegramUpdateHandler } from './telegram-update.handler';
 
 export const POLL_ERROR_WAIT_MS = 5_000;
 export const POLL_CONFLICT_WAIT_MS = 30_000;
 export const POLL_UNAUTHORIZED_WAIT_MS = 60_000;
-/** İşleyici hatasında aynı güncelleme en fazla bu kadar denenir; sonra atlanır (zehirli mesaj kilidi olmasın). */
-export const HANDLER_MAX_ATTEMPTS = 5;
 export const HANDLER_RETRY_BASE_MS = 1_000;
 export const HANDLER_RETRY_MAX_MS = 30_000;
 
@@ -102,7 +101,7 @@ export class TelegramPollingService implements OnApplicationBootstrap, OnModuleD
         await this.sleep(wait, signal);
         return false;
       }
-      this.logger.error(`Telegram güncellemesi ${attempts} denemede işlenemedi, atlanıyor (update_id=${u.update_id}): ${reason}`);
+      await this.handler.recordSkipped(u.update_id, attempts, err, 'polling');
     }
     this.failing = undefined;
     this.offset = Math.max(this.offset, u.update_id + 1);

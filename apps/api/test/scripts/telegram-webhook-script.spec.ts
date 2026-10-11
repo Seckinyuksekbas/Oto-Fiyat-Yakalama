@@ -101,6 +101,24 @@ describe('scripts/telegram-webhook.mjs', () => {
     expect(requests).toHaveLength(0);
   });
 
+  it('rejects a secret shorter than 32 chars (same rule as the api env) without calling the API', async () => {
+    const r = await run(['set'], { ...fullEnv(), TELEGRAM_WEBHOOK_SECRET: 'a'.repeat(31) });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('32-256');
+    expect(requests).toHaveLength(0);
+  });
+
+  it('masks trimmed values: a whitespace-padded token is sent trimmed and never printed', async () => {
+    next = { status: 400, body: { ok: false, error_code: 400, description: `bad token ${TOKEN} and secret ${SECRET}` } };
+    const r = await run(['set'], { ...fullEnv(), TELEGRAM_BOT_TOKEN: `  ${TOKEN}  `, TELEGRAM_WEBHOOK_SECRET: ` ${SECRET} ` });
+    expect(r.code).toBe(1);
+    expect(requests[0].url).toBe(`/bot${TOKEN}/setWebhook`);
+    expect(requests[0].body.secret_token).toBe(SECRET);
+    const out = r.stdout + r.stderr;
+    expect(out).not.toContain(TOKEN.split(':')[1]);
+    expect(out).not.toContain(SECRET);
+  });
+
   it('exits 1 on an unknown command', async () => {
     const r = await run(['nope'], fullEnv());
     expect(r.code).toBe(1);

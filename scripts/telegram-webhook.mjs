@@ -3,7 +3,7 @@
 //
 // Env:
 //   TELEGRAM_BOT_TOKEN       (zorunlu)
-//   TELEGRAM_WEBHOOK_SECRET  (set için zorunlu; 1–256 karakter, A-Z a-z 0-9 _ -)
+//   TELEGRAM_WEBHOOK_SECRET  (set için zorunlu; 32-256 karakter, A-Z a-z 0-9 _ -)
 //   PUBLIC_BASE_URL          (set için zorunlu; https)
 //   TELEGRAM_API_BASE        (opsiyonel; varsayılan https://api.telegram.org)
 //
@@ -13,13 +13,16 @@ const WEBHOOK_PATH = '/api/v1/telegram/webhook';
 const USAGE = 'Kullanım: node scripts/telegram-webhook.mjs set|info|delete';
 
 const env = process.env;
-const secrets = [env.TELEGRAM_BOT_TOKEN, env.TELEGRAM_WEBHOOK_SECRET].filter((v) => typeof v === 'string' && v.length > 0);
+// Maskeleme, istekte kullanılan (trim edilmiş) değerlerle yapılır.
+const secrets = [env.TELEGRAM_BOT_TOKEN, env.TELEGRAM_WEBHOOK_SECRET]
+  .map((v) => (typeof v === 'string' ? v.trim() : ''))
+  .filter((v) => v.length > 0);
 
 function mask(text) {
   let out = String(text);
   for (const s of secrets) out = out.split(s).join('***');
   // Biçimi bilinen her bot token'ı da maskelenir (ör. API hata açıklamasında farklı bir token).
-  return out.replace(/\b\d{5,}:[A-Za-z0-9_-]{20,}\b/g, '***');
+  return out.replace(/\b\d{5,}:[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])/g, '***');
 }
 
 function fail(message) {
@@ -63,7 +66,8 @@ async function main() {
 
   if (cmd === 'set') {
     const secret = requireEnv('TELEGRAM_WEBHOOK_SECRET');
-    if (!/^[A-Za-z0-9_-]{1,256}$/.test(secret)) fail('TELEGRAM_WEBHOOK_SECRET yalnızca A-Z a-z 0-9 _ - içermeli ve en fazla 256 karakter olmalı');
+    // api env ile aynı kural (apps/api/src/config/env.ts).
+    if (!/^[A-Za-z0-9_-]{32,256}$/.test(secret)) fail('TELEGRAM_WEBHOOK_SECRET geçersiz (32-256 karakter, A-Z a-z 0-9 _ -)');
     const baseUrl = requireEnv('PUBLIC_BASE_URL');
     let parsed;
     try {
