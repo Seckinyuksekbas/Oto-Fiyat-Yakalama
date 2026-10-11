@@ -26,5 +26,6 @@ export function buildMatchPayload(i: {
     },
     previousPrice: i.previousPrice?.toString() ?? null,
     limitExceeded: i.limitExceeded,
+    eventAt: (i.reason === 'NEW' ? l.firstSeenAt : a.createdAt).toISOString(),
   };
 }

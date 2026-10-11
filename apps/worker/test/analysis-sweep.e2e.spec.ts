@@ -121,3 +121,40 @@ describe('AnalysisSweepService.requeuePendingMatches', () => {
     expect(await sweep.requeuePendingMatches(now)).toBe(1);
   });
 });
+
+describe('AnalysisSweepService head-of-line protection', () => {
+  const base = (listingId: number) => ({ listingId, engineVersion: 'rules-v1', opportunityScore: 50, comparableCount: 5, confidence: 'MEDIUM' as const, explanation: {}, comparableIds: [] });
+  const now = new Date('2026-10-12T10:00:00Z');
+  const old = new Date(now.getTime() - 120_000);
+  const stuckLogs = () => prisma.systemLog.count({ where: { message: { contains: 'match-dispatch-stuck' } } });
+
+  it('counts failed dispatch attempts per analysis', async () => {
+    const l = await createListing(ref, sourceId);
+    const a = await prisma.listingAnalysis.create({ data: { ...base(l.id), matchEvent: 'NEW', createdAt: old } });
+    vi.spyOn(ref.get(MatchDispatcher), 'dispatch').mockRejectedValue(new Error('boom'));
+    await sweep.requeuePendingMatches(now);
+    await sweep.requeuePendingMatches(now);
+    expect((await prisma.listingAnalysis.findUniqueOrThrow({ where: { id: a.id } })).matchDispatchAttempts).toBe(2);
+  });
+
+  it('skips rows at the attempt cap (10) and raises the stuck alert exactly once', async () => {
+    const l = await createListing(ref, sourceId);
+    const stuck = await prisma.listingAnalysis.create({ data: { ...base(l.id), matchEvent: 'NEW', createdAt: old, matchDispatchAttempts: 9 } });
+    const healthy = await prisma.listingAnalysis.create({ data: { ...base(l.id), matchEvent: 'NEW', createdAt: new Date(old.getTime() + 1000) } });
+    const dispatcher = ref.get(MatchDispatcher);
+    const real = dispatcher.dispatch.bind(dispatcher);
+    const spy = vi.spyOn(dispatcher, 'dispatch').mockImplementation(async (m) => {
+      if (m.analysisId === stuck.id) throw new Error('poison');
+      return real(m);
+    });
+    expect(await sweep.requeuePendingMatches(now)).toBe(1); // sağlıklı satır head-of-line'a takılmadan gider
+    expect((await prisma.listingAnalysis.findUniqueOrThrow({ where: { id: stuck.id } })).matchDispatchAttempts).toBe(10);
+    expect(await stuckLogs()).toBe(1);
+    spy.mockClear();
+    expect(await sweep.requeuePendingMatches(now)).toBe(0);
+    expect(await sweep.requeuePendingMatches(now)).toBe(0);
+    expect(spy).not.toHaveBeenCalled();
+    expect(await stuckLogs()).toBe(1);
+    expect((await prisma.listingAnalysis.findUniqueOrThrow({ where: { id: healthy.id } })).matchQueuedAt).not.toBeNull();
+  });
+});

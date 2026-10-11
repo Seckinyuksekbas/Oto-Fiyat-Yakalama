@@ -3,11 +3,12 @@ import { AnalysisModule } from '../analysis/analysis.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { AnalysisSweepService } from './analysis-sweep.service';
 import { NotificationSweepService } from './notification-sweep.service';
+import { SubscriptionSweepService } from './subscription-sweep.service';
 import { SchedulerService } from './scheduler.service';
 
 @Module({
   imports: [AnalysisModule, NotificationsModule],
-  providers: [SchedulerService, AnalysisSweepService, NotificationSweepService],
-  exports: [SchedulerService, AnalysisSweepService, NotificationSweepService],
+  providers: [SchedulerService, AnalysisSweepService, NotificationSweepService, SubscriptionSweepService],
+  exports: [SchedulerService, AnalysisSweepService, NotificationSweepService, SubscriptionSweepService],
 })
 export class SchedulerModule {}

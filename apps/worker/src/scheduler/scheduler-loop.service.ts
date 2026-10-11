@@ -3,6 +3,7 @@ import { ENV } from '../config/config.module';
 import type { Env } from '../config/env';
 import { AnalysisSweepService } from './analysis-sweep.service';
 import { NotificationSweepService } from './notification-sweep.service';
+import { SubscriptionSweepService } from './subscription-sweep.service';
 import { SchedulerService } from './scheduler.service';
 
 const CLEANUP_EVERY_MS = 24 * 60 * 60 * 1000;
@@ -19,6 +20,7 @@ export class SchedulerLoop implements OnApplicationBootstrap, OnModuleDestroy {
     private readonly scheduler: SchedulerService,
     private readonly sweep: AnalysisSweepService,
     private readonly notifySweep: NotificationSweepService,
+    private readonly subscriptionSweep: SubscriptionSweepService,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
@@ -48,6 +50,7 @@ export class SchedulerLoop implements OnApplicationBootstrap, OnModuleDestroy {
         if (requeued > 0) this.logger.warn(`${requeued} eşleştirme olayı yeniden kuyruğa alındı`);
       });
       await this.step('Bildirim yeniden gönderimi', () => this.notifySweep.requeuePending());
+      await this.step('Abonelik süresi süpürmesi', () => this.subscriptionSweep.run());
     } finally {
       this.ticking = false;
     }

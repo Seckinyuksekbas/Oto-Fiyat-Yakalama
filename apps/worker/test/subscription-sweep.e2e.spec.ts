@@ -1,0 +1,110 @@
+import type { TestingModule } from '@nestjs/testing';
+import { userEventChannel } from '@oto/shared';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { PrismaService } from '../src/infra/prisma.service';
+import { RedisService } from '../src/infra/redis.service';
+import { SchedulerModule } from '../src/scheduler/scheduler.module';
+import { SubscriptionSweepService } from '../src/scheduler/subscription-sweep.service';
+import { createContext, createProfile, createUser, resetState } from './helpers';
+
+let ref: TestingModule;
+let prisma: PrismaService;
+let sweep: SubscriptionSweepService;
+
+beforeAll(async () => {
+  ref = await createContext([SchedulerModule]);
+  prisma = ref.get(PrismaService);
+  sweep = ref.get(SubscriptionSweepService);
+});
+afterAll(async () => ref.close());
+afterEach(() => vi.restoreAllMocks());
+beforeEach(async () => {
+  await resetState(ref);
+});
+
+const NOW = new Date('2026-10-12T10:00:00Z');
+
+async function subscribe(userId: string, planCode: string, endsAt: Date | null, status: 'ACTIVE' | 'CANCELED' = 'ACTIVE') {
+  const plan = await prisma.subscriptionPlan.findUniqueOrThrow({ where: { code: planCode } });
+  return prisma.userSubscription.create({ data: { userId, planId: plan.id, status, startsAt: new Date('2026-01-01T00:00:00Z'), endsAt } });
+}
+
+describe('SubscriptionSweepService', () => {
+  it('expires lapsed ACTIVE subscriptions and pauses excess profiles newest-first, notifying in-app', async () => {
+    const u = await createUser(ref);
+    const sub = await subscribe(u.id, 'PRO', new Date('2026-10-11T10:00:00Z'));
+    const created = [];
+    for (let i = 0; i < 4; i++) created.push(await createProfile(ref, u.id, { name: `P${i}`, createdAt: new Date(`2026-02-0${i + 1}T00:00:00Z`) }));
+    await prisma.searchProfile.update({ where: { id: created[0].id }, data: { status: 'PAUSED' } }); // zaten duraklatılmış
+
+    const received: string[] = [];
+    const subscriber = ref.get(RedisService).duplicate();
+    subscriber.on('message', (_c, m) => received.push(m));
+    await subscriber.subscribe(userEventChannel(u.id));
+
+    const res = await sweep.run(NOW);
+    expect(res).toEqual({ expired: 1, paused: 1 });
+    expect((await prisma.userSubscription.findUniqueOrThrow({ where: { id: sub.id } })).status).toBe('EXPIRED');
+    // FREE = 2 profil: aktifler P1,P2,P3 -> en yeni (P3) duraklar
+    const status = Object.fromEntries((await prisma.searchProfile.findMany()).map((p) => [p.name, p.status]));
+    expect(status).toEqual({ P0: 'PAUSED', P1: 'ACTIVE', P2: 'ACTIVE', P3: 'PAUSED' });
+    const notes = await prisma.notification.findMany({ where: { userId: u.id } });
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatchObject({ kind: 'SYSTEM_ALERT', channel: 'IN_APP', status: 'SENT' });
+    expect(notes[0].payload).toMatchObject({ type: 'SUBSCRIPTION_EXPIRED', pausedProfiles: 1 });
+    const deadline = Date.now() + 5000;
+    while (received.length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    await subscriber.quit();
+    expect(received).toHaveLength(1);
+  });
+
+  it('does not touch live, non-expiring or already-canceled subscriptions, and does not notify when nothing is paused', async () => {
+    const live = await createUser(ref);
+    await subscribe(live.id, 'PRO', new Date('2026-11-01T00:00:00Z'));
+    const forever = await createUser(ref);
+    await subscribe(forever.id, 'PRO', null);
+    const canceled = await createUser(ref);
+    await subscribe(canceled.id, 'PRO', new Date('2026-10-01T00:00:00Z'), 'CANCELED');
+    const small = await createUser(ref);
+    const smallSub = await subscribe(small.id, 'PRO', new Date('2026-10-10T00:00:00Z'));
+    await createProfile(ref, small.id);
+    for (const id of [live.id, forever.id]) for (let i = 0; i < 4; i++) await createProfile(ref, id);
+
+    expect(await sweep.run(NOW)).toEqual({ expired: 1, paused: 0 });
+    expect((await prisma.userSubscription.findUniqueOrThrow({ where: { id: smallSub.id } })).status).toBe('EXPIRED');
+    expect(await prisma.searchProfile.count({ where: { status: 'PAUSED' } })).toBe(0);
+    expect(await prisma.notification.count()).toBe(0);
+    expect(await prisma.userSubscription.count({ where: { status: 'CANCELED' } })).toBe(1);
+  });
+
+  it('keeps profiles active when the user still has another live subscription covering them', async () => {
+    const u = await createUser(ref);
+    await subscribe(u.id, 'PRO', new Date('2026-10-11T00:00:00Z'));
+    await subscribe(u.id, 'BUSINESS', null);
+    for (let i = 0; i < 4; i++) await createProfile(ref, u.id);
+    expect(await sweep.run(NOW)).toEqual({ expired: 1, paused: 0 });
+    expect(await prisma.searchProfile.count({ where: { status: 'ACTIVE' } })).toBe(4);
+  });
+
+  it('runs once per Istanbul day (Redis NX) and again the next Istanbul day', async () => {
+    const a = await createUser(ref);
+    await subscribe(a.id, 'PRO', new Date('2026-10-12T05:00:00Z'));
+    expect(await sweep.run(NOW)).toEqual({ expired: 1, paused: 0 });
+    const b = await createUser(ref);
+    const subB = await subscribe(b.id, 'PRO', new Date('2026-10-12T08:00:00Z'));
+    expect(await sweep.run(new Date('2026-10-12T11:00:00Z'))).toBeNull(); // aynı gün
+    expect((await prisma.userSubscription.findUniqueOrThrow({ where: { id: subB.id } })).status).toBe('ACTIVE');
+    expect(await ref.get(RedisService).exists('subs:sweep:20261012')).toBe(1);
+    // 12 Ekim 21:00Z = 13 Ekim 00:00 İstanbul
+    expect(await sweep.run(new Date('2026-10-12T21:00:01Z'))).toEqual({ expired: 1, paused: 0 });
+  });
+
+  it('releases the day marker when the sweep fails so the next tick retries', async () => {
+    const u = await createUser(ref);
+    await subscribe(u.id, 'PRO', new Date('2026-10-11T00:00:00Z'));
+    vi.spyOn(sweep as unknown as { sweep: () => Promise<unknown> }, 'sweep').mockRejectedValueOnce(new Error('db down'));
+    await expect(sweep.run(NOW)).rejects.toThrow('db down');
+    expect(await ref.get(RedisService).exists('subs:sweep:20261012')).toBe(0);
+    expect(await sweep.run(NOW)).toEqual({ expired: 1, paused: 0 });
+  });
+});

@@ -12,6 +12,8 @@ import { MatchDispatcher } from './match-dispatcher.service';
 const DAY_MS = 24 * 60 * 60 * 1000;
 const LOCK_TTL_MS = 60_000;
 const MAX_CANDIDATES = 1000;
+/** Kilidi yalnızca sahibi bırakabilir (token eşleşirse sil). */
+const RELEASE_LOCK_LUA = `if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end`;
 
 export class AnalysisLockBusyError extends Error {
   constructor(listingId: number) {
@@ -45,7 +47,7 @@ export class AnalysisService {
     try {
       return await this.processLocked(listingId, now);
     } finally {
-      if ((await this.redis.get(lockKey)) === token) await this.redis.del(lockKey);
+      await this.redis.eval(RELEASE_LOCK_LUA, 1, lockKey, token);
     }
   }
 
@@ -121,7 +123,12 @@ export class AnalysisService {
           matchPreviousPrice,
         },
       });
-      await tx.listing.update({ where: { id: listing.id }, data: { latestAnalysisId: created.id } });
+      // Kilit TTL'i dolup başka süreç yazdıysa (CAS): bizim satırı geri al, iş yeniden denensin.
+      const swapped = await tx.listing.updateMany({
+        where: { id: listing.id, latestAnalysisId: listing.latestAnalysisId },
+        data: { latestAnalysisId: created.id },
+      });
+      if (swapped.count === 0) throw new AnalysisLockBusyError(listing.id);
       return created;
     });
 

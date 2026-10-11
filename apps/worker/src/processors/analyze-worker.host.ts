@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger, Optional, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { analyzeJobSchema, QueueName, type AnalyzeJobData } from '@oto/shared';
 import { UnrecoverableError, Worker } from 'bullmq';
-import { AnalysisService } from '../analysis/analysis.service';
+import { AnalysisLockBusyError, AnalysisService } from '../analysis/analysis.service';
 import { ENV } from '../config/config.module';
 import type { Env } from '../config/env';
 import { bullConnection } from '../infra/bull';
@@ -36,7 +36,15 @@ export class AnalyzeWorkerHost implements OnModuleInit, OnModuleDestroy {
       { connection: bullConnection(this.env.REDIS_URL), concurrency: this.env.ANALYZE_CONCURRENCY },
     );
     this.worker.on('error', (err) => this.logger.error(`Analiz worker hatası: ${err.message}`));
-    this.worker.on('failed', (job, err) => this.logger.warn(`Analiz işi ${job?.id} başarısız (deneme ${job?.attemptsMade}): ${err.message}`));
+    this.worker.on('failed', (job, err) => {
+      // Kilit meşgulü beklenen bir yarıştır; iş geri çekilmeyle yeniden denenir.
+      const exhausted = (job?.attemptsMade ?? 0) >= (job?.opts.attempts ?? 1);
+      if (!exhausted && (err instanceof AnalysisLockBusyError || err.name === 'AnalysisLockBusyError')) {
+        this.logger.debug(`Analiz işi ${job?.id} kilit nedeniyle ertelendi (deneme ${job?.attemptsMade})`);
+        return;
+      }
+      this.logger.warn(`Analiz işi ${job?.id} başarısız (deneme ${job?.attemptsMade}): ${err.message}`);
+    });
   }
 
   async onModuleDestroy(): Promise<void> {

@@ -52,10 +52,12 @@ export class NotifyService {
     if (result.kind === 'THROTTLED') return result;
     if (result.kind === 'SENT') {
       const sentAt = new Date();
-      const firstSeen = Date.parse((n.payload as { listing?: { firstSeenAt?: string } })?.listing?.firstSeenAt ?? '');
+      const p = n.payload as { eventAt?: string; listing?: { firstSeenAt?: string } } | null;
+      // Gecikme olay anından ölçülür; eventAt'siz eski satırlarda ilanın ilk görülme anına düşer.
+      const eventTime = Date.parse(p?.eventAt ?? p?.listing?.firstSeenAt ?? '');
       const upd = await this.prisma.notification.updateMany({
         where: { id: n.id, status: 'PENDING' },
-        data: { status: 'SENT', sentAt, attempts: { increment: 1 }, lastError: null, latencyMs: Number.isFinite(firstSeen) ? sentAt.getTime() - firstSeen : null },
+        data: { status: 'SENT', sentAt, attempts: { increment: 1 }, lastError: null, latencyMs: Number.isFinite(eventTime) ? sentAt.getTime() - eventTime : null },
       });
       return { kind: 'DONE', status: upd.count > 0 ? 'SENT' : 'SKIPPED' };
     }

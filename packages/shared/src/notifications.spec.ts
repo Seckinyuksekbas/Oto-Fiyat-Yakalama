@@ -23,6 +23,11 @@ describe('notification contracts', () => {
     expect(matchNotificationPayloadSchema.parse(payload)).toEqual(payload);
     expect(matchNotificationPayloadSchema.safeParse({ ...payload, listing: { ...payload.listing, price: 960000 } }).success).toBe(false);
   });
+  it('eventAt is optional (old rows) but validated as ISO when present', () => {
+    expect(matchNotificationPayloadSchema.parse({ ...payload, eventAt: '2026-10-10T12:00:00.000Z' }).eventAt).toBe('2026-10-10T12:00:00.000Z');
+    expect(matchNotificationPayloadSchema.parse(payload).eventAt).toBeUndefined();
+    expect(matchNotificationPayloadSchema.safeParse({ ...payload, eventAt: 'dün' }).success).toBe(false);
+  });
   it('notify job id and schema', () => {
     expect(notifyJobId(42)).toBe('notify-42');
     expect(notifyJobSchema.safeParse({ notificationId: 0 }).success).toBe(false);

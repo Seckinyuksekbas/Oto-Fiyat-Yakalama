@@ -8,10 +8,10 @@ export const RETRYING_JOB_OPTS: JobsOptions = {
   removeOnFail: { age: 24 * 60 * 60 },
 };
 
-/** Bildirim işleri: 5 deneme; bekleme süreleri notifyBackoffMs (özel strateji) ile belirlenir. */
+/** Bildirim işleri: 5 deneme; başarısızlar 7 gün tutulur (admin yeniden deneyebilir); bekleme süreleri notifyBackoffMs (özel strateji) ile belirlenir. */
 export const NOTIFY_JOB_OPTS: JobsOptions = {
   attempts: 5,
   backoff: { type: 'custom' },
   removeOnComplete: true,
-  removeOnFail: { age: 24 * 60 * 60 },
+  removeOnFail: { age: 7 * 24 * 60 * 60 },
 };

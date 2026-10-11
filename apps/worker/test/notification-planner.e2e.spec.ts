@@ -45,7 +45,9 @@ describe('notification planning inside the match transaction', () => {
       listing: { id: l.id, price: '960000' }, analysis: { confidence: 'HIGH', estimatedPrice: '1200000', discountPct: 0.2 },
     });
     expect(rows.every((r) => r.queuedAt !== null)).toBe(true);
-    expect(await ref.get(QueueRegistry).notify.getJob(`notify-${rows[0].id}`)).toBeTruthy();
+    const inAppJob = await ref.get(QueueRegistry).notify.getJob(`notify-${rows[0].id}`);
+    expect(inAppJob).toBeTruthy();
+    expect(inAppJob!.opts.removeOnFail).toEqual({ age: 7 * 86400 });
     expect(await ref.get(QueueRegistry).notifyTelegram.getJob(`notify-${rows[1].id}`)).toBeTruthy();
   });
 

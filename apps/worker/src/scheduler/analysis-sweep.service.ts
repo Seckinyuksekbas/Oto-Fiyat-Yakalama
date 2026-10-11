@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ISTANBUL_OFFSET_MS, startOfIstanbulDay } from '@oto/shared';
+import { AlertService } from '../common/alert.service';
 import { MatchDispatcher } from '../analysis/match-dispatcher.service';
 import { PrismaService } from '../infra/prisma.service';
 import { RedisService } from '../infra/redis.service';
@@ -8,6 +9,8 @@ import { QueueRegistry } from '../queues/queue-registry';
 
 export const NIGHTLY_HOUR_ISTANBUL = 3;
 export const MATCH_REQUEUE_AFTER_MS = 60_000;
+/** Bu kadar başarısız yeniden gönderimden sonra satır atlanır (head-of-line engeli) ve bir kez alarm verilir. */
+export const MATCH_DISPATCH_MAX_ATTEMPTS = 10;
 const PAGE = 500;
 /** Gece yenilemesi gerçek zamanlı analizlerden düşük öncelikli (BullMQ: büyük sayı = geç). */
 export const REFRESH_PRIORITY = 100;
@@ -30,6 +33,7 @@ export class AnalysisSweepService {
     private readonly redis: RedisService,
     private readonly queues: QueueRegistry,
     private readonly matches: MatchDispatcher,
+    private readonly alerts: AlertService,
   ) {}
 
   /** İstanbul saatiyle 03:00'ten sonra günde bir kez tüm aktif ilanlar için REFRESH işi üretir. */
@@ -77,7 +81,7 @@ export class AnalysisSweepService {
   /** Commit sonrası kuyruğa alınamamış eşleştirme olaylarını yeniden gönderir. */
   async requeuePendingMatches(now: Date = new Date()): Promise<number> {
     const pending = await this.prisma.listingAnalysis.findMany({
-      where: { matchEvent: { in: ['NEW', 'PRICE_DROP', 'RELIST'] }, matchQueuedAt: null, createdAt: { lt: new Date(now.getTime() - MATCH_REQUEUE_AFTER_MS) } },
+      where: { matchEvent: { in: ['NEW', 'PRICE_DROP', 'RELIST'] }, matchQueuedAt: null, matchDispatchAttempts: { lt: MATCH_DISPATCH_MAX_ATTEMPTS }, createdAt: { lt: new Date(now.getTime() - MATCH_REQUEUE_AFTER_MS) } },
       orderBy: { id: 'asc' },
       take: PAGE,
       select: { id: true, listingId: true, matchEvent: true, matchPreviousPrice: true },
@@ -88,9 +92,33 @@ export class AnalysisSweepService {
         await this.matches.dispatch({ analysisId: p.id, listingId: p.listingId, event: p.matchEvent!, previousPrice: p.matchPreviousPrice });
         sent += 1;
       } catch (err) {
-        this.logger.warn(`Eşleştirme olayı yeniden gönderilemedi (analiz ${p.id}): ${err instanceof Error ? err.message : String(err)}`);
+        const reason = err instanceof Error ? err.message : String(err);
+        this.logger.warn(`Eşleştirme olayı yeniden gönderilemedi (analiz ${p.id}): ${reason}`);
+        await this.recordDispatchFailure(p.id, p.listingId, reason);
       }
     }
     return sent;
+  }
+
+  /** Deneme sayacını artırır; sınıra ilk ulaşıldığında (tam bir kez) alarm verir. */
+  private async recordDispatchFailure(analysisId: number, listingId: number, reason: string): Promise<void> {
+    try {
+      const row = await this.prisma.listingAnalysis.update({
+        where: { id: analysisId },
+        data: { matchDispatchAttempts: { increment: 1 } },
+        select: { matchDispatchAttempts: true },
+      });
+      if (row.matchDispatchAttempts === MATCH_DISPATCH_MAX_ATTEMPTS) {
+        await this.alerts.raise({
+          key: `match-dispatch-stuck:${analysisId}`,
+          level: 'ERROR',
+          component: 'analysis-sweep',
+          message: `match-dispatch-stuck: analiz ${analysisId} (ilan ${listingId}) eşleştirme kuyruğuna ${MATCH_DISPATCH_MAX_ATTEMPTS} denemede alınamadı: ${reason.slice(0, 200)}`,
+          context: { analysisId, listingId },
+        });
+      }
+    } catch (err) {
+      this.logger.warn(`Deneme sayacı güncellenemedi (analiz ${analysisId}): ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 }
