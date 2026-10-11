@@ -13,16 +13,30 @@ import { AdminProxiesController } from './proxies.controller';
 import { AdminProxiesService } from './proxies.service';
 import { AdminSourcesController } from './sources.controller';
 import { AdminSourcesService } from './sources.service';
+import { AdminLogsController } from './logs.controller';
+import { AdminLogsService } from './logs.service';
+import { AdminPlansController } from './plans.controller';
+import { AdminPlansService } from './plans.service';
+import { AdminSettingsController } from './settings.controller';
+import { AdminSettingsService } from './settings.service';
 
 @Module({
   imports: [AuthModule],
-  controllers: [AdminUsersController, AdminListingsController, AdminSourcesController, AdminJobsController, AdminProxiesController],
+  controllers: [
+    AdminUsersController, AdminListingsController, AdminSourcesController, AdminJobsController, AdminProxiesController,
+    AdminPlansController,
+    AdminSettingsController,
+    AdminLogsController,
+  ],
   providers: [
     AdminUsersService,
     AdminListingsService,
     AdminSourcesService,
     AdminJobsService,
     AdminProxiesService,
+    AdminPlansService,
+    AdminSettingsService,
+    AdminLogsService,
     { provide: ALLOW_PRIVATE_URLS, inject: [ENV], useFactory: (env: Env) => env.NODE_ENV !== 'production' },
   ],
 })
