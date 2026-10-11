@@ -1,0 +1,2 @@
+# Yalnız yerel smoke (docker-compose.smoke.override.yml): Caddy'nin kendi iç CA'sıyla sertifika; ACME yok.
+tls internal

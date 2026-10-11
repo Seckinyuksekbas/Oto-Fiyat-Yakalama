@@ -1,0 +1,247 @@
+# Oto Fırsat — production yığını (tek sunucu).
+#
+#   cp .env.prod.example .env.prod   # değerleri doldurun (gitignore'lu; repoya girmez)
+#   docker compose --env-file .env.prod up -d --build --wait
+#
+# Topoloji: yalnız `caddy` dışa port açar (80/443). Caddy tek origin'dir: /api/* → api:3001, gerisi → web:3000.
+# Ağlar: `edge` (caddy, web, api), `backend` (internal: dışa çıkışı yok; postgres, redis ve onlara bağlanan
+# servisler), `egress` (worker/scheduler'ın dış kaynaklara/Telegram'a çıkışı).
+#
+# Env: değerler yalnız `--env-file` ile verilen dosyadan okunur ve her servise YALNIZ ihtiyacı olan değişkenler
+# aktarılır (en az yetki: web hiçbir sır görmez, worker JWT özel anahtarını görmez). Değeri verilmeyen liste
+# girdileri (`- SMTP_USER` gibi) env dosyasında yoksa konteynere hiç aktarılmaz (boş dize değil).
+# `${VAR:?...}` zorunlu değişkenlerde compose eksik değerle başlamayı reddeder.
+#
+# Uygulama env kuralları production'da ayrıca açılışta doğrulanır (COOKIE_SECURE, https PUBLIC_BASE_URL, SMTP,
+# connection_limit...): eksik/güvensiz değerde süreç açılmaz, hata değişken adını söyler, değeri yazdırmaz.
+
+x-node-service: &node-service
+  restart: unless-stopped
+  init: true # tini: SIGTERM node'a iletilir, zombi süreç kalmaz
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "5" }
+
+x-worker-build: &worker-build
+  context: .
+  dockerfile: docker/worker.Dockerfile
+
+x-worker-env: &worker-env
+  NODE_ENV: production
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD zorunlu}@redis:6379
+  DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:?DATA_ENCRYPTION_KEY zorunlu}
+  PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL zorunlu}
+  BOT_CONTACT_URL: ${BOT_CONTACT_URL:?BOT_CONTACT_URL zorunlu}
+  SHUTDOWN_TIMEOUT_MS: ${SHUTDOWN_TIMEOUT_MS:-30000}
+  # İsteğe bağlı (değersiz): env dosyasında yoksa aktarılmaz, uygulama varsayılanı geçerli
+  SCHEDULER_TICK_MS:
+  MONITOR_INTERVAL_MS:
+  SCRAPE_CONCURRENCY:
+  ANALYZE_CONCURRENCY:
+  MATCH_CONCURRENCY:
+  NOTIFY_CONCURRENCY:
+  TELEGRAM_BOT_TOKEN:
+  TELEGRAM_API_BASE:
+
+services:
+  caddy:
+    image: caddy:2.10.2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?SITE_ADDRESS zorunlu (ör. oto.example.com)}
+      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL zorunlu (Let's Encrypt bildirimleri)}
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data # TLS sertifikaları + ACME hesabı: kalıcı olmalı (oran sınırı)
+      - caddyconfig:/config
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:2019/config/"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    depends_on:
+      api: { condition: service_healthy }
+      web: { condition: service_healthy }
+    networks: [edge]
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+  web:
+    <<: *node-service
+    image: ${OTO_IMAGE_PREFIX:-oto}/web:${OTO_TAG:-latest}
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+      args:
+        API_ORIGIN: http://api:3001 # gizli değil; derleme anında rewrites'a gömülür
+    environment: # web hiçbir sır almaz
+      NODE_ENV: production
+      API_ORIGIN: http://api:3001
+      CSP_IMG_EXTRA: # isteğe bağlı: CSP img-src'e eklenecek, boşlukla ayrılmış http(s) origin'leri
+    networks: [edge]
+    depends_on:
+      api: { condition: service_healthy }
+
+  api:
+    <<: *node-service
+    image: ${OTO_IMAGE_PREFIX:-oto}/api:${OTO_TAG:-latest}
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    environment:
+      NODE_ENV: production
+      PORT: "3001"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-oto}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD zorunlu}@postgres:5432/${POSTGRES_DB:-oto}?connection_limit=${API_DB_CONNECTION_LIMIT:-10}
+      REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD zorunlu}@redis:6379
+      JWT_PRIVATE_KEY: ${JWT_PRIVATE_KEY:?JWT_PRIVATE_KEY zorunlu}
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY:?JWT_PUBLIC_KEY zorunlu}
+      DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:?DATA_ENCRYPTION_KEY zorunlu}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?PUBLIC_BASE_URL zorunlu}
+      COOKIE_SECURE: "true"
+      TRUST_PROXY: "1" # tek güvenilir vekil: Caddy (istemci IP'si X-Forwarded-For'un son halkası)
+      MAIL_TRANSPORT: smtp
+      SMTP_HOST: ${SMTP_HOST:?SMTP_HOST zorunlu}
+      SMTP_PORT: ${SMTP_PORT:?SMTP_PORT zorunlu (587 STARTTLS ya da 465 TLS)}
+      SMTP_FROM: ${SMTP_FROM:?SMTP_FROM zorunlu}
+      # İsteğe bağlı (değersiz): env dosyasında yoksa konteynere hiç aktarılmaz, uygulama varsayılanı geçerli
+      SMTP_USER:
+      SMTP_PASS:
+      SMTP_SECURE:
+      SMTP_REQUIRE_TLS:
+      HIBP_ENABLED:
+      TELEGRAM_BOT_TOKEN:
+      TELEGRAM_BOT_USERNAME:
+      TELEGRAM_MODE:
+      TELEGRAM_WEBHOOK_SECRET:
+      TELEGRAM_API_BASE:
+      PROXY_CHECK_URL:
+    networks: [edge, backend]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  worker:
+    <<: *node-service
+    image: ${OTO_IMAGE_PREFIX:-oto}/worker:${OTO_TAG:-latest}
+    build: *worker-build
+    command: ["node", "dist/main.js"]
+    environment:
+      <<: *worker-env
+      ROLE: worker
+      # connection_limit >= SCRAPE+ANALYZE+MATCH+NOTIFY_CONCURRENCY + 5 (Telegram) + 3 (varsayılanlarla 26)
+      DATABASE_URL: postgresql://${POSTGRES_USER:-oto}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD zorunlu}@postgres:5432/${POSTGRES_DB:-oto}?connection_limit=${WORKER_DB_CONNECTION_LIMIT:-30}
+    deploy:
+      replicas: ${WORKER_REPLICAS:-2}
+    stop_grace_period: 45s # SHUTDOWN_TIMEOUT_MS (en fazla 40 sn) + zorla kapatma payı
+    networks: [backend, egress]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  scheduler:
+    <<: *node-service
+    image: ${OTO_IMAGE_PREFIX:-oto}/worker:${OTO_TAG:-latest}
+    build: *worker-build
+    command: ["node", "dist/main.js", "--role=scheduler"]
+    environment:
+      <<: *worker-env
+      ROLE: scheduler
+      # Scheduler kuyruk tüketmez: connection_limit >= 3
+      DATABASE_URL: postgresql://${POSTGRES_USER:-oto}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD zorunlu}@postgres:5432/${POSTGRES_DB:-oto}?connection_limit=${SCHEDULER_DB_CONNECTION_LIMIT:-5}
+    # Tek örnek: Redis `scheduler:leader` kilidi ikinci örneği zaten bekletir, ama ölçeklenmez.
+    deploy:
+      replicas: 1
+    stop_grace_period: 45s
+    networks: [backend, egress]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  migrate:
+    image: ${OTO_IMAGE_PREFIX:-oto}/migrate:${OTO_TAG:-latest}
+    build:
+      context: .
+      dockerfile: docker/migrate.Dockerfile
+    restart: "no" # tek seferlik iş: `prisma migrate deploy` (+ SEED_ON_MIGRATE=true ise seed)
+    init: true
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER:-oto}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD zorunlu}@postgres:5432/${POSTGRES_DB:-oto}
+      SEED_ON_MIGRATE: ${SEED_ON_MIGRATE:-false}
+      SEED_DEMO_SOURCE: "false" # production'da demo kaynak yok (seed true'yu zaten reddeder)
+      SEED_ADMIN_EMAIL: # isteğe bağlı: ilk süper admin (yalnız SEED_ON_MIGRATE=true iken)
+      SEED_ADMIN_PASSWORD:
+    networks: [backend]
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-oto}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD zorunlu}
+      POSTGRES_DB: ${POSTGRES_DB:-oto}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+    shm_size: 256mb
+    networks: [backend]
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # AOF (her saniye fsync) + kuyruk verisi için noeviction (BullMQ anahtarları asla atılmamalı).
+    # Parola argv yerine yalnız konteyner env'inden okunur.
+    command:
+      - sh
+      - -c
+      - exec redis-server --appendonly yes --appendfsync everysec --maxmemory-policy noeviction --requirepass "$$REDIS_PASSWORD"
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD zorunlu}
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?REDIS_PASSWORD zorunlu}
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+    networks: [backend]
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+  # backup: Task 10 (günlük pg_dump + saklama) bu noktaya eklenecek — `backend` ağı, `postgres` bağımlılığı.
+
+networks:
+  edge: {}
+  backend:
+    internal: true # postgres/redis'in dışa çıkışı yok
+  egress: {}
+
+volumes:
+  pgdata: {}
+  redisdata: {}
+  caddydata: {}
+  caddyconfig: {}
