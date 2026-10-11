@@ -56,3 +56,10 @@ pnpm lint && pnpm typecheck
 pnpm test        # birim testleri
 pnpm test:e2e    # Testcontainers ile Postgres + Redis (Docker gerekir)
 ```
+
+## Web uygulaması (kullanıcı paneli)
+```bash
+PUBLIC_BASE_URL=http://localhost:3000 pnpm dev:api   # API :3001
+pnpm dev:web                                          # http://localhost:3000
+```
+Next.js 15 tabanlı "Gece Showroom" arayüzü; `/api/*` istekleri `API_ORIGIN` (varsayılan `http://localhost:3001`, build zamanında sabitlenir) adresine yönlendirilir. Rotalar, oturum yenileme modeli, SSE istemci kuralları ve tasarım tokenları: [`docs/web.md`](docs/web.md). Görsel smoke: `node apps/web/scripts/screenshots.mjs` (Playwright; ilk kez `pnpm --filter @oto/web exec playwright install chromium`).

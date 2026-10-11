@@ -9,3 +9,4 @@ export * from './queues';
 export * from './schemas/search-profile';
 export * from './notifications';
 export * from './schemas/channels';
+export * from './schemas/panel';

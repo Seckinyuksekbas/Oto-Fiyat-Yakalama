@@ -3,7 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Encryptor, hashToken } from '@oto/server-common';
 import { PrismaService } from '../src/infra/prisma.service';
 import { UserEventsService } from '../src/infra/user-events.service';
-import { createTestApp, loginCookie, newAgent, registerUser, resetState, seedMatch, seedNotification, verifyEmail } from './helpers';
+import { createTestApp, loginCookie, newAgent, registerUser, resetState, seedListing, seedMatch, seedNotification, verifyEmail } from './helpers';
 import { openSse } from './sse';
 import { listRoutes } from './routes';
 
@@ -99,6 +99,64 @@ const CASES: Record<string, Case> = {
     expect((await A.agent.get('/api/v1/me/matches')).body.items.map((m: { id: number }) => m.id)).toEqual([aMatch]);
     expect((await B.agent.get('/api/v1/me/matches')).body.items.map((m: { id: number }) => m.id)).toEqual([bMatch]);
     expect((await B.agent.get(`/api/v1/me/matches?profileId=${id}`)).body.items).toEqual([]);
+  },
+  'GET /me/opportunities': async ({ A, B }) => {
+    const { listingId } = await seedListing(app);
+    await app.get(PrismaService).favorite.create({ data: { userId: A.user.id, listingId } });
+    expect((await A.agent.get('/api/v1/me/opportunities')).body.items[0].isFavorite).toBe(true);
+    const bView = await B.agent.get('/api/v1/me/opportunities');
+    expect(bView.body.items[0].id).toBe(listingId);
+    expect(bView.body.items[0].isFavorite).toBe(false);
+  },
+  'GET /me/listings/:id': async ({ A, B }) => {
+    await verifyEmail(app, A.user.id);
+    const { id: pid } = (await A.agent.post('/api/v1/me/search-profiles').send({ name: 'A' })).body;
+    const mId = await seedMatch(app, A.user.id, pid);
+    const listingId = (await app.get(PrismaService).listingMatch.findUniqueOrThrow({ where: { id: mId } })).listingId;
+    const aView = await A.agent.get(`/api/v1/me/listings/${listingId}`);
+    expect(aView.body.myMatches.map((m: { id: number }) => m.id)).toEqual([mId]);
+    const bView = await B.agent.get(`/api/v1/me/listings/${listingId}`);
+    expect(bView.status).toBe(200);
+    expect(bView.body.myMatches).toEqual([]);
+    expect(JSON.stringify(bView.body)).not.toContain(pid);
+  },
+  'GET /me/favorites': async ({ A, B }) => {
+    const { listingId } = await seedListing(app);
+    expect((await A.agent.put(`/api/v1/me/favorites/${listingId}`).send({ note: 'a' })).status).toBe(200);
+    expect((await B.agent.get('/api/v1/me/favorites')).body.items).toEqual([]);
+    expect((await A.agent.get('/api/v1/me/favorites')).body.items.map((i: { listing: { id: number } }) => i.listing.id)).toEqual([listingId]);
+  },
+  'PUT /me/favorites/:listingId': async ({ A, B }) => {
+    const { listingId } = await seedListing(app);
+    await A.agent.put(`/api/v1/me/favorites/${listingId}`).send({ note: 'a' });
+    const put = await B.agent.put(`/api/v1/me/favorites/${listingId}`).send({ note: 'b' });
+    expect(put.status).toBe(200);
+    expect((await A.agent.get('/api/v1/me/favorites')).body.items[0].note).toBe('a');
+    expect((await B.agent.get('/api/v1/me/favorites')).body.items[0].note).toBe('b');
+  },
+  'DELETE /me/favorites/:listingId': async ({ A, B }) => {
+    const { listingId } = await seedListing(app);
+    await A.agent.put(`/api/v1/me/favorites/${listingId}`).send({});
+    expect((await B.agent.delete(`/api/v1/me/favorites/${listingId}`)).status).toBe(404);
+    expect((await A.agent.get('/api/v1/me/favorites')).body.items).toHaveLength(1);
+  },
+  'GET /me/subscription': async ({ A, B }) => {
+    await A.agent.post('/api/v1/me/search-profiles').send({ name: 'A' });
+    const bView = await B.agent.get('/api/v1/me/subscription');
+    expect(bView.status).toBe(200);
+    expect(bView.body.usage).toEqual({ searchProfiles: 0, notificationsToday: 0 });
+    expect((await A.agent.get('/api/v1/me/subscription')).body.usage.searchProfiles).toBe(1);
+  },
+  'GET /me/dashboard': async ({ A, B }) => {
+    const { id } = (await A.agent.post('/api/v1/me/search-profiles').send({ name: 'A' })).body;
+    const mId = await seedMatch(app, A.user.id, id);
+    const aView = (await A.agent.get('/api/v1/me/dashboard')).body;
+    expect(aView.recentMatches.map((m: { id: number }) => m.id)).toEqual([mId]);
+    const bView = (await B.agent.get('/api/v1/me/dashboard')).body;
+    expect(bView.recentMatches).toEqual([]);
+    expect(bView.profiles.total).toBe(0);
+    expect(bView.series.every((s: { matches: number }) => s.matches === 0)).toBe(true);
+    expect(JSON.stringify(bView)).not.toContain(id);
   },
   'GET /me/notifications': async ({ A, B }) => {
     const aN = await seedNotification(app, A.user.id);

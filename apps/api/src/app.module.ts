@@ -18,6 +18,7 @@ import { InfraModule } from './infra/infra.module';
 import { RedisService } from './infra/redis.service';
 import { AdminModule } from './modules/admin/admin.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { CatalogModule } from './modules/catalog/catalog.module';
 import { HealthModule } from './modules/health/health.module';
 import { MailModule } from './modules/mail/mail.module';
 import { MeModule } from './modules/me/me.module';
@@ -42,6 +43,7 @@ import { TelegramModule } from './modules/telegram/telegram.module';
     AuthModule,
     TelegramModule,
     MeModule,
+    CatalogModule,
     AdminModule,
   ],
   providers: [

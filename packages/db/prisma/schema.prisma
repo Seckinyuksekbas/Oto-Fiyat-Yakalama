@@ -525,6 +525,7 @@ model Notification {
 }
 
 model Favorite {
+  id        Int      @unique @default(autoincrement())
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   listingId Int

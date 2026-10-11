@@ -1,4 +1,4 @@
-# Mimari (Plan 05 sonrası durum)
+# Mimari (Plan 06 sonrası durum)
 
 Ayrıntılı tasarım: `docs/superpowers/specs/2026-10-10-oto-firsat-platformu-design.md`.
 
@@ -6,6 +6,7 @@ Ayrıntılı tasarım: `docs/superpowers/specs/2026-10-10-oto-firsat-platformu-d
 - `packages/shared` — zod şemaları (API sözleşmesi), hata kodları, plan limit tipi, zaman yardımcıları. Frontend de aynı şemaları kullanır.
 - `packages/db` — Prisma şeması (tüm platform modelleri), migration'lar, seed (`FREE/PRO/BUSINESS` planları, ilk süper admin).
 - `apps/api` — NestJS 11 REST API, `/api/v1`.
+- `apps/web` — Next.js 15 kullanıcı paneli (bkz. aşağıda Web katmanı).
 
 ## İstek yaşam döngüsü (apps/api)
 1. `helmet` → `cookie-parser` → JSON gövde (100 kb, hatalar standart formatta) → pino-http (`x-request-id`).
@@ -49,3 +50,12 @@ Akış: `ListingMatch` + `Notification(PENDING)` (aynı transaction) → commit 
 - **Worker:** `NotificationPlanner` (kanal seçimi + günlük limit, kullanıcı başına advisory kilit), `NotificationDispatcher` (commit sonrası kuyruğa ekleme, `jobId = notify-<id>`), `NotifyWorkerHost` (`NOTIFY_CONCURRENCY`; `notify-telegram` için limiter 25/sn), `NotifyService` + `InAppAdapter` (Redis pub/sub `user:<id>`) / `TelegramAdapter` (sohbet başına 1 msj/sn kapısı). Kaybolan kuyruk işlerini scheduler süpürmesi 60 sn sonra yeniden ekler. Teslim garantisi en az bir kezdir.
 - **API:** `/me/notifications` (liste, okundu, canlı SSE akışı `ready`/`notification`/`ping`, 15 dk), `/me/channels` (Telegram bağlama/aç-kapat/kaldır), `/telegram/webhook` (gizli anahtar başlığı) veya geliştirmede `getUpdates` yoklaması. `UserEventsService` tek Redis desen aboneliğini SSE akışlarına dağıtır.
 - **Gizlilik:** kanal `config`'i (chatId) AES-256-GCM şifreli; API yanıtları ve loglar chatId veya bot token'ı içermez.
+
+## Web katmanı (Plan 06)
+Ayrıntılar: [web.md](web.md).
+
+- `apps/web` (Next.js 15 App Router, React 19, TanStack Query) tarayıcının tek muhatabıdır; `/api/*` Next `rewrites` ile API'ye (`API_ORIGIN`, build zamanında sabit) yönlenir, böylece çerezler birinci taraftır. Üretimde tek origin Caddy ile sağlanacaktır (Plan 08).
+- **Oturum:** `middleware.ts` `/app/*` için `access_token` çerezine bakar; yoksa girişte tek seferlik istemci yenilemesi (`try_refresh`, `_r` döngü koruması). `apiFetch` 401'de tek uçuşlu, üç durumlu (`ok|expired|transient`) yenileme yapar; yalnızca `expired` oturumu bitirir.
+- **Canlı bildirim:** tek SSE bağlantısı (`ready`/`notification`/`ping`), 60 sn watchdog, 14 dk 30 sn'de proaktif yenileme, oturum bitince durur.
+- **Panel API'leri (Plan 06):** `/me/opportunities`, `/me/listings/:id`, `/me/favorites`, `/me/dashboard`, `/me/subscription`, `/catalog/*` — hepsi userId kapsamlı repository'ler üzerinden; `Favorite.id` (SERIAL, benzersiz) keyset imleci içindir.
+- **Tasarım sistemi:** CSS tokenları `globals.css`'te; koyu varsayılan, açık tema WCAG AA; yazı tipleri self-hosted (derleme ağsızdır). Plan 07 admin paneli aynı sistemi kullanacaktır.

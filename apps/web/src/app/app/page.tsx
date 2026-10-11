@@ -1,0 +1,13 @@
+import type { Metadata } from 'next';
+import { DashboardView } from './dashboard';
+
+export const metadata: Metadata = { title: 'Dashboard' };
+
+export default function DashboardPage() {
+  return (
+    <>
+      <h1 className="sr-only">Dashboard</h1>
+      <DashboardView />
+    </>
+  );
+}
