@@ -21,6 +21,10 @@ export type NotifyResult =
 /** Kalıcılaştırılan hata metinleri: bot token / URL kimlik bilgisi / sorgu dizisi ayıklanır, 500 karakter. */
 const short = (s: string) => redactSecrets(s).slice(0, 500);
 
+/** Telegram 401 (geçersiz bot token) görüldüğünde konur; MonitorService `telegram:unauthorized` alarmını buradan üretir. */
+export const TELEGRAM_UNAUTHORIZED_FLAG = 'telegram:unauthorized:at';
+const TELEGRAM_UNAUTHORIZED_FLAG_SEC = 60 * 60;
+
 @Injectable()
 export class NotifyService {
   private readonly logger = new Logger(NotifyService.name);
@@ -43,7 +47,9 @@ export class NotifyService {
     } else if (n.channel === 'TELEGRAM') {
       const channel = await this.prisma.notificationChannel.findUnique({ where: { userId_type: { userId: n.userId, type: 'TELEGRAM' } } });
       const plan = await resolveUserPlan(this.prisma, n.userId);
-      if (!channel?.config || !channel.isEnabled || !channel.isVerified || !plan.limits.channels.includes('TELEGRAM')) {
+      // Sistem alarmları personel bildirimidir: paket kanal kısıtı uygulanmaz (yalnızca doğrulanmış/etkin kanal şartı).
+      const planAllows = n.kind === 'SYSTEM_ALERT' || plan.limits.channels.includes('TELEGRAM');
+      if (!channel?.config || !channel.isEnabled || !channel.isVerified || !planAllows) {
         return this.fail(n.id, 'CHANNEL_UNAVAILABLE');
       }
       result = await this.telegram.send(n, channel.config);
@@ -65,7 +71,12 @@ export class NotifyService {
     }
     if (result.kind === 'PERMANENT') {
       if (result.disableChannel) await this.disableTelegram(n.userId, result.error);
-      if (result.error.includes('(401)')) this.logger.error('Telegram bot token geçersiz');
+      if (result.error.includes('(401)')) {
+        this.logger.error('Telegram bot token geçersiz');
+        await this.redis
+          .set(TELEGRAM_UNAUTHORIZED_FLAG, new Date().toISOString(), 'EX', TELEGRAM_UNAUTHORIZED_FLAG_SEC)
+          .catch((err: unknown) => this.logger.warn(`401 işareti yazılamadı: ${String(err)}`));
+      }
       return this.fail(n.id, result.error);
     }
     // RETRYABLE

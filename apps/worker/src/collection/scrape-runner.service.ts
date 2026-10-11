@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { BlockedError, FetchError, getAdapter, LayoutError, normalizeListing, PoliteHttpClient, type ListingProblem, type SourceAdapter } from '@oto/collection';
 import type { JobStatus, Prisma } from '@oto/db';
+import { ADMIN_EVENTS_CHANNEL, type AdminEvent } from '@oto/shared';
 import { Encryptor } from '@oto/server-common';
 import { AlertService } from '../common/alert.service';
 import { ENV } from '../config/config.module';
@@ -58,9 +59,16 @@ export class ScrapeRunner {
   }
 
   /** İşi yalnızca hâlâ RUNNING ise kapatır; stale-reaper zaten kapattıysa üzerine yazmaz. */
-  private async closeJob(id: number, data: Prisma.CollectionJobUpdateManyMutationInput): Promise<void> {
-    const { count } = await this.prisma.collectionJob.updateMany({ where: { id, status: 'RUNNING' }, data });
-    if (count === 0) this.logger.warn(`İş zaten kapatılmış (stale?): ${id}`);
+  private async closeJob(job: { id: number; sourceId: number }, data: Prisma.CollectionJobUpdateManyMutationInput & { status: JobStatus }): Promise<void> {
+    const { count } = await this.prisma.collectionJob.updateMany({ where: { id: job.id, status: 'RUNNING' }, data });
+    if (count === 0) this.logger.warn(`İş zaten kapatılmış (stale?): ${job.id}`);
+    else await this.publishJob(job, data.status);
+  }
+
+  /** Admin canlı akışı için iş durumu değişimi (`admin:events`); en iyi çaba, taramayı asla bozmaz. */
+  private async publishJob(job: { id: number; sourceId: number }, status: JobStatus): Promise<void> {
+    const event: AdminEvent = { type: 'job', jobId: job.id, sourceId: job.sourceId, status, at: new Date().toISOString() };
+    await this.redis.publish(ADMIN_EVENTS_CHANNEL, JSON.stringify(event)).catch((err: unknown) => this.logger.warn(`İş olayı yayınlanamadı: ${message(err)}`));
   }
 
   /** Bir CollectionJob'u uçtan uca yürütür. Yalnızca QUEUED işleri çalıştırır (yeniden teslimde güvenli). */
@@ -74,6 +82,7 @@ export class ScrapeRunner {
 
     const refuse = async (reason: string) => {
       await this.prisma.collectionJob.update({ where: { id: job.id }, data: { status: 'FAILED', finishedAt: new Date(), errorSummary: reason } });
+      await this.publishJob(job, 'FAILED');
       return null;
     };
     if (job.dryRun) return this.runDry(job, source, refuse);
@@ -90,6 +99,7 @@ export class ScrapeRunner {
     const startedAt = new Date();
     const claimed = await this.prisma.collectionJob.updateMany({ where: { id: job.id, status: 'QUEUED' }, data: { status: 'RUNNING', startedAt } });
     if (claimed.count !== 1) return null;
+    await this.publishJob(job, 'RUNNING');
 
     let http: PoliteHttpClient | null = null;
     let resolve: Awaited<ReturnType<AliasService['resolver']>>;
@@ -108,7 +118,7 @@ export class ScrapeRunner {
       await http?.close().catch(() => undefined);
       const reason = `Kurulum hatası: ${message(err)}`.slice(0, 500);
       this.logger.error(`Kaynak ${source.code} için ${reason}`);
-      await this.closeJob(job.id, { status: 'FAILED', finishedAt: new Date(), errorSummary: reason });
+      await this.closeJob(job, { status: 'FAILED', finishedAt: new Date(), errorSummary: reason });
       return { status: 'FAILED', pages: 0, cards: 0, created: 0, updated: 0, removed: 0, failed: 0 };
     }
 
@@ -156,7 +166,7 @@ export class ScrapeRunner {
     if (infra) {
       const reason = `Altyapı hatası: ${message(infra)}`.slice(0, 500);
       this.logger.error(`Kaynak ${source.code} taraması altyapı hatasıyla durdu: ${message(infra)}`);
-      await this.closeJob(job.id, { status: 'FAILED', finishedAt: new Date(), pagesFetched: c.pages, listingsSeen: c.cards, listingsNew: c.created, listingsUpdated: c.updated, errorsCount: c.failed, errorSummary: reason })
+      await this.closeJob(job, { status: 'FAILED', finishedAt: new Date(), pagesFetched: c.pages, listingsSeen: c.cards, listingsNew: c.created, listingsUpdated: c.updated, errorsCount: c.failed, errorSummary: reason })
         .catch((e: unknown) => this.logger.error(`İş durumu güncellenemedi: ${message(e)}`));
       throw infra;
     }
@@ -204,7 +214,7 @@ export class ScrapeRunner {
         errorSummary = notes.length > 0 ? notes.join('; ').slice(0, 500) : null;
       }
 
-      await this.closeJob(job.id, {
+      await this.closeJob(job, {
           status,
           finishedAt: new Date(),
           pagesFetched: c.pages,
@@ -218,7 +228,7 @@ export class ScrapeRunner {
       });
     } catch (err) {
       this.logger.error(`Kaynak ${source.code} sonuç kaydı başarısız: ${message(err)}`);
-      await this.closeJob(job.id, { status: 'FAILED', finishedAt: new Date(), errorSummary: `Altyapı hatası: ${message(err)}`.slice(0, 500) })
+      await this.closeJob(job, { status: 'FAILED', finishedAt: new Date(), errorSummary: `Altyapı hatası: ${message(err)}`.slice(0, 500) })
         .catch((e: unknown) => this.logger.error(`İş durumu güncellenemedi: ${message(e)}`));
       throw err;
     }
@@ -239,7 +249,7 @@ export class ScrapeRunner {
    * Kaynak etkin olmasa da çalışır, ancak izin doğrulaması (permissionVerifiedAt) zorunludur.
    */
   private async runDry(
-    job: { id: number },
+    job: { id: number; sourceId: number },
     source: Prisma.DataSourceGetPayload<{ include: { proxyConfig: true } }>,
     refuse: (reason: string) => Promise<null>,
   ): Promise<RunSummary | null> {
@@ -254,6 +264,7 @@ export class ScrapeRunner {
     }
     const claimed = await this.prisma.collectionJob.updateMany({ where: { id: job.id, status: 'QUEUED' }, data: { status: 'RUNNING', startedAt: new Date() } });
     if (claimed.count !== 1) return null;
+    await this.publishJob(job, 'RUNNING');
 
     const startedAt = Date.now();
     const c = { pages: 0, cards: 0, failed: 0 };
@@ -298,7 +309,7 @@ export class ScrapeRunner {
     const durationMs = Date.now() - startedAt;
     const status: JobStatus = fatal ? 'FAILED' : 'SUCCEEDED';
     const dryRunResult = { pages: c.pages, items, problems: problems.slice(0, DRY_RUN_SAMPLE), durationMs } as unknown as Prisma.InputJsonValue;
-    await this.closeJob(job.id, {
+    await this.closeJob(job, {
       status,
       finishedAt: new Date(),
       pagesFetched: c.pages,

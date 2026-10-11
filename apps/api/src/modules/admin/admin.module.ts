@@ -27,6 +27,10 @@ import { AdminNotificationsController } from './notifications.controller';
 import { AdminNotificationsService } from './notifications.service';
 import { AdminMatchDispatchesController } from './match-dispatches.controller';
 import { AdminMatchDispatchesService } from './match-dispatches.service';
+import { AdminEventsService } from './admin-events.service';
+import { AdminStreamController } from './admin-stream.controller';
+import { AdminOverviewController } from './overview.controller';
+import { AdminOverviewService } from './overview.service';
 
 @Module({
   imports: [AuthModule],
@@ -39,6 +43,8 @@ import { AdminMatchDispatchesService } from './match-dispatches.service';
     AdminWorkersController,
     AdminNotificationsController,
     AdminMatchDispatchesController,
+    AdminOverviewController,
+    AdminStreamController,
   ],
   providers: [
     AdminUsersService,
@@ -53,6 +59,8 @@ import { AdminMatchDispatchesService } from './match-dispatches.service';
     AdminWorkersService,
     AdminNotificationsService,
     AdminMatchDispatchesService,
+    AdminOverviewService,
+    AdminEventsService,
     { provide: ALLOW_PRIVATE_URLS, inject: [ENV], useFactory: (env: Env) => env.NODE_ENV !== 'production' },
   ],
 })

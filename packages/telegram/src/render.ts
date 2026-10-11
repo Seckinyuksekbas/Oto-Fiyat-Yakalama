@@ -61,3 +61,20 @@ export function renderMatchMessage(p: MatchNotificationPayload, opts: { publicBa
   const replyMarkup: InlineKeyboard = { inline_keyboard: [row] };
   return { text, photoUrl, replyMarkup };
 }
+
+/**
+ * Sistem alarmı (SYSTEM_ALERT) için düz metin şablonu: seviye simgesi + HTML kaçışlı mesaj + İstanbul saati.
+ * Mesaj, kaçıştan ÖNCE kırpılır (yarım `&lt;` kalmaz) ve toplam 4096 karakteri aşmaz.
+ */
+export function renderAlertMessage(a: { level: 'WARN' | 'ERROR'; message: string; at: string }): string {
+  const head = a.level === 'ERROR' ? '🚨 <b>Sistem alarmı</b>' : '⚠️ <b>Sistem uyarısı</b>';
+  const tail = `🕒 ${formatIstanbulDateTime(a.at)}`;
+  const build = (msg: string) => [head, escapeHtml(msg), '', tail].join('\n');
+  let max = Array.from(a.message).length;
+  let text = build(a.message);
+  while (text.length > MESSAGE_LIMIT && max > 0) {
+    max = Math.max(0, max - Math.max(1, Math.ceil((text.length - MESSAGE_LIMIT) / 5)));
+    text = build(clip(a.message, max));
+  }
+  return text;
+}

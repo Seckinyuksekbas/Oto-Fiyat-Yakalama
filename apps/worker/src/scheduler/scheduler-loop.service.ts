@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger, type OnApplicationBootstrap, type OnModuleD
 import { ENV } from '../config/config.module';
 import type { Env } from '../config/env';
 import { AnalysisSweepService } from './analysis-sweep.service';
+import { MonitorService } from './monitor.service';
 import { NotificationSweepService } from './notification-sweep.service';
 import { SubscriptionSweepService } from './subscription-sweep.service';
 import { SchedulerService } from './scheduler.service';
@@ -21,6 +22,7 @@ export class SchedulerLoop implements OnApplicationBootstrap, OnModuleDestroy {
     private readonly sweep: AnalysisSweepService,
     private readonly notifySweep: NotificationSweepService,
     private readonly subscriptionSweep: SubscriptionSweepService,
+    private readonly monitor: MonitorService,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
@@ -51,6 +53,7 @@ export class SchedulerLoop implements OnApplicationBootstrap, OnModuleDestroy {
       });
       await this.step('Bildirim yeniden gönderimi', () => this.notifySweep.requeuePending());
       await this.step('Abonelik süresi süpürmesi', () => this.subscriptionSweep.run());
+      await this.step('Alarm izleme', () => this.monitor.check(new Date()));
     } finally {
       this.ticking = false;
     }
