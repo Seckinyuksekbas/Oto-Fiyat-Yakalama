@@ -15,6 +15,7 @@ import { AuditService } from '../../common/audit/audit.service';
 import { Errors } from '../../common/errors/app-error';
 import { PrismaService } from '../../infra/prisma.service';
 import { RedisService } from '../../infra/redis.service';
+import { LOCK_TX_OPTIONS } from '../../infra/tx-options';
 
 /** Worker'lar (AnalysisSettingsService vb.) bu kanala abonedir; mesaj = değişen anahtar. */
 export { SETTINGS_CHANGED_CHANNEL };
@@ -111,7 +112,7 @@ export class AdminSettingsService {
       });
       await this.audit.recordInTx(tx, ctx, { targetType: 'SystemSetting', targetId: key, before: row?.value ?? undefined, after: next });
       return { row: saved, changed: true };
-    });
+    }, LOCK_TX_OPTIONS);
     if (out.changed) {
       await this.redis.publish(SETTINGS_CHANGED_CHANNEL, key).catch((err: unknown) => {
         this.logger.warn(`${SETTINGS_CHANGED_CHANNEL} yayını başarısız (${key}); worker'lar TTL ile güncellenecek: ${err instanceof Error ? err.message : String(err)}`);

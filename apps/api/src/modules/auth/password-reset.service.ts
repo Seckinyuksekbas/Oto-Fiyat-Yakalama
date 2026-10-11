@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { ResetPasswordInput } from '@oto/shared';
 import { AuditService } from '../../common/audit/audit.service';
@@ -6,10 +7,11 @@ import { generateToken, hashToken } from '@oto/server-common';
 import { ENV } from '../../config/config.module';
 import type { Env } from '../../config/env';
 import { PrismaService } from '../../infra/prisma.service';
+import { RedisService } from '../../infra/redis.service';
 import { MailService } from '../mail/mail.service';
 import { resetPasswordMail } from '../mail/templates';
 import { buildLink } from './links';
-import { RESET_TTL_MS } from './auth.constants';
+import { FORGOT_COOLDOWN_SEC, RESET_TTL_MS } from './auth.constants';
 import { PasswordService } from './password.service';
 import { SessionService } from './session.service';
 
@@ -23,11 +25,17 @@ export class PasswordResetService {
     private readonly passwords: PasswordService,
     private readonly sessions: SessionService,
     private readonly audit: AuditService,
+    private readonly redis: RedisService,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
-  /** Kullanıcının var olup olmadığını dışarı sızdırmaz. */
+  /**
+   * Kullanıcının var olup olmadığını dışarı sızdırmaz; e-posta başına 60 sn'de bir gönderir.
+   * Bekleme anahtarı e-postanın sha256'sıdır (Redis'te e-posta düz yazılmaz); bekleme sırasında da yanıt 204'tür.
+   */
   async request(email: string): Promise<void> {
+    const key = `auth:forgot:${createHash('sha256').update(email.trim().toLowerCase()).digest('hex')}`;
+    if ((await this.redis.set(key, '1', 'EX', FORGOT_COOLDOWN_SEC, 'NX')) !== 'OK') return;
     const user = await this.prisma.user.findUnique({ where: { email } });
     if (!user || user.status !== 'ACTIVE') return;
     const token = generateToken();

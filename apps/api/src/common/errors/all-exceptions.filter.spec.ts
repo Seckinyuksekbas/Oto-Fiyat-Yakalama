@@ -1,4 +1,5 @@
 import { HttpException, Logger, type ArgumentsHost } from '@nestjs/common';
+import { Prisma } from '@oto/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppError, Errors } from './app-error';
 import { AllExceptionsFilter } from './all-exceptions.filter';
@@ -63,6 +64,22 @@ describe('AllExceptionsFilter', () => {
     const text = JSON.stringify(body);
     expect(text).not.toContain('secret');
     expect(text).not.toContain(err.stack ?? 'nostack');
+  });
+
+  it('maps Prisma P2028 (interactive transaction timeout) to 503 SERVICE_BUSY', () => {
+    const err = new Prisma.PrismaClientKnownRequestError('Transaction already closed: expired after 15000ms', {
+      code: 'P2028',
+      clientVersion: 'test',
+    });
+    const { status, body } = run(err);
+    expect(status).toBe(503);
+    expect(body.error.code).toBe('SERVICE_BUSY');
+    expect(JSON.stringify(body)).not.toContain('15000ms');
+  });
+
+  it('keeps other Prisma known errors as a generic 500', () => {
+    const err = new Prisma.PrismaClientKnownRequestError('boom', { code: 'P2002', clientVersion: 'test' });
+    expect(run(err).status).toBe(500);
   });
 
   it('AppError is exported for instanceof use', () => {

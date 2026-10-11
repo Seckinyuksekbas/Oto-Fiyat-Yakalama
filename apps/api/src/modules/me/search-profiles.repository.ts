@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import type { NormalizedProfile } from '@oto/shared';
 import { countPreviewSince, previewListings, type MatchFilter, type PreviewListingRow, type SearchProfile } from '@oto/db';
 import { PrismaService } from '../../infra/prisma.service';
+import { LOCK_TX_OPTIONS } from '../../infra/tx-options';
 
 function toData(p: NormalizedProfile) {
   return {
@@ -39,7 +40,7 @@ export class SearchProfilesRepository {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`profiles:${userId}`}))`;
       if ((await tx.searchProfile.count({ where: { userId } })) >= max) return null;
       return tx.searchProfile.create({ data: { ...toData(p), userId } });
-    });
+    }, LOCK_TX_OPTIONS);
   }
 
   async update(userId: string, id: string, p: NormalizedProfile): Promise<SearchProfile | null> {
@@ -61,7 +62,7 @@ export class SearchProfilesRepository {
       if (own.status === 'ACTIVE') return own;
       if ((await tx.searchProfile.count({ where: { userId, status: 'ACTIVE' } })) >= max) return 'LIMIT' as const;
       return tx.searchProfile.update({ where: { id: own.id }, data: { status: 'ACTIVE' } });
-    });
+    }, LOCK_TX_OPTIONS);
   }
 
   async delete(userId: string, id: string): Promise<boolean> {

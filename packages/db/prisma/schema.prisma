@@ -173,6 +173,8 @@ model Session {
   userId           String
   user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   familyId         String
+  /// Ailenin ilk oturumunun zamanı; rotasyonda taşınır (mutlak ömür sınırı)
+  familyStartedAt  DateTime  @default(now())
   refreshTokenHash String    @unique
   userAgent        String?
   ip               String?
@@ -553,6 +555,8 @@ model Favorite {
   createdAt DateTime @default(now())
 
   @@id([userId, listingId])
+  /// Favori listesi keyset sayfalaması (userId, id)
+  @@index([userId, id])
 }
 
 // ---------- Sistem ----------

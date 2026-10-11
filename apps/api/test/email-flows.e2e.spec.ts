@@ -2,6 +2,7 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PrismaService } from '../src/infra/prisma.service';
+import { RedisService } from '../src/infra/redis.service';
 import { MailService } from '../src/modules/mail/mail.service';
 import { createTestApp, registerUser, resetState, tokenFromMail } from './helpers';
 
@@ -81,6 +82,11 @@ describe('password reset', () => {
     const { user } = await registerUser(app, { email: 'two@test.com' });
     mail.outbox.length = 0;
     await http().post('/api/v1/auth/forgot-password').set(xhr).send({ email: 'two@test.com' });
+    // E-posta başına 60 sn bekleme: ikinci isteği göndermeden önce bekleme anahtarını kaldır.
+    const redis = app.get(RedisService);
+    const cooldown = await redis.keys('auth:forgot:*');
+    expect(cooldown).toHaveLength(1);
+    await redis.del(...cooldown);
     await http().post('/api/v1/auth/forgot-password').set(xhr).send({ email: 'two@test.com' });
     expect(mail.outbox).toHaveLength(2);
     const [first, second] = mail.outbox.map((m) => tokenFromMail(m.text));

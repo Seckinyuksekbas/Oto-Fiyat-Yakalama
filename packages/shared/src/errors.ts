@@ -17,6 +17,7 @@ export const ErrorCode = {
   EMAIL_NOT_VERIFIED: 'EMAIL_NOT_VERIFIED',
   FEATURE_DISABLED: 'FEATURE_DISABLED',
   INVALID_OPERATION: 'INVALID_OPERATION',
+  SERVICE_BUSY: 'SERVICE_BUSY',
   INTERNAL: 'INTERNAL',
 } as const;
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];

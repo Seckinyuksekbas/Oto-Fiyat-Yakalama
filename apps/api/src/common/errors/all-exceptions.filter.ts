@@ -1,4 +1,5 @@
 import { ArgumentsHost, Catch, ExceptionFilter, HttpException, Logger } from '@nestjs/common';
+import { Prisma } from '@oto/db';
 import { ErrorCode, type ApiErrorBody } from '@oto/shared';
 import type { Request, Response } from 'express';
 import { AppError } from './app-error';
@@ -35,6 +36,14 @@ export class AllExceptionsFilter implements ExceptionFilter {
       const message =
         status >= 500 ? 'Beklenmeyen bir hata oluştu' : status === 404 ? 'Kayıt bulunamadı' : exception.message;
       return { status, body: { error: { code, message } } };
+    }
+    if (exception instanceof Prisma.PrismaClientKnownRequestError && exception.code === 'P2028') {
+      // İnteraktif transaction maxWait/timeout aşıldı (ör. advisory kilit çekişmesi): geçici durum.
+      this.logger.warn({ requestId, prismaCode: exception.code }, 'Transaction timed out');
+      return {
+        status: 503,
+        body: { error: { code: ErrorCode.SERVICE_BUSY, message: 'Sistem şu anda yoğun, lütfen biraz sonra tekrar deneyin' } },
+      };
     }
     this.logger.error({ err: exception, requestId }, 'Unhandled exception');
     return {

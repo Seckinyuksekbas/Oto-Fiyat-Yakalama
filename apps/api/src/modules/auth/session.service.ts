@@ -4,7 +4,7 @@ import type { Role } from '@oto/db';
 import type { ClientMeta } from '../../common/client-meta';
 import { generateToken, hashToken } from '@oto/server-common';
 import { PrismaService } from '../../infra/prisma.service';
-import { REFRESH_TTL_MS, ROTATION_GRACE_MS } from './auth.constants';
+import { REFRESH_FAMILY_MAX_MS, REFRESH_TTL_MS, ROTATION_GRACE_MS } from './auth.constants';
 
 export type RotateResult =
   | { kind: 'ok'; userId: string; role: Role; familyId: string; refreshToken: string }
@@ -53,6 +53,11 @@ export class SessionService {
     if (row.revokedAt || row.expiresAt.getTime() <= Date.now() || row.user.status !== 'ACTIVE') {
       return { kind: 'invalid' };
     }
+    // Mutlak ömür: rotasyon aileyi süresiz uzatamaz; süre dolunca ailenin tamamı iptal edilir.
+    if (Date.now() - row.familyStartedAt.getTime() > REFRESH_FAMILY_MAX_MS) {
+      await this.revokeFamily(row.familyId);
+      return { kind: 'invalid' };
+    }
     const refreshToken = generateToken();
     const now = new Date();
     const rotated = await this.prisma.$transaction(async (tx) => {
@@ -65,6 +70,7 @@ export class SessionService {
         data: {
           userId: row.userId,
           familyId: row.familyId,
+          familyStartedAt: row.familyStartedAt,
           refreshTokenHash: hashToken(refreshToken),
           ip: meta.ip,
           userAgent: meta.userAgent,
