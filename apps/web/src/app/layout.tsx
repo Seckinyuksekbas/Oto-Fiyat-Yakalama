@@ -3,6 +3,7 @@ import { GeistMono } from 'geist/font/mono';
 import '@fontsource-variable/inter';
 import '@fontsource-variable/instrument-sans';
 import { themeInitScript } from '@/lib/theme';
+import { Providers } from './providers';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -26,7 +27,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
       </head>
-      <body>{children}</body>
+      <body>
+        <Providers>{children}</Providers>
+      </body>
     </html>
   );
 }
