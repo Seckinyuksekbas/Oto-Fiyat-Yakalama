@@ -1,6 +1,5 @@
-import { AppShell } from '@/components/app-shell';
+import { PanelWithNotifications } from '@/components/notification-bell';
 
-// Task 8: `<AppShell bellSlot={<NotificationBell />}>` ile zil buraya bağlanır.
 export default function PanelLayout({ children }: { children: React.ReactNode }) {
-  return <AppShell>{children}</AppShell>;
+  return <PanelWithNotifications>{children}</PanelWithNotifications>;
 }
