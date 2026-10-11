@@ -1,13 +1,15 @@
 import type { TestingModule } from '@nestjs/testing';
 import { ADMIN_EVENTS_CHANNEL, adminEventSchema, notifyJobId, parseSettingValue, userEventChannel } from '@oto/shared';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { AlertService } from '../src/common/alert.service';
+import { BlockedError, FetchError } from '@oto/collection';
+import { SourceHealthService } from '../src/collection/source-health.service';
+import { AlertService, PERSISTENT_ALERT_TTL_SEC } from '../src/common/alert.service';
 import { PrismaService } from '../src/infra/prisma.service';
 import { RedisService } from '../src/infra/redis.service';
 import { NotificationDispatcher } from '../src/notifications/notification-dispatcher';
 import { TELEGRAM_UNAUTHORIZED_FLAG } from '../src/notifications/notify.service';
 import { QueueRegistry } from '../src/queues/queue-registry';
-import { ALERT_THRESHOLDS_KEY, MonitorService, PERSISTENT_ALERT_TTL_SEC } from '../src/scheduler/monitor.service';
+import { ALERT_THRESHOLDS_KEY, MonitorService } from '../src/scheduler/monitor.service';
 import { SchedulerModule } from '../src/scheduler/scheduler.module';
 import { createAdmin, createChannel, createContext, createSource, createUser, resetState } from './helpers';
 
@@ -77,6 +79,95 @@ describe('MonitorService conditions', () => {
     expect(await alertNotes()).toHaveLength(1);
   });
 
+  describe('one problem, one alarm across SourceHealthService and the monitor', () => {
+    const health = () => new SourceHealthService(prisma, ref.get(AlertService));
+    /** Susturma anahtarının kalan ömrünü `sec` kadar kısaltır (zamanın ilerlemesini taklit eder). */
+    async function advance(key: string, sec: number) {
+      const ttl = await redis.ttl(key);
+      if (ttl - sec <= 0) await redis.del(key);
+      else await redis.expire(key, ttl - sec);
+    }
+
+    it('a block followed by a monitor tick 31 minutes later produces exactly one alert', async () => {
+      await createAdmin(ref);
+      const src = await createSource(ref, 'http://demo.invalid');
+      await health().recordFailure(src.id, new BlockedError('engellendi', null));
+      expect((await prisma.dataSource.findUniqueOrThrow({ where: { id: src.id } })).health).toBe('PAUSED');
+      expect(await redis.ttl(`alert:source:${src.id}:blocked`)).toBeGreaterThan(30 * 60);
+      await advance(`alert:source:${src.id}:blocked`, 31 * 60);
+      await monitor.check(new Date());
+      expect(keysOf(await alertNotes())).toEqual([`source:${src.id}:blocked`]);
+    });
+
+    it('DOWN from SourceHealthService is persistent (6 h) so the monitor does not re-fire 31 minutes later', async () => {
+      await createAdmin(ref);
+      const src = await createSource(ref, 'http://demo.invalid', { consecutiveFailures: 5, health: 'DEGRADED' });
+      await health().recordFailure(src.id, new FetchError('NETWORK', 'bağlantı reddedildi', null, true));
+      expect((await prisma.dataSource.findUniqueOrThrow({ where: { id: src.id } })).health).toBe('DOWN');
+      const ttl = await redis.ttl(`alert:source:${src.id}:down`);
+      expect(ttl).toBeGreaterThan(30 * 60);
+      expect(ttl).toBeLessThanOrEqual(PERSISTENT_ALERT_TTL_SEC);
+      await advance(`alert:source:${src.id}:down`, 31 * 60);
+      await monitor.check(new Date());
+      expect(keysOf(await alertNotes())).toEqual([`source:${src.id}:down`]);
+    });
+
+    it('a layout break and the monitor parse-rate condition share one parse key', async () => {
+      await createAdmin(ref);
+      const src = await createSource(ref, 'http://demo.invalid');
+      await health().recordLayoutBreak(src.id, new Error('liste bulunamadı'));
+      const j = await prisma.collectionJob.create({ data: { sourceId: src.id, trigger: 'SCHEDULED', status: 'PARTIAL', pagesFetched: 20, finishedAt: new Date() } });
+      await prisma.scrapeError.createMany({ data: Array.from({ length: 10 }, () => ({ sourceId: src.id, jobId: j.id, kind: 'PARSE' as const, message: 'x', transient: false })) });
+      expect(await monitor.check(new Date())).toEqual([`source:${src.id}:parse`]);
+      expect(await alertNotes()).toHaveLength(1);
+    });
+
+    it('recordFailure waits for a concurrent admin activate and does not overwrite it with stale PAUSED', async () => {
+      const src = await createSource(ref, 'http://demo.invalid', { health: 'PAUSED', consecutiveFailures: 2 });
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      let lockedResolve!: () => void;
+      const locked = new Promise<void>((r) => (lockedResolve = r));
+      // Admin "activate": satırı kilitler, HEALTHY yapar, kısa süre sonra commit eder.
+      const admin = prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM "DataSource" WHERE id = ${src.id} FOR NO KEY UPDATE`;
+        lockedResolve();
+        await gate;
+        await tx.dataSource.update({ where: { id: src.id }, data: { isActive: true, health: 'HEALTHY', consecutiveFailures: 0 } });
+      });
+      await locked;
+      const failure = health().recordFailure(src.id, new FetchError('NETWORK', 'geçici', null, true));
+      await new Promise((r) => setTimeout(r, 300));
+      release();
+      await admin;
+      await failure;
+      const after = await prisma.dataSource.findUniqueOrThrow({ where: { id: src.id } });
+      expect(after.health).toBe('HEALTHY');
+      expect(after.consecutiveFailures).toBe(1);
+    });
+
+    it('recordSuccess does not resurrect a stale health over a concurrent admin pause', async () => {
+      const src = await createSource(ref, 'http://demo.invalid', { health: 'HEALTHY' });
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      let lockedResolve!: () => void;
+      const locked = new Promise<void>((r) => (lockedResolve = r));
+      const admin = prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM "DataSource" WHERE id = ${src.id} FOR NO KEY UPDATE`;
+        lockedResolve();
+        await gate;
+        await tx.dataSource.update({ where: { id: src.id }, data: { isActive: false, health: 'PAUSED' } });
+      });
+      await locked;
+      const success = health().recordSuccess(src.id, 0);
+      await new Promise((r) => setTimeout(r, 300));
+      release();
+      await admin;
+      await success;
+      expect((await prisma.dataSource.findUniqueOrThrow({ where: { id: src.id } })).health).toBe('PAUSED');
+    });
+  });
+
   describe('parser error rate (PARSE errors / pages over the same finished jobs of the last hour)', () => {
     const now = new Date();
     const ago = (ms: number) => new Date(now.getTime() - ms);
@@ -98,7 +189,7 @@ describe('MonitorService conditions', () => {
       await errs(ok.id, okJob.id, 6, 'NETWORK'); // PARSE değil
       await errs(stale.id, (await job(stale.id, { createdAt: ago(3 * 3600_000), finishedAt: ago(2 * 3600_000) })).id, 15); // pencere dışında
       await errs(small.id, (await job(small.id, { pagesFetched: 10 })).id, 9); // örnek < 20 sayfa
-      expect(await monitor.check(now)).toEqual([`source:${bad.id}:parse-rate`]);
+      expect(await monitor.check(now)).toEqual([`source:${bad.id}:parse`]);
     });
 
     it('a running job (errors written before closeJob) does not alarm', async () => {
@@ -115,7 +206,7 @@ describe('MonitorService conditions', () => {
       const s = await createSource(ref, 'http://demo.invalid');
       const j = await job(s.id, { createdAt: ago(3 * 3600_000), startedAt: ago(10 * 60_000), finishedAt: ago(60_000) });
       await errs(s.id, j.id, 6);
-      expect(await monitor.check(now)).toEqual([`source:${s.id}:parse-rate`]);
+      expect(await monitor.check(now)).toEqual([`source:${s.id}:parse`]);
     });
   });
 

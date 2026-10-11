@@ -6,6 +6,7 @@ import {
   DEFAULT_ALERT_THRESHOLDS,
   DEFAULT_ANALYSIS_SETTINGS,
   parseSettingValue,
+  SETTINGS_CHANGED_CHANNEL,
   settingKeySchema,
   type SettingKey,
 } from '@oto/shared';
@@ -16,7 +17,7 @@ import { PrismaService } from '../../infra/prisma.service';
 import { RedisService } from '../../infra/redis.service';
 
 /** Worker'lar (AnalysisSettingsService vb.) bu kanala abonedir; mesaj = değişen anahtar. */
-export const SETTINGS_CHANGED_CHANNEL = 'settings:changed';
+export { SETTINGS_CHANGED_CHANNEL };
 
 export interface AdminSettingView {
   key: SettingKey;

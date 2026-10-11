@@ -1,13 +1,13 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { MATCH_DISPATCH_STUCK_WHERE as STUCK, matchDispatchStuckFlagKey, type AdminStuckDispatchesQuery } from '@oto/shared';
+import { alertDedupeKey, MATCH_DISPATCH_STUCK_WHERE as STUCK, matchDispatchStuckFlagKey, type AdminStuckDispatchesQuery } from '@oto/shared';
 import type { AuditCtx } from '../../common/audit/audit-ctx.decorator';
 import { AuditService } from '../../common/audit/audit.service';
 import { Errors } from '../../common/errors/app-error';
 import { PrismaService } from '../../infra/prisma.service';
 import { RedisService } from '../../infra/redis.service';
 
-/** Worker AlertService susturma anahtarı (`alert:<alert.key>`, 30 dk); alarm anahtarı `match-dispatch-stuck:<id>`. */
-const alertSilenceKey = (analysisId: number) => `alert:match-dispatch-stuck:${analysisId}`;
+/** Worker AlertService susturma anahtarı (ortak `alertDedupeKey`); alarm anahtarı `match-dispatch-stuck:<id>`. */
+const alertSilenceKey = (analysisId: number) => alertDedupeKey(`match-dispatch-stuck:${analysisId}`);
 
 @Injectable()
 export class AdminMatchDispatchesService {

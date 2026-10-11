@@ -12,6 +12,8 @@ export interface SubscriptionSweepResult {
 
 /** Önceki çalıştırmada yarım kalmış (EXPIRED ama profilleri hâlâ fazla) kullanıcıları onarmak için geriye bakış. */
 const REPAIR_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
+/** Başarısız süpürmeden sonra yeniden deneme aralığı: gün işareti silinmez, bu kısa ömre düşürülür (her tick'te denenmez). */
+export const SUBSCRIPTION_SWEEP_RETRY_SEC = 10 * 60;
 
 interface UserOutcome extends SubscriptionSweepResult {
   event?: { userId: string; event: UserEvent };
@@ -29,8 +31,9 @@ export class SubscriptionSweepService {
 
   /**
    * İstanbul gününde bir kez çalışır (Redis NX); bugün zaten çalıştıysa null döner.
-   * Herhangi bir kullanıcı başarısız olursa diğerleri yine işlenir, gün işareti serbest bırakılır ve hata fırlatılır;
-   * sonraki tick yalnızca eksik kalanları onarır (işlem kullanıcı başına idempotenttir).
+   * Herhangi bir kullanıcı başarısız olursa diğerleri yine işlenir ve hata fırlatılır (scheduler deneme başına bir kez loglar).
+   * Gün işareti silinmez; ömrü SUBSCRIPTION_SWEEP_RETRY_SEC'e (10 dk) düşürülür: hata sürerken her tick'te yeniden
+   * denenmez, süre dolunca sonraki tick yalnızca eksik kalanları onarır (işlem kullanıcı başına idempotenttir).
    */
   async run(now: Date = new Date()): Promise<SubscriptionSweepResult | null> {
     const key = `subs:sweep:${istanbulDayKey(now)}`;
@@ -39,7 +42,7 @@ export class SubscriptionSweepService {
     try {
       return await this.sweep(now);
     } catch (err) {
-      await this.redis.del(key).catch(() => undefined);
+      await this.redis.set(key, 'retry', 'EX', SUBSCRIPTION_SWEEP_RETRY_SEC).catch(() => undefined);
       throw err;
     }
   }

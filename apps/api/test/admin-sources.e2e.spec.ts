@@ -266,6 +266,19 @@ describe('test scrape', () => {
   });
 });
 
+describe('test scrape on an inactive source', () => {
+  it('a real (non-dry-run) scrape of an inactive source is refused with 409 and frees the throttle; dry-run still works', async () => {
+    const { agent } = await actor();
+    const s = await createSource(agent); // yeni kaynaklar etkin değildir
+    const refused = await agent.post(`${api}/sources/${s.id}/test-scrape`).send({ dryRun: false });
+    expect(refused.status).toBe(409);
+    expect(refused.body.error.code).toBe('INVALID_OPERATION');
+    expect(await app.get(RedisService).exists(`test-scrape:${s.id}`)).toBe(0);
+    expect(await prisma.collectionJob.count()).toBe(0);
+    expect((await agent.post(`${api}/sources/${s.id}/test-scrape`).send({ dryRun: true })).status).toBe(202);
+  });
+});
+
 describe('SSRF (production mode)', () => {
   let prodApp: NestExpressApplication;
   beforeAll(async () => {

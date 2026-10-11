@@ -92,7 +92,7 @@ export class AdminProxiesService {
   async update(ctx: AuditCtx, id: number, input: AdminProxyUpdate) {
     if (input.url !== undefined) await assertPublicHttpUrl(input.url, { allowPrivate: this.allowPrivate, allowCredentials: true });
     return this.prisma.$transaction(async (tx) => {
-      const [locked] = await tx.$queryRaw<{ id: number }[]>`SELECT id FROM "ProxyConfig" WHERE id = ${id} FOR UPDATE`;
+      const [locked] = await tx.$queryRaw<{ id: number }[]>`SELECT id FROM "ProxyConfig" WHERE id = ${id} FOR NO KEY UPDATE`;
       if (!locked) throw Errors.notFound();
       const before = await tx.proxyConfig.findUniqueOrThrow({ where: { id } });
       const beforeUrl = this.encryptor.decrypt(before.urlEncrypted);

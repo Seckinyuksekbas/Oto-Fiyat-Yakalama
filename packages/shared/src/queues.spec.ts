@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { analyzeJobSchema, matchJobSchema, QueueName, scrapeJobSchema } from './index';
+import { alertDedupeKey, analyzeJobSchema, matchJobSchema, QueueName, SCRAPE_JOB_OPTS, scrapeJobSchema, SETTINGS_CHANGED_CHANNEL } from './index';
+
+describe('shared seams (API + worker)', () => {
+  it('scrape job retention: completed 24 h, failed 7 days', () => {
+    expect(SCRAPE_JOB_OPTS).toEqual({ removeOnComplete: { age: 86_400 }, removeOnFail: { age: 604_800 } });
+  });
+
+  it('settings channel and alert dedupe key format', () => {
+    expect(SETTINGS_CHANGED_CHANNEL).toBe('settings:changed');
+    expect(alertDedupeKey('match-dispatch-stuck:7')).toBe('alert:match-dispatch-stuck:7');
+  });
+});
 
 describe('queue contracts', () => {
   it('names queues without colons (BullMQ restriction)', () => {

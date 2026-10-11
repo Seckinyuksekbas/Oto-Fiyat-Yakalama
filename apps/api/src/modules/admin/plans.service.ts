@@ -111,7 +111,7 @@ export class AdminPlansService {
 
   async update(ctx: AuditCtx, id: string, body: AdminPlanUpdate): Promise<{ plan: AdminPlanView & { usersOverProfileLimit: number } }> {
     const plan = await this.prisma.$transaction(async (tx) => {
-      const locked = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM "SubscriptionPlan" WHERE id = ${id} FOR UPDATE`;
+      const locked = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM "SubscriptionPlan" WHERE id = ${id} FOR NO KEY UPDATE`;
       if (locked.length === 0) throw Errors.notFound();
       const before = await tx.subscriptionPlan.findUniqueOrThrow({ where: { id } });
       if (before.code === FREE_PLAN_CODE && body.isActive === false) throw conflict('FREE paketi pasifleştirilemez');

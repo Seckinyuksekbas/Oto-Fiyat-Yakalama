@@ -104,7 +104,7 @@ export class AdminUsersService {
   async get(id: string): Promise<AdminUserDetail> {
     const u = await this.prisma.user.findUnique({
       where: { id },
-      include: { subscriptions: { where: { status: 'ACTIVE' }, include: { plan: true }, take: 1 } },
+      include: { subscriptions: { where: liveSubscription(new Date()), include: { plan: true }, orderBy: { startsAt: 'desc' }, take: 1 } },
     });
     if (!u) throw Errors.notFound();
     const [searchProfiles, activeSessions] = await Promise.all([
@@ -247,6 +247,9 @@ export class AdminUsersService {
     const out = await this.prisma.$transaction(async (tx) => {
       const { target } = await this.lock(tx, actor, id);
       if (target.id === actor.id) throw conflict('Kendi aboneliğinizi değiştiremezsiniz');
+      // Paket satırı FOR SHARE ile kilitlenir: eşzamanlı pasifleştirme (plans.update, FOR NO KEY UPDATE) ya önce commit
+      // edilir ve burada görülür ya da bu işlem bitene kadar bekler.
+      await tx.$queryRaw`SELECT id FROM "SubscriptionPlan" WHERE id = ${input.planId} FOR SHARE`;
       const plan = await tx.subscriptionPlan.findUnique({ where: { id: input.planId } });
       if (!plan) throw Errors.validation([{ path: ['planId'], message: 'Paket bulunamadı' }]);
       if (!plan.isActive) throw conflict('Pasif pakete abonelik atanamaz');

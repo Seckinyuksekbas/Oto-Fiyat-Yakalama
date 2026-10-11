@@ -365,6 +365,32 @@ describe('subscription change', () => {
     expect((await prisma.notification.findFirstOrThrow({ where: { userId: v.user.id, kind: 'SYSTEM_ALERT' } })).payload).toMatchObject({ count: 2 });
   });
 
+  it('a plan deactivated concurrently (row locked, then committed) is re-checked under FOR SHARE: 409', async () => {
+    const admin = await actor('ADMIN');
+    const v = await registerUser(app, { email: 'race@test.com' });
+    const business = await planId('BUSINESS');
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let lockedResolve!: () => void;
+    const locked = new Promise<void>((r) => (lockedResolve = r));
+    // Paket güncellemesi sürüyor: satır kilitli, isActive=false henüz commit edilmedi.
+    const deactivate = prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "SubscriptionPlan" WHERE id = ${business} FOR NO KEY UPDATE`;
+      await tx.subscriptionPlan.update({ where: { id: business }, data: { isActive: false } });
+      lockedResolve();
+      await gate;
+    });
+    await locked;
+    const req = admin.agent.patch(`${base}/${v.user.id}/subscription`).send({ planId: business, endsAt: null, limitOverrides: null }).then((r) => r);
+    await new Promise((r) => setTimeout(r, 300));
+    release();
+    await deactivate;
+    const res = await req;
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('INVALID_OPERATION');
+    expect(await prisma.userSubscription.count({ where: { userId: v.user.id, planId: business } })).toBe(0);
+  });
+
   it('an admin cannot change their own subscription (409)', async () => {
     const admin = await actor('ADMIN');
     const res = await admin.agent.patch(`${base}/${admin.user.id}/subscription`).send({ planId: await planId('PRO'), endsAt: null, limitOverrides: null });
@@ -382,6 +408,16 @@ describe('live-plan semantics and quota NULL-safety', () => {
     expect(row.planCode).toBe('FREE');
     expect((await admin.agent.get(base).query({ plan: 'PRO' })).body.total).toBe(0);
     expect((await admin.agent.get(base).query({ plan: 'FREE', q: 'exp@' })).body.total).toBe(1);
+  });
+
+  it('user detail ignores an expired-but-ACTIVE subscription and shows the newest live one', async () => {
+    const admin = await actor('ADMIN');
+    const v = await registerUser(app, { email: 'det@test.com' });
+    await prisma.userSubscription.updateMany({ where: { userId: v.user.id }, data: { status: 'CANCELED' } });
+    await prisma.userSubscription.create({ data: { userId: v.user.id, planId: await planId('PRO'), endsAt: new Date(Date.now() - 1000), startsAt: new Date(Date.now() - 60_000) } });
+    expect((await admin.agent.get(`${base}/${v.user.id}`)).body.subscription).toBeNull();
+    await prisma.userSubscription.create({ data: { userId: v.user.id, planId: await planId('BUSINESS'), startsAt: new Date(Date.now() - 120_000) } });
+    expect((await admin.agent.get(`${base}/${v.user.id}`)).body.subscription).toMatchObject({ planCode: 'BUSINESS', status: 'ACTIVE' });
   });
 
   it('FAILED rows with NULL lastError still count toward the quota; USER_INACTIVE ones do not', async () => {

@@ -24,6 +24,13 @@ describe('redactSecrets', () => {
     expect(out).toBe('proxy http://***@10.0.0.1:8080/x?… failed');
   });
 
+  it('masks userinfo and query for any scheme, not only http(s)', () => {
+    expect(redactSecrets('connect redis://:hunter2@redis:6379/0 failed')).toBe('connect redis://***@redis:6379/0 failed');
+    expect(redactSecrets('proxy socks5://u:p4ss@10.0.0.1:1080 refused')).toBe('proxy socks5://***@10.0.0.1:1080 refused');
+    expect(redactSecrets('db postgres://app:pw@db/oto?sslmode=require&password=x down')).toBe('db postgres://***@db/oto?… down');
+    expect(redactSecrets('amqps://guest:guest@mq/vhost')).toBe('amqps://***@mq/vhost');
+  });
+
   it('leaves ordinary text and short numeric pairs alone', () => {
     expect(redactSecrets('Telegram 429 retry_after 12:30 chat 42')).toBe('Telegram 429 retry_after 12:30 chat 42');
     expect(redactSecrets('USER_INACTIVE')).toBe('USER_INACTIVE');

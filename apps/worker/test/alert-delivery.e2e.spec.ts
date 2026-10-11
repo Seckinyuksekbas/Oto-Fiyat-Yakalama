@@ -74,6 +74,17 @@ describe('SYSTEM_ALERT Telegram delivery', () => {
     expect((await prisma.notification.findUniqueOrThrow({ where: { id: row.id } })).status).toBe('SENT');
   });
 
+  it('an admin demoted after the alert was queued does not receive it: FAILED/NOT_ADMIN, nothing sent', async () => {
+    const admin = await createAdmin(ref);
+    await createChannel(ref, admin.id, { chatId: 777 });
+    await ref.get(AlertService).raise({ key: 'demote:1', level: 'ERROR', component: 'test', message: 'gizli alarm' });
+    const row = await prisma.notification.findFirstOrThrow({ where: { channel: 'TELEGRAM', kind: 'SYSTEM_ALERT' } });
+    await prisma.user.update({ where: { id: admin.id }, data: { role: 'USER' } });
+    expect(await ref.get(NotifyService).process(row.id, FIRST)).toEqual({ kind: 'DONE', status: 'FAILED' });
+    expect(fake.requests.filter((r) => r.method === 'sendMessage')).toHaveLength(0);
+    expect(await prisma.notification.findUniqueOrThrow({ where: { id: row.id } })).toMatchObject({ status: 'FAILED', lastError: 'NOT_ADMIN' });
+  });
+
   it('a Telegram 401 sets the unauthorized flag the monitor watches', async () => {
     const admin = await createAdmin(ref);
     await createChannel(ref, admin.id);

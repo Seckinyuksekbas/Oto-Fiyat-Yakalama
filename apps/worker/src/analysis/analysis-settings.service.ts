@@ -1,13 +1,14 @@
 import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import type Redis from 'ioredis';
 import { analysisSettingsSchema, DEFAULT_SETTINGS, type AnalysisSettings } from '@oto/analysis';
+import { SETTINGS_CHANGED_CHANNEL } from '@oto/shared';
 import { PrismaService } from '../infra/prisma.service';
 import { RedisService } from '../infra/redis.service';
 
 export const ANALYSIS_SETTINGS_KEY = 'analysis.settings';
 const CACHE_MS = 60_000;
-/** API ayar kaydından sonra yayınlar; mesaj = değişen anahtar. */
-export const SETTINGS_CHANGED_CHANNEL = 'settings:changed';
+/** API ayar kaydından sonra yayınlar (`@oto/shared`); mesaj = değişen anahtar. */
+export { SETTINGS_CHANGED_CHANNEL };
 
 @Injectable()
 export class AnalysisSettingsService implements OnModuleInit, OnModuleDestroy {

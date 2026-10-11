@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { DataSource, Prisma } from '@oto/db';
-import { ADAPTER_KEYS, ErrorCode, maskUrlQuery, type AdminSourceCreate, type AdminSourceUpdate } from '@oto/shared';
+import { ADAPTER_KEYS, ErrorCode, maskUrlQuery, SCRAPE_JOB_OPTS, scrapeQueueJobId, type AdminSourceCreate, type AdminSourceUpdate } from '@oto/shared';
 import type { AuditCtx } from '../../common/audit/audit-ctx.decorator';
 import { AuditService } from '../../common/audit/audit.service';
 import { AppError, Errors } from '../../common/errors/app-error';
@@ -15,7 +15,7 @@ const RANGE_MS: Record<StatsRange, number> = { '24h': 86_400_000, '7d': 7 * 86_4
 
 export const TEST_SCRAPE_THROTTLE_SEC = 60;
 export const testScrapeKey = (sourceId: number) => `test-scrape:${sourceId}`;
-export const scrapeQueueJobId = (collectionJobId: number) => `scrape-${collectionJobId}`;
+export { scrapeQueueJobId };
 
 const conflict = (msg: string) => new AppError(ErrorCode.INVALID_OPERATION, 409, msg);
 const badRequest = (msg: string) => new AppError(ErrorCode.VALIDATION_FAILED, 400, msg);
@@ -234,6 +234,8 @@ export class AdminSourcesService {
     if (!ADAPTER_KEYS.includes(source.adapterKey)) throw conflict(`Bilinmeyen adapter: ${source.adapterKey}`);
     // Engel/duraklatma sinyali: dry-run bile olsa duraklatılmış kaynağa istek atılmaz (önce neden incelenip etkinleştirilmeli).
     if (source.health === 'PAUSED') throw conflict('Kaynak engel/duraklatma nedeniyle durdurulmuş; önce nedeni inceleyip etkinleştirin');
+    // Gerçek (kayıt yazan) tarama yalnızca etkin kaynakta; etkin olmayan kaynakta yalnızca dry-run.
+    if (!dryRun && !source.isActive) throw conflict('Etkin olmayan kaynakta yalnızca dry-run test taraması yapılabilir');
     const key = testScrapeKey(id);
     const acquired = await this.redis.set(key, '1', 'EX', TEST_SCRAPE_THROTTLE_SEC, 'NX');
     if (acquired !== 'OK') throw new AppError(ErrorCode.RATE_LIMITED, 429, 'Bu kaynak için dakikada en fazla 1 test taraması başlatılabilir');
@@ -243,6 +245,9 @@ export class AdminSourcesService {
         // Zamanlayıcı da aynı satır kilidini alır: iş oluşturma sıralanır.
         const [locked] = await tx.$queryRaw<{ id: number }[]>`SELECT id FROM "DataSource" WHERE id = ${id} FOR NO KEY UPDATE`;
         if (!locked) throw Errors.notFound();
+        const fresh = await tx.dataSource.findUniqueOrThrow({ where: { id }, select: { isActive: true, health: true } });
+        if (fresh.health === 'PAUSED') throw conflict('Kaynak engel/duraklatma nedeniyle durdurulmuş; önce nedeni inceleyip etkinleştirin');
+        if (!dryRun && !fresh.isActive) throw conflict('Etkin olmayan kaynakta yalnızca dry-run test taraması yapılabilir');
         const busy = await tx.collectionJob.findFirst({ where: { sourceId: id, status: { in: ['QUEUED', 'RUNNING'] } }, select: { id: true } });
         if (busy) throw conflict('Bu kaynak için devam eden bir iş var');
         const job = await tx.collectionJob.create({ data: { sourceId: id, trigger: 'MANUAL', dryRun } });
@@ -257,7 +262,7 @@ export class AdminSourcesService {
       await this.queues.scrape.add(
         'scrape',
         { collectionJobId: jobId, sourceId: id },
-        { jobId: scrapeQueueJobId(jobId), removeOnComplete: { age: 24 * 60 * 60 }, removeOnFail: { age: 7 * 24 * 60 * 60 } },
+        { jobId: scrapeQueueJobId(jobId), ...SCRAPE_JOB_OPTS },
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

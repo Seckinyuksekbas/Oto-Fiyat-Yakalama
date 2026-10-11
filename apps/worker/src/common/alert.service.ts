@@ -1,11 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { Prisma } from '@oto/db';
-import { ADMIN_EVENTS_CHANNEL, adminAlertEventSchema, userEventChannel, type SystemAlertPayload, type UserEvent } from '@oto/shared';
+import { ADMIN_EVENTS_CHANNEL, adminAlertEventSchema, alertDedupeKey, userEventChannel, type SystemAlertPayload, type UserEvent } from '@oto/shared';
+import { redactSecrets } from '@oto/server-common';
 import { PrismaService } from '../infra/prisma.service';
 import { RedisService } from '../infra/redis.service';
 import { NotificationDispatcher } from '../notifications/notification-dispatcher';
 
 export const ALERT_SUPPRESS_SEC = 30 * 60;
+/** Kalıcı kaynak durumları (DOWN / engel) için yeniden bildirim aralığı; SourceHealthService ve MonitorService aynı değeri kullanır. */
+export const PERSISTENT_ALERT_TTL_SEC = 6 * 60 * 60;
 const MAX_KEY = 200;
 const MAX_MESSAGE = 4000;
 
@@ -26,6 +29,14 @@ export interface Alert {
 }
 
 const ADMIN_ROLES = ['ADMIN', 'SUPER_ADMIN'] as const;
+
+/** SystemLog bağlamındaki tüm metinler (iç içe dahil) yazım anında maskelenir; okuma tarafındaki maskeleme ek savunmadır. */
+function redactStrings(value: unknown): unknown {
+  if (typeof value === 'string') return redactSecrets(value);
+  if (Array.isArray(value)) return value.map(redactStrings);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, redactStrings(v)]));
+  return value;
+}
 
 /**
  * Alarm teslimi (spec §9): SystemLog + aktif adminlere IN_APP `SYSTEM_ALERT` (`user:<id>` yayını) + `admin:events` yayını +
@@ -50,7 +61,7 @@ export class AlertService {
     if (!alert.dedupeLog) await this.log(alert);
     else if ((await this.redis.set(`alert-log:${alert.key}`, '1', 'EX', ttl, 'NX')) === 'OK') await this.log(alert);
 
-    const suppressKey = `alert:${alert.key}`;
+    const suppressKey = alertDedupeKey(alert.key);
     const fresh = await this.redis.set(suppressKey, '1', 'EX', ttl, 'NX');
     if (fresh !== 'OK') return false;
     const at = new Date();
@@ -102,7 +113,7 @@ export class AlertService {
         level: alert.level,
         component: alert.component,
         message: alert.message,
-        context: (alert.context ?? undefined) as Prisma.InputJsonValue | undefined,
+        context: (alert.context ? redactStrings(alert.context) : undefined) as Prisma.InputJsonValue | undefined,
       },
     });
   }

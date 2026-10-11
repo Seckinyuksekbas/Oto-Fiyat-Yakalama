@@ -32,6 +32,20 @@ export const NOTIFY_JOB_OPTS = {
   removeOnFail: { age: 7 * 24 * 60 * 60 },
 };
 
+/**
+ * Tarama işleri (zamanlayıcı + admin test taraması ortak): yeniden deneme yok (iş kendi içinde nazik yeniden dener);
+ * tamamlananlar 24 saat, başarısızlar 7 gün tutulur.
+ */
+/** Tarama kuyruğu iş kimliği (CollectionJob başına tek iş). */
+export function scrapeQueueJobId(collectionJobId: number): string {
+  return `scrape-${collectionJobId}`;
+}
+
+export const SCRAPE_JOB_OPTS = {
+  removeOnComplete: { age: 24 * 60 * 60 },
+  removeOnFail: { age: 7 * 24 * 60 * 60 },
+};
+
 /** Eşleştirme olayı yeniden gönderim sınırı: bu kadar başarısız denemeden sonra süpürme satırı atlar (admin sıfırlayabilir). */
 export const MATCH_DISPATCH_MAX_ATTEMPTS = 10;
 /**

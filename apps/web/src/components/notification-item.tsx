@@ -21,6 +21,7 @@ const ERROR_LABEL: Record<string, string> = {
   CHANNEL_UNAVAILABLE: 'kanal kullanılamıyor',
   TELEGRAM_DISABLED: 'Telegram bildirimleri durduruldu',
   USER_INACTIVE: 'hesap etkin değil',
+  NOT_ADMIN: 'alıcı artık yönetici değil',
   CHANNEL_CONFIG_INVALID: 'kanal ayarı geçersiz',
   INVALID_PAYLOAD: 'bildirim içeriği geçersiz',
 };

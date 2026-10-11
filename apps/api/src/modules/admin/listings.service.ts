@@ -211,10 +211,10 @@ export class AdminListingsService {
   }
 
   /**
-   * Sıra: ilan doğrula, Redis `SET NX EX 60` ile jobId'yi tut, kuyruğa ekle, ardından denetim kaydı (tx).
-   * Denetim eklemeden SONRA yazılır: kuyruk hatasında (503) kayıt oluşmaz ve anahtar serbest bırakılır; iş yoksa
-   * "yapıldı" denetimi de yoktur. Denetim yazımı başarısız olursa iş zaten kuyruktadır (yeniden analiz idempotenttir,
-   * zararsız): anahtar bırakılır ve hata yayılır. Yinelenen istekler (60 sn) aynı jobId'yi alır, yeniden denetlenmez.
+   * Sıra: ilan doğrula, Redis `SET NX EX 60` ile jobId'yi tut, ardından tek transaction'da denetim kaydı + kuyruğa ekleme
+   * (bkz. `enqueue`): kuyruk hatasında (503) tx geri alınır — denetim kaydı oluşmaz — ve anahtar serbest bırakılır.
+   * Ekleme başarılı ama commit başarısızsa iş kuyruktadır (yeniden analiz idempotenttir, zararsız): anahtar korunur ve
+   * hata yayılır. Yinelenen istekler (60 sn) aynı jobId'yi alır, yeniden denetlenmez.
    */
   async reanalyze(ctx: AuditCtx, listingId: number): Promise<{ jobId: string }> {
     const listing = await this.prisma.listing.findUnique({ where: { id: listingId }, select: { id: true, status: true } });

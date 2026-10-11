@@ -322,6 +322,19 @@ describe('GET /admin/notifications', () => {
 });
 
 describe('POST /admin/notifications/retry', () => {
+  it('skips SYSTEM_ALERT rows whose user is no longer an admin (NOT_ADMIN); still retries a current admin row', async () => {
+    const demoted = await registerUser(app);
+    const still = await registerUser(app);
+    await setRole(app, still.user.id, 'ADMIN');
+    const alertPayload = { type: 'SYSTEM_ALERT', key: 'k', level: 'ERROR', message: 'm', at: new Date().toISOString() };
+    const a = await seedNotif(demoted.user.id, { kind: 'SYSTEM_ALERT', channel: 'TELEGRAM', payload: alertPayload });
+    const b = await seedNotif(still.user.id, { kind: 'SYSTEM_ALERT', channel: 'TELEGRAM', payload: alertPayload });
+    const res = await admin.post(api('/notifications/retry')).send({ ids: [a.id, b.id] });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ retried: [b.id], skipped: [{ id: a.id, reason: 'NOT_ADMIN' }] });
+    expect(await prisma.notification.findUniqueOrThrow({ where: { id: a.id } })).toMatchObject({ status: 'FAILED' });
+  });
+
   it('re-enqueues only retryable FAILED rows (remove-then-add), skips the rest, audits once; repeat is a no-op', async () => {
     const u = await registerUser(app);
     const susp = await registerUser(app);

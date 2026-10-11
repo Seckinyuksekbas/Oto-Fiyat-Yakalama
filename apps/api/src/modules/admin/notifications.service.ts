@@ -16,7 +16,7 @@ import { AppError } from '../../common/errors/app-error';
 import { AdminQueues } from '../../infra/admin-queues.service';
 import { PrismaService } from '../../infra/prisma.service';
 
-export type RetrySkipReason = 'NOT_FOUND' | 'NOT_FAILED' | 'USER_INACTIVE' | 'UNSUPPORTED_CHANNEL' | 'TOO_OLD' | 'JOB_IN_FLIGHT';
+export type RetrySkipReason = 'NOT_FOUND' | 'NOT_FAILED' | 'USER_INACTIVE' | 'NOT_ADMIN' | 'UNSUPPORTED_CHANNEL' | 'TOO_OLD' | 'JOB_IN_FLIGHT';
 export interface RetryResult {
   retried: number[];
   skipped: Array<{ id: number; reason: RetrySkipReason }>;
@@ -95,7 +95,7 @@ export class AdminNotificationsService {
   }
 
   /**
-   * Yalnızca FAILED, `USER_INACTIVE` olmayan, kullanıcısı ACTIVE olan, kuyruk kanalındaki (IN_APP/TELEGRAM) ve 7 günden
+   * Yalnızca FAILED, `USER_INACTIVE` olmayan, kullanıcısı ACTIVE olan (SYSTEM_ALERT için hâlâ admin olan; değilse `NOT_ADMIN`), kuyruk kanalındaki (IN_APP/TELEGRAM) ve 7 günden
    * yeni (removeOnFail penceresi; daha eski olay bayattır → `TOO_OLD`) satırlar.
    * 1) `notify-<id>` işinin durumu okunur: bitmiş (failed/completed) iş kaldırılır — yoksa aynı jobId ile ekleme sessizce
    *    yok sayılır; bekleyen/aktif/gecikmeli iş varsa satır `JOB_IN_FLIGHT` atlanır (o iş satırı zaten işleyebilir).
@@ -111,7 +111,7 @@ export class AdminNotificationsService {
     const minCreatedAt = new Date(Date.now() - RETRY_MAX_AGE_MS);
     const rows = await this.prisma.notification.findMany({
       where: { id: { in: order } },
-      select: { id: true, status: true, channel: true, lastError: true, createdAt: true, user: { select: { status: true } } },
+      select: { id: true, kind: true, status: true, channel: true, lastError: true, createdAt: true, user: { select: { status: true, role: true } } },
     });
     const byId = new Map(rows.map((r) => [r.id, r]));
     const skipped = new Map<number, RetrySkipReason>();
@@ -121,6 +121,7 @@ export class AdminNotificationsService {
       if (!r) skipped.set(id, 'NOT_FOUND');
       else if (r.status !== 'FAILED') skipped.set(id, 'NOT_FAILED');
       else if (r.lastError === 'USER_INACTIVE' || r.user.status !== 'ACTIVE') skipped.set(id, 'USER_INACTIVE');
+      else if (r.kind === 'SYSTEM_ALERT' && r.user.role !== 'ADMIN' && r.user.role !== 'SUPER_ADMIN') skipped.set(id, 'NOT_ADMIN');
       else if (!DISPATCHABLE.has(r.channel)) skipped.set(id, 'UNSUPPORTED_CHANNEL');
       else if (r.createdAt < minCreatedAt) skipped.set(id, 'TOO_OLD');
       else candidates.push({ id, channel: r.channel });
@@ -143,6 +144,7 @@ export class AdminNotificationsService {
             AND u.status = 'ACTIVE'
             AND n.status = 'FAILED'
             AND n."lastError" IS DISTINCT FROM 'USER_INACTIVE'
+            AND (n.kind <> 'SYSTEM_ALERT' OR u.role IN ('ADMIN', 'SUPER_ADMIN'))
             AND n.channel IN ('IN_APP', 'TELEGRAM')
             AND n."createdAt" >= ${minCreatedAt}
           RETURNING n.id`;

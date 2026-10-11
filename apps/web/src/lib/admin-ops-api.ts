@@ -58,7 +58,7 @@ export interface AdminNotificationsQuery extends PageQuery {
   userId?: string;
 }
 
-export type RetrySkipReason = 'NOT_FOUND' | 'NOT_FAILED' | 'USER_INACTIVE' | 'UNSUPPORTED_CHANNEL' | 'JOB_IN_FLIGHT' | 'TOO_OLD';
+export type RetrySkipReason = 'NOT_FOUND' | 'NOT_FAILED' | 'USER_INACTIVE' | 'NOT_ADMIN' | 'UNSUPPORTED_CHANNEL' | 'JOB_IN_FLIGHT' | 'TOO_OLD';
 
 export interface NotificationRetryResult {
   retried: number[];
@@ -69,6 +69,7 @@ export const RETRY_SKIP_LABEL: Record<RetrySkipReason, string> = {
   NOT_FOUND: 'Bildirim bulunamadı',
   NOT_FAILED: 'Artık başarısız durumda değil',
   USER_INACTIVE: 'Kullanıcı aktif değil',
+  NOT_ADMIN: 'Alıcı artık yönetici değil',
   UNSUPPORTED_CHANNEL: 'Bu kanal yeniden denenemiyor',
   JOB_IN_FLIGHT: 'Kuyrukta bekleyen işi zaten var',
   TOO_OLD: '7 günden eski',

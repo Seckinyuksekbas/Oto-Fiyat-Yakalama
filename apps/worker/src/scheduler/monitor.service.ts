@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { alertThresholdsSchema, DEFAULT_ALERT_THRESHOLDS, type AlertThresholds } from '@oto/shared';
-import { AlertService } from '../common/alert.service';
+import { AlertService, PERSISTENT_ALERT_TTL_SEC } from '../common/alert.service';
 import { PrismaService } from '../infra/prisma.service';
 import { RedisService } from '../infra/redis.service';
 import { TELEGRAM_UNAUTHORIZED_FLAG } from '../notifications/notify.service';
@@ -13,8 +13,6 @@ export const NOTIFY_FAILURE_MIN_SAMPLE = 10;
 const SCAN_COUNT = 200;
 /** Parse oranı en az bu kadar sayfalık (biten işlerin) örnekle değerlendirilir. */
 export const PARSE_RATE_MIN_PAGES = 20;
-/** Kalıcı kaynak durumları (DOWN / engel) için yeniden bildirim aralığı. */
-export const PERSISTENT_ALERT_TTL_SEC = 6 * 60 * 60;
 /** Kayıp worker alarmı (worker + son nabız anı başına) bir kez verilir; seen kaydının ömrü kadar hatırlanır. */
 const WORKER_LOST_FLAG_PREFIX = 'monitor:worker-lost:';
 const WORKER_LOST_FLAG_SEC = 24 * 60 * 60;
@@ -74,8 +72,9 @@ export class MonitorService {
   }
 
   /**
-   * Etkin (admin tarafından duraklatılmamış) ama DOWN ya da engel nedeniyle PAUSED kaynaklar. Anahtarlar SourceHealthService
-   * ile aynıdır (`source:<id>:down`, `source:<id>:blocked`): tek engel tek alarm; sürerse 6 saatte bir hatırlatılır.
+   * Etkin (admin tarafından duraklatılmamış) ama DOWN ya da engel nedeniyle PAUSED kaynaklar. Anahtarlar ve susturma süresi
+   * (PERSISTENT_ALERT_TTL_SEC, 6 sa) SourceHealthService ile aynıdır (`source:<id>:down`, `source:<id>:blocked`): tek engel tek
+   * alarm; sürerse 6 saatte bir hatırlatılır.
    */
   private async checkSources(raised: string[]): Promise<void> {
     const rows = await this.prisma.dataSource.findMany({
@@ -95,6 +94,8 @@ export class MonitorService {
   /**
    * Son 1 saatte BİTEN (RUNNING olmayan, dry-run olmayan) işler üzerinden kaynak başına PARSE hatası / çekilen sayfa > eşik.
    * Hata ve sayfa aynı iş kümesinden sayılır (hatalar `ScrapeError.jobId` ile); en az PARSE_RATE_MIN_PAGES sayfa gerekir.
+   * Anahtar SourceHealthService'in iş bazlı ayrıştırma / sayfa yapısı uyarısıyla aynıdır (`source:<id>:parse`): aynı sorun
+   * (bozulan ayrıştırıcı) için iki ayrı alarm verilmez.
    */
   private async checkParseRate(now: Date, t: AlertThresholds, raised: string[]): Promise<void> {
     const since = new Date(now.getTime() - HOUR_MS);
@@ -110,7 +111,7 @@ export class MonitorService {
     for (const r of rows) {
       const rate = r.errors / r.pages;
       if (rate > t.parserErrorRate) {
-        await this.raise(raised, `source:${r.id}:parse-rate`, 'WARN', `${r.name}: son 1 saatte ayrıştırma hata oranı %${Math.round(rate * 100)} (${r.errors} hata / ${r.pages} sayfa).`, {
+        await this.raise(raised, `source:${r.id}:parse`, 'WARN', `${r.name}: son 1 saatte ayrıştırma hata oranı %${Math.round(rate * 100)} (${r.errors} hata / ${r.pages} sayfa).`, {
           sourceId: r.id, errors: r.errors, pages: r.pages, threshold: t.parserErrorRate,
         });
       }
@@ -128,14 +129,14 @@ export class MonitorService {
 
   /**
    * Son 1 saatte FAILED / (SENT + FAILED) > eşik. Kullanıcı bildirimleri (MATCH) ve dış kanal (TELEGRAM) alarm teslimleri
-   * sayılır; IN_APP SYSTEM_ALERT (doğrudan SENT) ve SECURITY oranı şişirmesin diye dışarıda. Askıya alma kaynaklı (USER_INACTIVE)
+   * sayılır; IN_APP SYSTEM_ALERT (doğrudan SENT) ve SECURITY oranı şişirmesin diye dışarıda. Askıya alma / yetki kaybı kaynaklı (USER_INACTIVE, NOT_ADMIN)
    * iptaller teslim hatası sayılmaz.
    */
   private async checkNotifyFailure(now: Date, t: AlertThresholds, raised: string[]): Promise<void> {
     const since = new Date(now.getTime() - HOUR_MS);
     const [row] = await this.prisma.$queryRaw<Array<{ sent: number; failed: number }>>`
       SELECT count(*) FILTER (WHERE status = 'SENT')::int AS sent,
-             count(*) FILTER (WHERE status = 'FAILED' AND "lastError" IS DISTINCT FROM 'USER_INACTIVE')::int AS failed
+             count(*) FILTER (WHERE status = 'FAILED' AND ("lastError" IS NULL OR "lastError" NOT IN ('USER_INACTIVE', 'NOT_ADMIN')))::int AS failed
       FROM "Notification"
       WHERE "createdAt" >= ${since} AND status IN ('SENT', 'FAILED')
         AND (kind = 'MATCH' OR (kind = 'SYSTEM_ALERT' AND channel <> 'IN_APP'))`;

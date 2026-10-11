@@ -1,13 +1,13 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { redactSecrets } from '@oto/server-common';
+import { SCRAPE_JOB_OPTS, scrapeQueueJobId } from '@oto/shared';
 import { PrismaService } from '../infra/prisma.service';
 import { QueueRegistry } from '../queues/queue-registry';
 
 export const STALE_AFTER_MS = 30 * 60 * 1000;
 export const RETENTION_DAYS = 30;
 
-export function scrapeQueueJobId(collectionJobId: number): string {
-  return `scrape-${collectionJobId}`;
-}
+export { scrapeQueueJobId };
 
 @Injectable()
 export class SchedulerService {
@@ -45,14 +45,14 @@ export class SchedulerService {
         await this.queues.scrape.add(
           'scrape',
           { collectionJobId: job.id, sourceId: source.id },
-          { jobId: scrapeQueueJobId(job.id), removeOnComplete: { age: 24 * 60 * 60 }, removeOnFail: { age: 7 * 24 * 60 * 60 } },
+          { jobId: scrapeQueueJobId(job.id), ...SCRAPE_JOB_OPTS },
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         this.logger.error(`Kaynak ${source.code} için iş kuyruğa eklenemedi: ${message}`);
         await this.prisma.collectionJob.update({
           where: { id: job.id },
-          data: { status: 'FAILED', finishedAt: now, errorSummary: `Kuyruğa eklenemedi: ${message}` },
+          data: { status: 'FAILED', finishedAt: now, errorSummary: redactSecrets(`Kuyruğa eklenemedi: ${message}`).slice(0, 500) },
         });
         continue;
       }

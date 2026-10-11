@@ -337,6 +337,34 @@ describe('ScrapeRunner robustness', () => {
     expect(await prisma.listingIssue.count({ where: { sourceId: source.id, externalId: victim.id } })).toBeGreaterThan(0);
   });
 
+  it('redacts URL credentials/queries at write time in ScrapeError, errorSummary and alert log context', async () => {
+    await createAdmin(ref);
+    const source = await createSource(ref, 'http://bot:SECRETPW@127.0.0.1:1');
+    for (let i = 0; i < 3; i++) await runOnce(source.id);
+    const errors = await prisma.scrapeError.findMany({ where: { sourceId: source.id } });
+    expect(errors.length).toBeGreaterThan(0);
+    const jobs = await prisma.collectionJob.findMany({ where: { sourceId: source.id } });
+    const logs = await prisma.systemLog.findMany();
+    expect(logs.length).toBeGreaterThan(0); // DEGRADED alarmı
+    const persisted = JSON.stringify({ errors: errors.map((e) => e.message), jobs: jobs.map((j) => j.errorSummary), logs: logs.map((l) => l.context) });
+    expect(persisted).not.toContain('SECRETPW');
+    expect(persisted).toContain('***@');
+  });
+
+  it('redacts secrets in an infrastructure error summary', async () => {
+    const source = await createSource(ref, demo.baseUrl);
+    const spy = vi.spyOn(ref.get(IngestService), 'ingest').mockRejectedValueOnce(new Error('db down redis://:hunter2@redis:6379/0'));
+    try {
+      const queued = await createQueuedJob(ref, source.id);
+      await expect(runner.run(queued.id)).rejects.toThrow('db down');
+      const job = await prisma.collectionJob.findUniqueOrThrow({ where: { id: queued.id } });
+      expect(job.errorSummary).toContain('Altyapı hatası');
+      expect(job.errorSummary).not.toContain('hunter2');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('treats infrastructure errors as job failures, not source failures', async () => {
     const source = await createSource(ref, demo.baseUrl);
     const spy = vi.spyOn(ref.get(IngestService), 'ingest').mockRejectedValueOnce(new Error('db down'));

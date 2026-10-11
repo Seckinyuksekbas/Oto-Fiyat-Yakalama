@@ -5,7 +5,7 @@ import { PrismaService } from '../src/infra/prisma.service';
 import { RedisService } from '../src/infra/redis.service';
 import { maxSearchProfilesFor } from '@oto/db';
 import { SchedulerModule } from '../src/scheduler/scheduler.module';
-import { SubscriptionSweepService } from '../src/scheduler/subscription-sweep.service';
+import { SUBSCRIPTION_SWEEP_RETRY_SEC, SubscriptionSweepService } from '../src/scheduler/subscription-sweep.service';
 import { createContext, createProfile, createUser, resetState } from './helpers';
 
 let ref: TestingModule;
@@ -100,12 +100,20 @@ describe('SubscriptionSweepService', () => {
     expect(await sweep.run(new Date('2026-10-12T21:00:01Z'))).toEqual({ expired: 1, paused: 0 });
   });
 
-  it('releases the day marker when the sweep fails so the next tick retries', async () => {
+  it('on failure keeps the day marker with a short (10 min) TTL: no retry on every tick, retried once it lapses', async () => {
     const u = await createUser(ref, { emailVerifiedAt: new Date('2026-01-01T00:00:00Z') });
     await subscribe(u.id, 'PRO', new Date('2026-10-11T00:00:00Z'));
-    vi.spyOn(sweep as unknown as { sweep: () => Promise<unknown> }, 'sweep').mockRejectedValueOnce(new Error('db down'));
+    const spy = vi.spyOn(sweep as unknown as { sweep: () => Promise<unknown> }, 'sweep').mockRejectedValueOnce(new Error('db down'));
     await expect(sweep.run(NOW)).rejects.toThrow('db down');
-    expect(await ref.get(RedisService).exists('subs:sweep:20261012')).toBe(0);
+    const ttl = await ref.get(RedisService).ttl('subs:sweep:20261012');
+    expect(ttl).toBeGreaterThan(0);
+    expect(ttl).toBeLessThanOrEqual(SUBSCRIPTION_SWEEP_RETRY_SEC);
+    // sonraki tick'ler (10 dk içinde) yeniden denemez
+    expect(await sweep.run(NOW)).toBeNull();
+    expect(await sweep.run(NOW)).toBeNull();
+    expect(spy).toHaveBeenCalledTimes(1); // null dönen tick'ler süpürmeye ulaşmaz
+    // 10 dk geçti (işaret düştü): yeniden denenir
+    await ref.get(RedisService).del('subs:sweep:20261012');
     expect(await sweep.run(NOW)).toEqual({ expired: 1, paused: 0 });
   });
 
@@ -118,7 +126,7 @@ describe('SubscriptionSweepService', () => {
     expect(status).toEqual({ P0: 'ACTIVE', P1: 'PAUSED', P2: 'PAUSED' });
   });
 
-  it('one user failing does not block others; the day key is released and a rerun repairs only the failed user', async () => {
+  it('one user failing does not block others; the day key is held briefly (10 min) and a later rerun repairs only the failed user', async () => {
     const mk = async (n: number) => {
       const u = await createUser(ref, { emailVerifiedAt: new Date('2026-01-01T00:00:00Z') });
       await subscribe(u.id, 'PRO', new Date('2026-10-11T00:00:00Z'));
@@ -135,8 +143,10 @@ describe('SubscriptionSweepService', () => {
     await expect(sweep.run(NOW)).rejects.toThrow('1 kullanıcıda');
     expect(await prisma.searchProfile.count({ where: { userId: good.id, status: 'PAUSED' } })).toBe(2);
     expect(await prisma.searchProfile.count({ where: { userId: bad.id, status: 'PAUSED' } })).toBe(0);
-    expect(await ref.get(RedisService).exists('subs:sweep:20261012')).toBe(0);
+    expect(await ref.get(RedisService).ttl('subs:sweep:20261012')).toBeLessThanOrEqual(SUBSCRIPTION_SWEEP_RETRY_SEC);
     vi.restoreAllMocks();
+    expect(await sweep.run(NOW)).toBeNull(); // kısa bekleme süresi dolmadan yeniden denenmez
+    await ref.get(RedisService).del('subs:sweep:20261012');
     // Yeniden çalıştırma: bad kullanıcının abonelikleri hâlâ ACTIVE+süresi dolmuş; good zaten onarılmış (EXPIRED, fazla profil yok)
     expect(await sweep.run(NOW)).toEqual({ expired: 1, paused: 2 });
     expect(await prisma.searchProfile.count({ where: { userId: bad.id, status: 'PAUSED' } })).toBe(2);

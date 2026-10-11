@@ -21,6 +21,9 @@ export type NotifyResult =
 /** Kalıcılaştırılan hata metinleri: bot token / URL kimlik bilgisi / sorgu dizisi ayıklanır, 500 karakter. */
 const short = (s: string) => redactSecrets(s).slice(0, 500);
 
+/** Teslim hatası sayılmayan atlama: SYSTEM_ALERT alıcısı artık admin değil (izleme hata oranına girmez). */
+export const NOT_ADMIN = 'NOT_ADMIN';
+
 /** Telegram 401 (geçersiz bot token) görüldüğünde konur; MonitorService `telegram:unauthorized` alarmını buradan üretir. */
 export const TELEGRAM_UNAUTHORIZED_FLAG = 'telegram:unauthorized:at';
 const TELEGRAM_UNAUTHORIZED_FLAG_SEC = 60 * 60;
@@ -37,9 +40,11 @@ export class NotifyService {
   ) {}
 
   async process(notificationId: number, attempt: { attemptsMade: number; maxAttempts: number }): Promise<NotifyResult> {
-    const n = await this.prisma.notification.findUnique({ where: { id: notificationId }, include: { user: { select: { id: true, status: true } } } });
+    const n = await this.prisma.notification.findUnique({ where: { id: notificationId }, include: { user: { select: { id: true, status: true, role: true } } } });
     if (!n || n.status !== 'PENDING') return { kind: 'DONE', status: 'SKIPPED' };
     if (n.user.status !== 'ACTIVE') return this.fail(n.id, 'USER_INACTIVE');
+    // Sistem alarmı personel bildirimidir: kuyruğa alındıktan sonra yetkisi alınan kullanıcıya gönderilmez.
+    if (n.kind === 'SYSTEM_ALERT' && n.user.role !== 'ADMIN' && n.user.role !== 'SUPER_ADMIN') return this.fail(n.id, NOT_ADMIN);
 
     let result: SendResult;
     if (n.channel === 'IN_APP') {

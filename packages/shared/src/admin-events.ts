@@ -5,6 +5,17 @@ const iso = z.string().datetime();
 /** Redis pub/sub kanalı: worker alarmları ve iş durumu değişimleri; API admin SSE akışı (`GET /admin/stream`) buna abone olur. */
 export const ADMIN_EVENTS_CHANNEL = 'admin:events';
 
+/** Redis pub/sub kanalı: API bir `SystemSetting` değiştirince anahtarı yayınlar; worker'lar ilgili önbelleği geçersiz kılar. */
+export const SETTINGS_CHANGED_CHANNEL = 'settings:changed';
+
+/**
+ * Worker AlertService'in susturma (dedupe) Redis anahtarı: `alert:<alarm anahtarı>`. API (ör. takılı eşleştirme sıfırlama)
+ * aynı anahtarı silerek alarmın yinelenirse yeniden verilmesini sağlar.
+ */
+export function alertDedupeKey(key: string): string {
+  return `alert:${key}`;
+}
+
 export const alertLevelSchema = z.enum(['WARN', 'ERROR']);
 export type AlertLevel = z.infer<typeof alertLevelSchema>;
 

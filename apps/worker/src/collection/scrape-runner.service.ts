@@ -2,7 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { BlockedError, FetchError, getAdapter, LayoutError, normalizeListing, PoliteHttpClient, type ListingProblem, type SourceAdapter } from '@oto/collection';
 import type { JobStatus, Prisma } from '@oto/db';
 import { ADMIN_EVENTS_CHANNEL, adminJobEventSchema } from '@oto/shared';
-import { Encryptor } from '@oto/server-common';
+import { Encryptor, redactSecrets } from '@oto/server-common';
 import { AlertService } from '../common/alert.service';
 import { ENV } from '../config/config.module';
 import type { Env } from '../config/env';
@@ -36,7 +36,8 @@ export const MASS_REMOVAL_RATIO = 0.3;
 export const DRY_RUN_MAX_PAGES = 2;
 const DRY_RUN_SAMPLE = 20;
 
-const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
+/** Kalıcılaştırılan/loglanan hata metni: URL kimlik bilgisi, sorgu dizisi ve token'lar yazım anında maskelenir. */
+const message = (err: unknown) => redactSecrets(err instanceof Error ? err.message : String(err));
 
 @Injectable()
 export class ScrapeRunner {
@@ -60,6 +61,7 @@ export class ScrapeRunner {
 
   /** İşi yalnızca hâlâ RUNNING ise kapatır; stale-reaper zaten kapattıysa üzerine yazmaz. */
   private async closeJob(job: { id: number; sourceId: number }, data: Prisma.CollectionJobUpdateManyMutationInput & { status: JobStatus }): Promise<void> {
+    if (typeof data.errorSummary === 'string') data = { ...data, errorSummary: redactSecrets(data.errorSummary).slice(0, 500) };
     const { count } = await this.prisma.collectionJob.updateMany({ where: { id: job.id, status: 'RUNNING' }, data });
     if (count === 0) this.logger.warn(`İş zaten kapatılmış (stale?): ${job.id}`);
     else await this.publishJob(job, data.status);
