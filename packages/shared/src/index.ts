@@ -7,3 +7,5 @@ export * from './schemas/me';
 export * from './schemas/admin';
 export * from './queues';
 export * from './schemas/search-profile';
+export * from './notifications';
+export * from './schemas/channels';

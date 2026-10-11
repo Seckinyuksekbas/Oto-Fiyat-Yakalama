@@ -16,17 +16,25 @@ export const envSchema = z
     SCRAPE_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(2),
     ANALYZE_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
     MATCH_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(4),
+    NOTIFY_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(8),
+    TELEGRAM_BOT_TOKEN: z.string().min(1).optional(),
+    TELEGRAM_API_BASE: z.string().url().default('https://api.telegram.org'),
+    PUBLIC_BASE_URL: z.string().url().optional(),
   })
   .superRefine((env, ctx) => {
     if (env.NODE_ENV !== 'production') return;
-    const fail = (message: string) =>
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['BOT_CONTACT_URL'], message });
-    if (!env.BOT_CONTACT_URL) return fail('production ortamında açıkça ayarlanmalı');
-    const host = new URL(env.BOT_CONTACT_URL).hostname;
-    if (['localhost', '127.0.0.1', '[::1]', '::1'].includes(host))
-      fail('production ortamında localhost olamaz');
+    if (!env.TELEGRAM_API_BASE.startsWith('https://')) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['TELEGRAM_API_BASE'], message: 'production ortamında https olmalı' });
+    }
+    const local = ['localhost', '127.0.0.1', '[::1]', '::1'];
+    for (const key of ['BOT_CONTACT_URL', 'PUBLIC_BASE_URL'] as const) {
+      const fail = (message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, path: [key], message });
+      const value = env[key];
+      if (!value) fail('production ortamında açıkça ayarlanmalı');
+      else if (local.includes(new URL(value).hostname)) fail('production ortamında localhost olamaz');
+    }
   })
-  .transform((env) => ({ ...env, BOT_CONTACT_URL: env.BOT_CONTACT_URL ?? 'http://localhost:3000/bot' }));
+  .transform((env) => ({ ...env, BOT_CONTACT_URL: env.BOT_CONTACT_URL ?? 'http://localhost:3000/bot', PUBLIC_BASE_URL: env.PUBLIC_BASE_URL ?? 'http://localhost:3000' }));
 export type Env = z.infer<typeof envSchema>;
 
 export function parseEnv(source: Record<string, string | undefined>): Env {

@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import type { SubscriptionPlan, User, UserSubscription } from '@oto/db';
+import { resolveUserPlan, type User } from '@oto/db';
 import { PrismaService } from '../../infra/prisma.service';
 
 /** /me altındaki TEK veri erişim noktası. Her sorgu userId ile kapsamlanır. */
@@ -11,16 +11,9 @@ export class MeRepository {
     return this.prisma.user.findFirst({ where: { id: userId, status: { not: 'DELETED' } } });
   }
 
-  findActiveSubscription(userId: string): Promise<(UserSubscription & { plan: SubscriptionPlan }) | null> {
-    return this.prisma.userSubscription.findFirst({
-      where: { userId, status: 'ACTIVE' },
-      include: { plan: true },
-      orderBy: { startsAt: 'desc' },
-    });
-  }
-
-  findPlanByCode(code: string): Promise<SubscriptionPlan | null> {
-    return this.prisma.subscriptionPlan.findUnique({ where: { code } });
+  /** API ve worker için ortak limit çözümleme (packages/db). */
+  resolvePlan(userId: string, now: Date) {
+    return resolveUserPlan(this.prisma, userId, now);
   }
 
   countSearchProfiles(userId: string) {

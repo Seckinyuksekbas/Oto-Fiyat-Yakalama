@@ -1,7 +1,6 @@
 import { RequestMethod } from '@nestjs/common';
 import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 import { ModulesContainer } from '@nestjs/core';
-import type { NestExpressApplication } from '@nestjs/platform-express';
 
 export interface RouteInfo {
   method: string;
@@ -13,7 +12,7 @@ export interface RouteInfo {
 
 const clean = (p: string | undefined) => (p ?? '').replace(/^\/+|\/+$/g, '');
 
-export function listRoutes(app: NestExpressApplication): RouteInfo[] {
+export function listRoutes(app: { get(token: typeof ModulesContainer): ModulesContainer }): RouteInfo[] {
   const routes: RouteInfo[] = [];
   for (const mod of app.get(ModulesContainer).values()) {
     for (const wrapper of mod.controllers.values()) {

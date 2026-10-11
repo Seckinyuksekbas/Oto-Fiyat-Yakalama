@@ -30,3 +30,40 @@ describe('parseEnv', () => {
     );
   });
 });
+
+describe('parseEnv telegram', () => {
+  it('defaults to polling with no token', () => {
+    const env = parseEnv(base);
+    expect(env.TELEGRAM_MODE).toBe('polling');
+    expect(env.TELEGRAM_BOT_TOKEN).toBeUndefined();
+    expect(env.TELEGRAM_API_BASE).toBe('https://api.telegram.org');
+  });
+
+  it('requires a bot username when a token is set', () => {
+    expect(() => parseEnv({ ...base, TELEGRAM_BOT_TOKEN: '1:abc' })).toThrow(/TELEGRAM_BOT_USERNAME/);
+    expect(parseEnv({ ...base, TELEGRAM_BOT_TOKEN: '1:abc', TELEGRAM_BOT_USERNAME: 'otofirsat_bot' }).TELEGRAM_MODE).toBe('polling');
+  });
+
+  it('requires a 32+ char secret in webhook mode with a token', () => {
+    const tg = { ...base, TELEGRAM_BOT_TOKEN: '1:abc', TELEGRAM_BOT_USERNAME: 'otofirsat_bot', TELEGRAM_MODE: 'webhook' };
+    expect(() => parseEnv(tg)).toThrow(/TELEGRAM_WEBHOOK_SECRET/);
+    expect(() => parseEnv({ ...tg, TELEGRAM_WEBHOOK_SECRET: 'short' })).toThrow(/TELEGRAM_WEBHOOK_SECRET/);
+    expect(parseEnv({ ...tg, TELEGRAM_WEBHOOK_SECRET: 'a'.repeat(32) }).TELEGRAM_WEBHOOK_SECRET).toBe('a'.repeat(32));
+    expect(parseEnv({ ...base, TELEGRAM_MODE: 'webhook' }).TELEGRAM_MODE).toBe('webhook');
+  });
+});
+
+describe('parseEnv telegram production rules', () => {
+  const prod = { ...base, NODE_ENV: 'production', TELEGRAM_BOT_TOKEN: '1:abc', TELEGRAM_BOT_USERNAME: 'otofirsat_bot' };
+  it('requires webhook mode with a token in production', () => {
+    expect(() => parseEnv(prod)).toThrow(/TELEGRAM_MODE/);
+    expect(parseEnv({ ...prod, TELEGRAM_MODE: 'webhook', TELEGRAM_WEBHOOK_SECRET: 'a'.repeat(32) }).TELEGRAM_MODE).toBe('webhook');
+    expect(parseEnv({ ...base, NODE_ENV: 'production' }).TELEGRAM_MODE).toBe('polling');
+  });
+  it('requires an https API base in production', () => {
+    const ok = { ...prod, TELEGRAM_MODE: 'webhook', TELEGRAM_WEBHOOK_SECRET: 'a'.repeat(32) };
+    expect(() => parseEnv({ ...ok, TELEGRAM_API_BASE: 'http://127.0.0.1:9' })).toThrow(/TELEGRAM_API_BASE/);
+    expect(parseEnv({ ...ok, TELEGRAM_API_BASE: 'https://example.com' }).TELEGRAM_API_BASE).toBe('https://example.com');
+    expect(parseEnv({ ...base, TELEGRAM_API_BASE: 'http://127.0.0.1:9' }).TELEGRAM_API_BASE).toBe('http://127.0.0.1:9');
+  });
+});

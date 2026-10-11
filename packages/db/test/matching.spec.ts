@@ -129,6 +129,8 @@ describe('matching predicate', () => {
     const rows = await findMatchingProfiles(prisma, FACTS, l.id);
     expect(rows.map((r) => r.id)).toEqual([ok.id]);
     expect(rows[0].lastMatchedPrice).toBe(970_000n);
+    expect(rows[0].channels).toEqual(['IN_APP']);
+    expect(rows[0].name).toBe('p');
     expect([paused.id, suspended.id].some((id) => rows.some((r) => r.id === id))).toBe(false);
   });
 

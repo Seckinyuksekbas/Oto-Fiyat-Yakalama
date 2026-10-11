@@ -2,8 +2,9 @@ import type { DynamicModule, Type } from '@nestjs/common';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { Test, type TestingModule } from '@nestjs/testing';
-import { seedMakeModelAliases, type CollectionJob, type DataSource, type Listing, type ListingAnalysis, type SearchProfile, type User } from '@oto/db';
+import { seedMakeModelAliases, seedPlans, type CollectionJob, type NotificationChannel, type DataSource, type Listing, type ListingAnalysis, type SearchProfile, type User } from '@oto/db';
 import { createDemoSite, type DemoSite } from '@oto/demo-site';
+import { Encryptor, hashToken } from '@oto/server-common';
 import { truncateAll } from '@oto/testing';
 import { CoreModule } from '../src/core.module';
 import { PrismaService } from '../src/infra/prisma.service';
@@ -22,6 +23,7 @@ export async function resetState(ref: TestingModule): Promise<void> {
   await truncateAll(prisma);
   await ref.get(RedisService).flushdb();
   await seedMakeModelAliases(prisma);
+  await seedPlans(prisma);
 }
 
 export async function createAdmin(ref: TestingModule, status: 'ACTIVE' | 'SUSPENDED' = 'ACTIVE') {
@@ -105,4 +107,15 @@ export async function createAnalysis(ref: TestingModule, listingId: number, over
   });
   await prisma.listing.update({ where: { id: listingId }, data: { latestAnalysisId: a.id } });
   return a;
+}
+
+export async function createChannel(ref: TestingModule, userId: string, over: Record<string, unknown> = {}): Promise<NotificationChannel> {
+  const chatId = (over.chatId as number | undefined) ?? 1000 + Math.floor(Math.random() * 1e6);
+  const { chatId: _omit, ...rest } = over;
+  return ref.get(PrismaService).notificationChannel.create({
+    data: {
+      userId, type: 'TELEGRAM', isVerified: true, isEnabled: true,
+      config: ref.get(Encryptor).encryptJson({ chatId }), externalIdHash: hashToken(String(chatId)), ...rest,
+    },
+  });
 }

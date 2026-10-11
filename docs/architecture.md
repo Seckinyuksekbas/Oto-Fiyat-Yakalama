@@ -1,4 +1,4 @@
-# Mimari (Plan 01 sonrası durum)
+# Mimari (Plan 05 sonrası durum)
 
 Ayrıntılı tasarım: `docs/superpowers/specs/2026-10-10-oto-firsat-platformu-design.md`.
 
@@ -35,9 +35,17 @@ Ayrıntılı tasarım: `docs/superpowers/specs/2026-10-10-oto-firsat-platformu-d
 - Scheduler İstanbul saatiyle 03:00'ten sonra günde bir kez tüm aktif ilanlar için `REFRESH` işi üretir; bu analizler `REFRESH` olarak yeniden bildirim üretmez (yalnızca ilanı daha eşleşebilir yapan `REFRESH`/`CHANGE` bir `NEW` üretir), düşük öncelikle (`priority: 100`) kuyruğa girer. Başarılı bir tarama sonrası, o taramada ilk görülen `INSUFFICIENT`/analizsiz ilanlar için `analyze-post-*` `REFRESH` işleri eklenir. Kuralların ayrıntısı: [analysis-engine.md](analysis-engine.md).
 
 ## Eşleştirme (Plan 04)
-Akış: `scrape` → ingest → `analyze` (olay türetme) → `match` → `ListingMatch` (Plan 05: → `notify`).
+Akış: `scrape` → ingest → `analyze` (olay türetme) → `match` → `ListingMatch` → `Notification` → `notify`/`notify-telegram` (Plan 05).
 
 - `MatchWorkerHost` `match` kuyruğunu `MATCH_CONCURRENCY` (varsayılan 4) paralellikle tüketir; `MatchService` ilan başına advisory kilit altında `@oto/db` `matchPredicate` ile ACTIVE profilleri bulur, `decideMatchReason` ile nedeni (`NEW`/`PRICE_DROP`/`RELIST`) belirler ve `ListingMatch`'i `ON CONFLICT DO NOTHING` ile yazar.
 - API tarafında `/me/search-profiles` (CRUD, duraklat/sürdür, önizleme, plan limitleri) ve `/me/matches` (cursor sayfalama) userId kapsamlı repository'lerle çalışır; önizleme aynı `matchPredicate`'i ters yönde kullanır.
 - Ingest, yeni externalId ile gelen ve son 7 günde kaldırılmış bir ilanın ikizini bulursa RELIST yolunu izler.
 - Ayrıntılar: [matching.md](matching.md).
+
+## Bildirimler (Plan 05)
+Akış: `ListingMatch` + `Notification(PENDING)` (aynı transaction) → commit → `notify` / `notify-telegram` kuyruğu → adapter → `SENT`/`FAILED`. Ayrıntılar: [notifications.md](notifications.md).
+
+- **Paketler:** `@oto/telegram` (framework'süz Bot API istemcisi, hata sınıflandırması, mesaj şablonu, test için `FakeTelegramApi`).
+- **Worker:** `NotificationPlanner` (kanal seçimi + günlük limit, kullanıcı başına advisory kilit), `NotificationDispatcher` (commit sonrası kuyruğa ekleme, `jobId = notify-<id>`), `NotifyWorkerHost` (`NOTIFY_CONCURRENCY`; `notify-telegram` için limiter 25/sn), `NotifyService` + `InAppAdapter` (Redis pub/sub `user:<id>`) / `TelegramAdapter` (sohbet başına 1 msj/sn kapısı). Kaybolan kuyruk işlerini scheduler süpürmesi 60 sn sonra yeniden ekler. Teslim garantisi en az bir kezdir.
+- **API:** `/me/notifications` (liste, okundu, canlı SSE akışı `ready`/`notification`/`ping`, 15 dk), `/me/channels` (Telegram bağlama/aç-kapat/kaldır), `/telegram/webhook` (gizli anahtar başlığı) veya geliştirmede `getUpdates` yoklaması. `UserEventsService` tek Redis desen aboneliğini SSE akışlarına dağıtır.
+- **Gizlilik:** kanal `config`'i (chatId) AES-256-GCM şifreli; API yanıtları ve loglar chatId veya bot token'ı içermez.

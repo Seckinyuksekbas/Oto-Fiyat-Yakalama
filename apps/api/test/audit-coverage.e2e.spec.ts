@@ -1,16 +1,17 @@
-import type { NestExpressApplication } from '@nestjs/platform-express';
+import { Test, type TestingModule } from '@nestjs/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AUDIT_ACTION } from '../src/common/audit/audited.decorator';
 import { ROLES } from '../src/common/decorators/roles';
-import { createTestApp } from './helpers';
+import { AppModule } from '../src/app.module';
 import { listRoutes } from './routes';
 
-let app: NestExpressApplication;
+// Yalnızca derlenmiş modül: app.init/listen yok (rota meta verisi için sunucu gerekmez; paralel çalıştırmada port/Redis yarışı olmaz).
+let app: TestingModule;
 beforeAll(async () => {
-  app = await createTestApp();
+  app = await Test.createTestingModule({ imports: [AppModule] }).compile();
 });
 afterAll(async () => {
-  await app.close();
+  await app.close().catch(() => undefined);
 });
 
 describe('admin route policy', () => {

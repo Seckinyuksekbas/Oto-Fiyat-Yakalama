@@ -113,6 +113,8 @@ const listingParams = (f: ListingFacts): ListingSide => ({
 export interface MatchingProfileRow {
   id: string;
   userId: string;
+  name: string;
+  channels: string[];
   notifyOnPriceDrop: boolean;
   priceDropPct: Prisma.Decimal;
   notifyOnRelist: boolean;
@@ -122,7 +124,7 @@ export interface MatchingProfileRow {
 
 export function findMatchingProfiles(db: RawDb, facts: ListingFacts, listingId: number): Promise<MatchingProfileRow[]> {
   return db.$queryRaw<MatchingProfileRow[]>(Prisma.sql`
-    SELECT sp."id", sp."userId", sp."notifyOnPriceDrop", sp."priceDropPct", sp."notifyOnRelist",
+    SELECT sp."id", sp."userId", sp."name", sp."channels"::text[] AS "channels", sp."notifyOnPriceDrop", sp."priceDropPct", sp."notifyOnRelist",
       (SELECT m."matchedPrice" FROM "ListingMatch" m
         WHERE m."searchProfileId" = sp."id" AND m."listingId" = ${listingId}::int
         ORDER BY m."id" DESC LIMIT 1) AS "lastMatchedPrice"

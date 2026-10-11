@@ -236,17 +236,19 @@ model UserSubscription {
 // ---------- Bildirim kanalları ----------
 
 model NotificationChannel {
-  id         String      @id @default(cuid())
-  userId     String
-  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  type       ChannelType
-  config     String? // AES-256-GCM "v1:iv:tag:ct"
-  isVerified Boolean     @default(false)
-  isEnabled  Boolean     @default(true)
-  createdAt  DateTime    @default(now())
-  updatedAt  DateTime    @updatedAt
+  id             String      @id @default(cuid())
+  userId         String
+  user           User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type           ChannelType
+  config         String? // AES-256-GCM "v1:iv:tag:ct"
+  isVerified     Boolean     @default(false)
+  isEnabled      Boolean     @default(true)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  externalIdHash String?
 
   @@unique([userId, type])
+  @@index([type, externalIdHash])
 }
 
 model TelegramLinkToken {
@@ -513,11 +515,13 @@ model Notification {
   sentAt    DateTime?
   readAt    DateTime?
   latencyMs Int?
+  queuedAt  DateTime?
   createdAt DateTime           @default(now())
 
   @@unique([matchId, channel])
   @@index([userId, createdAt])
   @@index([status, channel])
+  @@index([status, queuedAt])
 }
 
 model Favorite {

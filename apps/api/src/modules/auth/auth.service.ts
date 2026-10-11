@@ -1,10 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { Prisma, type User } from '@oto/db';
 import { ErrorCode, type LoginInput, type RegisterInput } from '@oto/shared';
 import { AuditService } from '../../common/audit/audit.service';
 import type { ClientMeta } from '../../common/client-meta';
 import { AppError, Errors } from '../../common/errors/app-error';
 import { PrismaService } from '../../infra/prisma.service';
+import { UserEventsService } from '../../infra/user-events.service';
 import { EmailVerificationService } from './email-verification.service';
 import { LOCK_THRESHOLD, LoginAttemptService } from './login-attempt.service';
 import { PasswordService } from './password.service';
@@ -36,7 +37,10 @@ export class AuthService {
     private readonly attempts: LoginAttemptService,
     private readonly audit: AuditService,
     private readonly verification: EmailVerificationService,
+    private readonly userEvents: UserEventsService,
   ) {}
+
+  private readonly logger = new Logger(AuthService.name);
 
   async register(input: RegisterInput, meta: ClientMeta): Promise<AuthResult> {
     await this.passwords.assertNotBreached(input.password);
@@ -105,7 +109,7 @@ export class AuthService {
         targetId: r.familyId,
         ip: meta.ip,
       });
-      await this.prisma.notification.create({
+      const note = await this.prisma.notification.create({
         data: {
           userId: r.userId,
           kind: 'SECURITY',
@@ -115,6 +119,21 @@ export class AuthService {
           payload: { type: 'REFRESH_REUSED', familyId: r.familyId },
         },
       });
+      try {
+        await this.userEvents.publish(r.userId, {
+          type: 'notification',
+          notification: {
+            id: note.id,
+            kind: 'SECURITY',
+            channel: 'IN_APP',
+            status: note.status,
+            payload: note.payload,
+            createdAt: note.createdAt.toISOString(),
+          },
+        });
+      } catch (err) {
+        this.logger.warn(`Güvenlik bildirimi yayınlanamadı: ${String(err)}`);
+      }
       return { kind: 'reused' };
     }
     if (r.kind !== 'ok') return { kind: r.kind };

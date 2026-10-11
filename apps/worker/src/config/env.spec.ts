@@ -26,6 +26,15 @@ describe('worker env', () => {
     expect(parseEnv({ ...base, MATCH_CONCURRENCY: '8' }).MATCH_CONCURRENCY).toBe(8);
   });
 
+  it('bounds NOTIFY_CONCURRENCY and defaults telegram settings', () => {
+    expect(parseEnv(base).NOTIFY_CONCURRENCY).toBe(8);
+    expect(() => parseEnv({ ...base, NOTIFY_CONCURRENCY: '0' })).toThrow(/NOTIFY_CONCURRENCY/);
+    expect(() => parseEnv({ ...base, NOTIFY_CONCURRENCY: '33' })).toThrow(/NOTIFY_CONCURRENCY/);
+    expect(parseEnv(base).TELEGRAM_BOT_TOKEN).toBeUndefined();
+    expect(parseEnv(base).TELEGRAM_API_BASE).toBe('https://api.telegram.org');
+    expect(parseEnv(base).PUBLIC_BASE_URL).toBe('http://localhost:3000');
+  });
+
   it('rejects an unknown role and missing variables', () => {
     expect(() => parseEnv({ ...base, ROLE: 'boss' })).toThrow(/ROLE/);
     expect(() => parseEnv({})).toThrow(/DATABASE_URL/);
@@ -41,7 +50,19 @@ describe('worker env', () => {
       expect(() => parseEnv({ ...prod, BOT_CONTACT_URL: 'http://127.0.0.1/bot' })).toThrow(/BOT_CONTACT_URL/);
     });
     it('accepts a real URL', () => {
-      expect(parseEnv({ ...prod, BOT_CONTACT_URL: 'https://oto.example/bot' }).BOT_CONTACT_URL).toBe('https://oto.example/bot');
+      expect(parseEnv({ ...prod, BOT_CONTACT_URL: 'https://oto.example/bot', PUBLIC_BASE_URL: 'https://oto.example' }).BOT_CONTACT_URL).toBe('https://oto.example/bot');
+    });
+    it('requires PUBLIC_BASE_URL explicitly and not localhost', () => {
+      const ok = { ...prod, BOT_CONTACT_URL: 'https://oto.example/bot' };
+      expect(() => parseEnv(ok)).toThrow(/PUBLIC_BASE_URL/);
+      expect(() => parseEnv({ ...ok, PUBLIC_BASE_URL: 'http://localhost:3000' })).toThrow(/PUBLIC_BASE_URL/);
+      expect(parseEnv({ ...ok, PUBLIC_BASE_URL: 'https://oto.example' }).PUBLIC_BASE_URL).toBe('https://oto.example');
+    });
+    it('requires an https TELEGRAM_API_BASE', () => {
+      const ok = { ...prod, BOT_CONTACT_URL: 'https://oto.example/bot', PUBLIC_BASE_URL: 'https://oto.example' };
+      expect(() => parseEnv({ ...ok, TELEGRAM_API_BASE: 'http://telegram.internal' })).toThrow(/TELEGRAM_API_BASE/);
+      expect(parseEnv({ ...ok, TELEGRAM_API_BASE: 'https://telegram.internal' }).TELEGRAM_API_BASE).toBe('https://telegram.internal');
+      expect(parseEnv({ ...base, TELEGRAM_API_BASE: 'http://localhost:9999' }).TELEGRAM_API_BASE).toBe('http://localhost:9999');
     });
     it('still defaults in development', () => {
       expect(parseEnv({ ...base, NODE_ENV: 'development' }).BOT_CONTACT_URL).toBe('http://localhost:3000/bot');

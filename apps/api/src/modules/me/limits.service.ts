@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { User } from '@oto/db';
-import { effectiveLimits, planLimitsSchema, type PlanLimits } from '@oto/shared';
+import type { PlanLimits } from '@oto/shared';
 import { Errors } from '../../common/errors/app-error';
 import { MeRepository } from './me.repository';
 
@@ -32,22 +32,19 @@ export class LimitsService {
   async forUser(userId: string, now = new Date()): Promise<UserLimits> {
     const user = await this.repo.findUser(userId);
     if (!user) throw Errors.unauthenticated();
-    const sub = await this.repo.findActiveSubscription(userId);
-    const live = sub && (!sub.endsAt || sub.endsAt > now) ? sub : null;
-    const plan = live?.plan ?? (await this.repo.findPlanByCode('FREE'));
-    if (!plan) throw new Error('FREE planı tanımlı değil (seedPlans çalıştırılmalı)');
-    const limits = effectiveLimits(planLimitsSchema.parse(plan.limits), live?.limitOverrides ?? null);
+    const plan = await this.repo.resolvePlan(userId, now);
+    const limits = plan.limits;
     const emailVerified = user.emailVerifiedAt !== null;
     return {
       user,
       subscription: {
-        planCode: plan.code,
-        planName: plan.name,
+        planCode: plan.planCode,
+        planName: plan.planName,
         limits,
-        status: live ? live.status : 'FALLBACK',
-        endsAt: live ? live.endsAt : null,
+        status: plan.status,
+        endsAt: plan.endsAt,
       },
-      planCode: plan.code,
+      planCode: plan.planCode,
       limits,
       emailVerified,
       maxSearchProfiles: emailVerified ? limits.maxSearchProfiles : Math.min(1, limits.maxSearchProfiles),
