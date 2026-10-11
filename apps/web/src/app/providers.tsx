@@ -5,6 +5,7 @@ import { Toaster } from 'sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { ApiError } from '@/lib/api';
 import { stripRetryFlagFromLocation } from '@/lib/session';
+import { watchSystemTheme } from '@/lib/theme';
 
 export function makeQueryClient() {
   return new QueryClient({
@@ -36,6 +37,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     stripRetryFlagFromLocation();
   }, []);
+  useEffect(() => watchSystemTheme(), []);
   return (
     <QueryClientProvider client={client}>
       <TooltipProvider delayDuration={200}>

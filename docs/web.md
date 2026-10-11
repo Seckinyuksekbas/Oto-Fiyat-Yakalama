@@ -47,7 +47,7 @@ pnpm dev:web                                          # http://localhost:3000
 - **Yeniden kullanılan bileşenler (`components/admin/`):** `DataTable` (offset `{items,total}`, kontrollü sıralama, çoklu seçim, yükleme/boş/hata, ≤ 768 px kart listesi), `FilterSelect`, `KpiTile`/`KpiGrid`, `StatusBadge` (`STATUS_DEFS` sözlüğü), `ConfirmDialog` (yazarak onay, çift gönderim koruması, hata `role="alert"`).
 
 ## Oturum, middleware ve yenileme modeli
-- **Middleware (`src/middleware.ts`)** `/app/*` ve `/admin/*` için çalışır ve `access_token` çerezinin varlığına bakar. `refresh_token` çerezi yalnızca `/api/v1/auth` yoluna kısıtlı olduğundan `/app` isteklerinde görünmez. Çerez yoksa `/giris?next=<yol>&try_refresh=1` yönlendirmesi yapılır; giriş sayfası istemcide bir kez oturum yenilemeyi dener, başarılıysa `next`'e `_r=1` ekleyerek **sert gezinme** (`window.location.replace`) ile döner.
+- **Middleware (`src/middleware.ts`)** `/api/`, `_next/static`, `_next/image` ve `favicon.ico` dışındaki her yolda çalışır (CSP nonce'u için, bkz. Güvenlik başlıkları); oturum denetimi yalnızca `/app`, `/app/*`, `/admin`, `/admin/*` yollarında yapılır (`/application` gibi benzer yollar korunmaz) ve `access_token` çerezinin varlığına bakar. `refresh_token` çerezi yalnızca `/api/v1/auth` yoluna kısıtlı olduğundan `/app` isteklerinde görünmez. Çerez yoksa `/giris?next=<yol>&try_refresh=1` yönlendirmesi yapılır; giriş sayfası istemcide bir kez oturum yenilemeyi dener, başarılıysa `next`'e `_r=1` ekleyerek **sert gezinme** (`window.location.replace`) ile döner.
 - **`_r` döngü koruması:** `_r=1` ile gelen istek hâlâ çerezsizse `/giris?reason=failed` verilir (`try_refresh` eklenmez); yenileme sonsuz döngüye girmez. `next` içinden `_r` temizlenir. **`_r` kalıcı olmaz:** sert gezinme istemci yönlendirme durumunu sıfırlar; ayrıca panel düzenindeki `RetryFlagStripper` adres çubuğundan `_r`yi siler (diğer parametreleri korur) ve `parseOpportunityParams` `_r` dahil bilinmeyen tüm anahtarları atar, böylece süzgeç değişikliklerinde de sızmaz.
 - **`safeNextPath`:** `next` parametresi yalnızca `/app` ya da `/admin` ile başlayan, aynı origin'e ait yollara izin verir (`//`, ters eğik çizgi, mutlak URL, kontrol karakterleri/DEL reddedilir); aksi halde `/app`.
 - **`apiFetch` (`lib/api.ts`)**: `credentials: 'include'`; mutasyonlarda `X-Requested-With: XMLHttpRequest` (API CSRF guard'ı). 401 (`UNAUTHENTICATED` / `TOKEN_INVALID`) gelirse tek uçuşlu (single-flight) `POST /auth/refresh` yapılıp istek bir kez tekrarlanır; eşzamanlı istekler aynı yenileme promise'ini paylaşır. `/auth/*` yolları ve `noRefresh: true` yenileme denemez.
@@ -72,7 +72,7 @@ Sunucu tarafı: [notifications.md](notifications.md). Akış `GET /api/v1/me/not
 - Zil: sayaç `aria-live` bölgesiyle duyurulur; okundu işaretleme hata durumunda geri alınır.
 
 ## Tasarım sistemi: "Gece Showroom"
-- Tokenlar `src/app/globals.css` (`@theme`). Koyu varsayılan; amber yalnızca fırsat/skor/birincil aksiyon için. Tema `data-theme` ile; `<head>` içindeki satır içi betik (`themeInitScript`) ilk boyamadan önce tercihi uygular. Seçenekler: sistem / açık / koyu.
+- Tokenlar `src/app/globals.css` (`@theme`). Koyu varsayılan; amber yalnızca fırsat/skor/birincil aksiyon için. Tema `data-theme` ile; `<head>` içindeki satır içi betik (`themeInitScript`, CSP nonce'u + hash'i ile) ilk boyamadan önce tercihi uygular. Seçenekler: sistem / açık / koyu. Tercih `system` iken işletim sistemi teması değişince `data-theme`'i kökteki dinleyici (`watchSystemTheme`, `Providers` içinde) günceller. `viewport.themeColor` medya duyarlıdır: koyu `#0E0F11`, açık `#F7F6F3` (`--color-bg` tokenlarıyla aynı; `lib/theme.ts` `themeColor`).
 - **Açık tema AA kuralı:** spec yalnızca koyu amberi sabitler; açık temada metin ve kontrol renkleri WCAG AA sağlar: accent `#8A4A0C` (bg/surface/surface-2 üzerinde 5.9–6.9:1), `danger-text #A81D22`, `positive-text #176843`, `warning-text #6F4E08`, kontrol sınırları için `border-strong #7A8088` (>=3:1). Koyu tarafta `border-strong #6A7079`.
 - Yazı tipleri: Instrument Sans (başlık), Inter (gövde), Geist Mono (sayılar, `.num`). Hepsi self-hosted.
 - Geist Mono: sayılar ve makine tanımlayıcıları/kod (URL, alan adı, JSON); düz metinde kullanılmaz.
@@ -80,7 +80,25 @@ Sunucu tarafı: [notifications.md](notifications.md). Akış `GET /api/v1/me/not
 - İndirim rengi işarete göre seçilir; INSUFFICIENT tahminler "zayıf tahmin" etiketiyle gösterilir. Açıklama paneli motorun gerçek davranışını yansıtır (hasarlı ilan dışlama sayıları ham açıklamadan).
 
 ## Güvenlik başlıkları
-`next.config.ts` her yola ekler: `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `X-Frame-Options: DENY`, `Permissions-Policy: camera=(), microphone=(), geolocation=()`; `X-Powered-By` kapalı. CSP henüz YOK (satır içi tema betiği nedeniyle nonce/hash gerekir; Plan 08'e taşındı).
+`next.config.ts` her yola ekler: `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `X-Frame-Options: DENY`, `Permissions-Policy: camera=(), microphone=(), geolocation=()`; `X-Powered-By` kapalı. HSTS burada değil, Caddy'de (yalnız prod sitesi).
+
+**Content-Security-Policy (Plan 08, nonce yolu).** `src/middleware.ts` her sayfa isteğinde 128 bit nonce üretir (`lib/csp.ts` `generateNonce`), CSP'yi hem yanıt başlığına hem istek başlığına yazar ve `x-nonce` ekler. Next, istek başlığındaki CSP'den nonce'u okuyup kendi satır içi betiklerine (`self.__next_f.push`) ve chunk `<script>`lerine `nonce` koyar; kök layout `headers()`'tan `x-nonce`'u alıp tema betiğine verir.
+```
+default-src 'self'; script-src 'self' 'nonce-<istek başına>' 'sha256-<tema betiği>' [+ dev: 'unsafe-eval'];
+style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self';
+frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'
+```
+- `script-src`'e **asla** `'unsafe-inline'` girmez; `'unsafe-eval'` yalnız dev'de (React Refresh). `connect-src 'self'` aynı kökenli `/api` rewrite'ı üzerinden SSE'yi kapsar.
+- **Neden hash değil nonce:** yalnız hash'li statik CSP (`next.config.ts headers()`) denendi; prod derlemede Next'in `self.__next_f.push` satır içi betikleri engellendi (`csp-check`: 5 genel sayfada 39 ihlal + 49 konsol hatası, RSC akışı kopuyor). Bu betiklerin içeriği sayfaya göre değiştiğinden hash'lenemez; nonce'a geçildi (0 ihlal).
+- **Bedeli:** nonce her istekte farklı olduğundan **tüm sayfalar dinamik render edilir** (build çıktısında `ƒ`); statik ön render/ISR yok. Sayfalar istemci ağırlıklı ve veri zaten istemcide çekildiği için kabul edildi.
+- Tema betiğinin hash'i (`themeScriptHash`, saf JS SHA-256: middleware Edge runtime'ında `node:crypto` yok) nonce'a ek olarak durur; betik metni değişirse hash otomatik yeniden hesaplanır.
+- Doğrulama: `WEB_URL=http://localhost:<port> node apps/web/scripts/csp-check.mjs` çalışan prod derlemesine karşı genel sayfaları (API erişilebilirse girişli sayfaları da) gezer; `securitypolicyviolation` + konsol hatası sayısı 0 değilse çıkış kodu 1. API kapalıyken `/api` 5xx'leri ayrı raporlanır. Kalıcı karşılığı `apps/e2e` CSP testi.
+
+## Üretim derlemesi (standalone)
+- `next.config.ts`: `output: 'standalone'`, `outputFileTracingRoot` = repo kökü (pnpm workspace). Çıktı `apps/web/.next/standalone/` altında repo düzenini korur; giriş noktası `apps/web/server.js`.
+- **Windows:** standalone kopyalama pnpm symlink'leri oluşturur ve yönetici/Developer Mode ister (`EPERM symlink`). Bu yüzden `win32`'de varsayılan çıktı kullanılır; `NEXT_STANDALONE=1` ile zorlanabilir. Linux/Docker'da her zaman standalone.
+- **Dockerfile için:** standalone sunucu `.next/static` ve `public/`'i kopyalamaz; derlemeden sonra
+  `apps/web/.next/static` → `<standalone>/apps/web/.next/static` (ve varsa `apps/web/public` → `<standalone>/apps/web/public`) kopyalanmalıdır (şu an `public/` yok). Çalıştırma: `cd <standalone>/apps/web && PORT=3000 HOSTNAME=0.0.0.0 node server.js`. `API_ORIGIN` derleme anında rewrites'a gömülür; `src/instrumentation.ts` açılışta env'i yeniden doğrular.
 
 ## Erişilebilirlik kuralları
 - "İçeriğe geç" bağlantısı; tüm etkileşimli öğelerde görünür `:focus-visible` (amber, 2px); menülerde görünür odak çubuğu.

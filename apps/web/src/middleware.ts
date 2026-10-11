@@ -1,12 +1,18 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import { buildCsp, generateNonce } from '@/lib/csp';
+
+const PROTECTED = ['/app', '/admin'];
+
+function isProtected(pathname: string): boolean {
+  return PROTECTED.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+}
 
 /**
  * Not: refresh_token çerezi yalnızca /api/v1/auth yoluna kısıtlı olduğundan /app isteklerinde gelmez.
  * Bu yüzden yalnızca access_token'a bakılır (/app ve /admin); yoksa giriş sayfası try_refresh=1 ile önce
  * istemci tarafında oturumu yenilemeyi dener.
  */
-export function middleware(req: NextRequest) {
-  if (req.cookies.has('access_token')) return NextResponse.next();
+function authRedirect(req: NextRequest): NextResponse {
   const url = req.nextUrl.clone();
   // `_r=1`: giriş sayfası zaten bir kez yenileme yaptı ama çerez oturmadı → döngüyü kır.
   const retried = req.nextUrl.searchParams.has('_r');
@@ -21,5 +27,25 @@ export function middleware(req: NextRequest) {
   return NextResponse.redirect(url, 307);
 }
 
-/** `/admin` yalnızca oturum varlığına bakar; rol denetimi istemcide (404 görünümü) ve API'de (403) yapılır. */
-export const config = { matcher: ['/app/:path*', '/admin/:path*'] };
+/**
+ * 1) /app ve /admin: oturum (access_token) yoksa girişe yönlendir. `/admin` yalnızca oturum varlığına bakar;
+ *    rol denetimi istemcide (404 görünümü) ve API'de (403) yapılır.
+ * 2) Tüm sayfalar: istek başına nonce'lu CSP. Next, istek başlığındaki CSP'den nonce'u okuyup kendi satır içi
+ *    betiklerine (`self.__next_f.push`) uygular; kök layout `x-nonce` ile tema betiğine verir. Sonuç: sayfalar
+ *    statik değil dinamik render edilir (nonce her istekte farklı) — bilinçli karar, bkz. docs/web.md.
+ */
+export function middleware(req: NextRequest) {
+  if (isProtected(req.nextUrl.pathname) && !req.cookies.has('access_token')) return authRedirect(req);
+
+  const nonce = generateNonce();
+  const csp = buildCsp({ dev: process.env.NODE_ENV !== 'production', nonce });
+  const requestHeaders = new Headers(req.headers);
+  requestHeaders.set('x-nonce', nonce);
+  requestHeaders.set('content-security-policy', csp);
+  const res = NextResponse.next({ request: { headers: requestHeaders } });
+  res.headers.set('content-security-policy', csp);
+  return res;
+}
+
+/** `/api` (aynı kökenli rewrite, SSE dahil) ve Next statik varlıkları hariç her yol. */
+export const config = { matcher: ['/((?!api/|_next/static|_next/image|favicon.ico).*)'] };

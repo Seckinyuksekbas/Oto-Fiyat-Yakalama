@@ -1,8 +1,9 @@
 import type { Metadata, Viewport } from 'next';
+import { headers } from 'next/headers';
 import { GeistMono } from 'geist/font/mono';
 import '@fontsource-variable/inter';
 import '@fontsource-variable/instrument-sans';
-import { themeInitScript } from '@/lib/theme';
+import { themeColor, themeInitScript } from '@/lib/theme';
 import { Providers } from './providers';
 import './globals.css';
 
@@ -12,11 +13,13 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: '#0E0F11',
+  themeColor,
   colorScheme: 'dark light',
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+/** Async: CSP nonce'u (middleware -> `x-nonce`) okunur; bu yüzden tüm sayfalar dinamik render edilir. */
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const nonce = (await headers()).get('x-nonce') ?? undefined;
   return (
     <html
       lang="tr"
@@ -25,7 +28,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       className={GeistMono.variable}
     >
       <head>
-        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        <script nonce={nonce} dangerouslySetInnerHTML={{ __html: themeInitScript }} />
       </head>
       <body>
         <Providers>{children}</Providers>

@@ -20,13 +20,7 @@ export function ThemeToggle() {
     setPref(readPreference());
   }, []);
 
-  useEffect(() => {
-    if (pref !== 'system') return;
-    const mq = window.matchMedia('(prefers-color-scheme: light)');
-    const onChange = () => applyPreference('system');
-    mq.addEventListener?.('change', onChange);
-    return () => mq.removeEventListener?.('change', onChange);
-  }, [pref]);
+  // Sistem teması değişikliği kökte (Providers → watchSystemTheme) izlenir.
 
   const Icon = icons[pref];
 

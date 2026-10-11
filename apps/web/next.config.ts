@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { NextConfig } from 'next';
 import { parseWebEnv } from './src/env';
 
@@ -5,14 +6,22 @@ import { parseWebEnv } from './src/env';
 // çalışma zamanı denetimi için bkz. src/instrumentation.ts.
 const { API_ORIGIN } = parseWebEnv(process.env);
 
+// Standalone çıktı (Docker imajı). Windows'ta pnpm symlink'leri yönetici/Developer Mode ister (EPERM);
+// orada yerel derleme varsayılan çıktıyı kullanır, `NEXT_STANDALONE=1` ile zorlanabilir.
+const standalone = process.platform !== 'win32' || process.env.NEXT_STANDALONE === '1';
+
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  ...(standalone ? { output: 'standalone' as const } : {}),
+  // Monorepo: izleme kökü repo kökü (workspace paketleri + pnpm node_modules standalone'a girsin).
+  outputFileTracingRoot: path.join(__dirname, '../..'),
   poweredByHeader: false,
   eslint: { ignoreDuringBuilds: true }, // lint kökten (pnpm lint) çalışır
   transpilePackages: ['@oto/shared'],
   async headers() {
     return [
       {
+        // CSP burada değil: istek başına nonce gerektiği için src/middleware.ts yazar. HSTS Caddy'de.
         source: '/:path*',
         headers: [
           { key: 'X-Content-Type-Options', value: 'nosniff' },
