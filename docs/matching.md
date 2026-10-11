@@ -1,6 +1,6 @@
 # Arama profilleri ve eşleştirme (Plan 04)
 
-Bir analiz olayı (`NEW`, `PRICE_DROP`, `RELIST`) `match` kuyruğuna düşer; worker ilanı kullanıcıların ACTIVE arama profilleriyle eşleştirir ve her uygun profil için bir `ListingMatch` yazar. Kullanıcı sonuçları `GET /me/matches` ile görür. Bildirim üretimi Plan 05'in işidir.
+Bir analiz olayı (`NEW`, `PRICE_DROP`, `RELIST`) `match` kuyruğuna düşer; worker ilanı kullanıcıların ACTIVE arama profilleriyle eşleştirir ve her uygun profil için bir `ListingMatch` yazar. Kullanıcı sonuçları `GET /me/matches` ile görür. Bildirim üretimi ve teslimi: [notifications.md](notifications.md).
 
 ## Tek eşleştirme koşulu: `matchPredicate`
 

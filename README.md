@@ -37,6 +37,19 @@ Worker aynı süreçte analiz kuyruğunu da tüketir; analiz sonuçları `Listin
 
 Worker ayrıca `match` kuyruğunu tüketir: analiz olayları kullanıcıların arama profilleriyle eşleştirilir ve `ListingMatch` yazılır. Paralellik `MATCH_CONCURRENCY` (varsayılan 4) ile ayarlanır; `DATABASE_URL` `connection_limit` değeri `SCRAPE_CONCURRENCY + ANALYZE_CONCURRENCY + MATCH_CONCURRENCY` toplamından büyük olmalıdır. Ayrıntılar: [`docs/matching.md`](docs/matching.md).
 
+## Bildirimler
+Eşleşen her ilan için `Notification` kaydı yazılır; worker `notify` / `notify-telegram` kuyruklarını tüketir (uygulama içi + SSE, Telegram). Akış, SSE sözleşmesi ve Telegram kurulumu: [`docs/notifications.md`](docs/notifications.md).
+
+| Değişken | Süreç | Açıklama |
+|---|---|---|
+| `NOTIFY_CONCURRENCY` | worker | `notify` kuyruğu paralelliği (varsayılan 8, 1-32); `notify-telegram` sabit 5 paralel + 25 iş/sn limiter |
+| `TELEGRAM_BOT_TOKEN` | api, worker | BotFather token'ı. Yoksa bağlama 503 döner, TELEGRAM bildirimi planlanmaz |
+| `TELEGRAM_BOT_USERNAME` | api | Bağlama deep link'i için bot kullanıcı adı (token varken zorunlu) |
+| `TELEGRAM_MODE` | api | `polling` (geliştirme, varsayılan) veya `webhook` (üretim) |
+| `TELEGRAM_WEBHOOK_SECRET` | api | Webhook modunda zorunlu; 32-256 karakter `[A-Za-z0-9_-]`; `setWebhook` `secret_token` ile aynı |
+| `TELEGRAM_API_BASE` | api, worker | Bot API adresi (varsayılan `https://api.telegram.org`; testlerde sahte API) |
+| `PUBLIC_BASE_URL` | api, worker | Worker'da "Analizi gör" düğmesi için; production'da açıkça ayarlanmalı ve localhost olamaz |
+
 ## Testler
 ```bash
 pnpm lint && pnpm typecheck

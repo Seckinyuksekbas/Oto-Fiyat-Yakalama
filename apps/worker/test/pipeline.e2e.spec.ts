@@ -2,22 +2,25 @@ import { Module } from '@nestjs/common';
 import type { TestingModule } from '@nestjs/testing';
 import { seedDemoSource } from '@oto/db';
 import { CATALOG, fairPrice } from '@oto/demo-site';
+import { FakeTelegramApi } from '@oto/telegram';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AnalysisModule } from '../src/analysis/analysis.module';
 import { CollectionModule } from '../src/collection/collection.module';
 import { analyzeJobId } from '../src/collection/ingest.service';
 import { PrismaService } from '../src/infra/prisma.service';
 import { MatchingModule } from '../src/matching/matching.module';
+import { NotificationsModule } from '../src/notifications/notifications.module';
 import { ANALYZE_WORKER_AUTOSTART, AnalyzeWorkerHost } from '../src/processors/analyze-worker.host';
 import { MATCH_WORKER_AUTOSTART, MatchWorkerHost } from '../src/processors/match-worker.host';
+import { NOTIFY_WORKER_AUTOSTART, NotifyWorkerHost } from '../src/processors/notify-worker.host';
 import { SCRAPE_WORKER_AUTOSTART, ScrapeWorkerHost } from '../src/processors/scrape-worker.host';
 import { QueueRegistry } from '../src/queues/queue-registry';
 import { SchedulerModule } from '../src/scheduler/scheduler.module';
 import { SchedulerService } from '../src/scheduler/scheduler.service';
-import { createAdmin, createContext, createProfile, createUser, resetState, startDemo } from './helpers';
+import { createAdmin, createChannel, createContext, createProfile, createUser, resetState, startDemo } from './helpers';
 
 @Module({
-  imports: [CollectionModule, AnalysisModule, MatchingModule],
+  imports: [CollectionModule, AnalysisModule, MatchingModule, NotificationsModule],
   providers: [
     ScrapeWorkerHost,
     { provide: SCRAPE_WORKER_AUTOSTART, useValue: false },
@@ -25,8 +28,10 @@ import { createAdmin, createContext, createProfile, createUser, resetState, star
     { provide: ANALYZE_WORKER_AUTOSTART, useValue: false },
     MatchWorkerHost,
     { provide: MATCH_WORKER_AUTOSTART, useValue: false },
+    NotifyWorkerHost,
+    { provide: NOTIFY_WORKER_AUTOSTART, useValue: false },
   ],
-  exports: [ScrapeWorkerHost, AnalyzeWorkerHost, MatchWorkerHost],
+  exports: [ScrapeWorkerHost, AnalyzeWorkerHost, MatchWorkerHost, NotifyWorkerHost],
 })
 class ProcessorTestModule {}
 
@@ -34,8 +39,17 @@ let ref: TestingModule;
 let prisma: PrismaService;
 let scheduler: SchedulerService;
 let demo: Awaited<ReturnType<typeof startDemo>>;
+const fake = new FakeTelegramApi();
+const ENV_KEYS = ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_API_BASE', 'PUBLIC_BASE_URL'] as const;
+const savedEnv: Record<string, string | undefined> = {};
 
 beforeAll(async () => {
+  const { apiBase, token } = await fake.start();
+  // ENV modül oluşturulurken ayrıştırılır; createContext'ten ÖNCE ayarlanmalı.
+  for (const k of ENV_KEYS) savedEnv[k] = process.env[k];
+  process.env.TELEGRAM_BOT_TOKEN = token;
+  process.env.TELEGRAM_API_BASE = apiBase;
+  process.env.PUBLIC_BASE_URL = 'https://otofirsat.example';
   ref = await createContext([CollectionModule, SchedulerModule, ProcessorTestModule]);
   prisma = ref.get(PrismaService);
   scheduler = ref.get(SchedulerService);
@@ -43,17 +57,34 @@ beforeAll(async () => {
   ref.get(ScrapeWorkerHost).start();
 });
 afterAll(async () => {
+  await ref.get(NotifyWorkerHost).onModuleDestroy();
   await ref.get(MatchWorkerHost).onModuleDestroy();
   await ref.get(AnalyzeWorkerHost).onModuleDestroy();
   await ref.get(ScrapeWorkerHost).onModuleDestroy();
   await demo.close();
   await ref.close();
+  await fake.close();
+  for (const k of ENV_KEYS) {
+    if (savedEnv[k] === undefined) delete process.env[k];
+    else process.env[k] = savedEnv[k];
+  }
 });
 beforeEach(async () => {
   await resetState(ref);
   demo.site.store.reset(7, 60);
   demo.site.setMode('normal');
+  fake.reset();
 });
+
+async function waitFor<T>(fn: () => Promise<T | null | undefined | false>, timeoutMs = 20_000): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const v = await fn();
+    if (v) return v;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  throw new Error('waitFor timed out');
+}
 
 async function cycle(at: Date): Promise<void> {
   expect(await scheduler.tick(at)).toBe(1);
@@ -120,9 +151,12 @@ describe('collection pipeline (scheduler → queue → worker → DB → analyze
   it('analyzes scraped listings and emits a NEW match event for an injected deal', async () => {
     ref.get(AnalyzeWorkerHost).start();
     ref.get(MatchWorkerHost).start();
+    ref.get(NotifyWorkerHost).start();
     await createAdmin(ref);
     const user = await createUser(ref);
-    const profile = await createProfile(ref, user.id, { make: 'BMW', minDiscountPct: 0.1, minConfidence: 'LOW' });
+    const chatId = 777_001;
+    await createChannel(ref, user.id, { chatId });
+    const profile = await createProfile(ref, user.id, { make: 'BMW', minDiscountPct: 0.1, minConfidence: 'LOW', channels: ['IN_APP', 'TELEGRAM'] });
     const source = await seedDemoSource(prisma, demo.baseUrl);
     await prisma.dataSource.update({ where: { id: source.id }, data: { minRequestGapMs: 0, intervalSec: 60 } });
     const year = new Date().getFullYear();
@@ -157,5 +191,16 @@ describe('collection pipeline (scheduler → queue → worker → DB → analyze
     expect(match).not.toBeNull();
     expect(match!.reason).toBe('NEW');
     expect(match!.matchedPrice).toBe(row.price);
+
+    // Bildirimler: eşleşmeyle aynı transaction'da PENDING yazılır, gerçek NotifyWorkerHost ile SENT olur.
+    const sent = await waitFor(async () => {
+      const rows = await prisma.notification.findMany({ where: { userId: user.id, matchId: match!.id } });
+      return rows.length === 2 && rows.every((r) => r.status === 'SENT') ? rows : null;
+    }, 30_000);
+    expect(sent.map((r) => r.channel).sort()).toEqual(['IN_APP', 'TELEGRAM']);
+    expect(sent.every((r) => (r.latencyMs ?? -1) >= 0)).toBe(true);
+    const tg = fake.requests.find((r) => r.method === 'sendMessage' || r.method === 'sendPhoto');
+    expect(tg?.body.chat_id).toBe(chatId);
+    expect(String(tg?.body.text ?? tg?.body.caption)).toContain('Fiyat analizi tahminidir');
   });
 });
