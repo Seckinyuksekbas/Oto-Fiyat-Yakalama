@@ -1,11 +1,49 @@
 name: ci
+
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      heavy:
+        description: 'Ağır kontroller de çalışsın mı? (prod-smoke + backup-check)'
+        type: boolean
+        default: true
+  schedule:
+    # Gecelik (03:30 UTC): e2e + ağır kontroller main üzerinde.
+    - cron: '30 3 * * *'
+
+# Yalnızca GITHUB_TOKEN; okuma yetkisi. Workflow'da sır yoktur: test/e2e/smoke değerleri çalışma anında üretilir.
+permissions:
+  contents: read
+
+# Aynı ref'teki eski koşular iptal edilir (main'de de: en yeni commit yeterli).
+concurrency:
+  group: ci-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
 jobs:
+  secrets:
+    name: secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # tüm geçmiş taranır
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          # PR commit aralığını listelemek için gerekir (yalnız okuma).
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_VERSION: 8.21.2 # yerel doğrulamayla aynı sürüm
+          GITLEAKS_CONFIG: .gitleaks.toml # .gitleaksignore (parmak izleri) depo kökünden otomatik okunur
+          GITLEAKS_ENABLE_COMMENTS: 'false' # contents: read; PR yorumu yazılmaz
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: 'false'
+
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -19,3 +57,121 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm test:e2e
+      # Production web derlemesi (Linux'ta standalone). Paketler yukarıda derlendi; kök `pnpm build` yerine yalnız web.
+      - run: pnpm --filter @oto/web build
+        env:
+          NEXT_TELEMETRY_DISABLED: '1'
+
+  docker:
+    name: docker build check
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      # scripts/gen-keys.mjs için (yalnız Node yerleşik modülleri; pnpm install gerekmez).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: sh scripts/docker-build-check.sh
+
+  e2e:
+    name: e2e (Playwright)
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CI: 'true'
+      NEXT_TELEMETRY_DISABLED: '1'
+    # Sabit host portları (apps/e2e/support/env.ts varsayılanları); global-setup bu portlar açıksa compose'u atlar.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: oto
+          POSTGRES_PASSWORD: oto # yalnız CI servis konteyneri, dışarıya kapalı geçici DB
+          POSTGRES_DB: oto
+        ports: ['5433:5432']
+        options: >-
+          --health-cmd "pg_isready -U oto"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ['6380:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      mailpit:
+        image: axllent/mailpit:v1.21
+        ports: ['1025:1025', '8025:8025']
+        options: >-
+          --health-cmd "/mailpit readyz"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # api, worker, demo-site ve paketler. Web hariç: global-setup web'i API_ORIGIN=:3101 ile ayrıca derler.
+      - run: pnpm -r --filter "!@oto/web" build
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-1.64.0-chromium
+      - name: Install Chromium (+ system deps)
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: pnpm --filter @oto/e2e exec playwright install --with-deps chromium
+      - name: Install Chromium system deps (cached browser)
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: pnpm --filter @oto/e2e exec playwright install-deps chromium
+      - run: pnpm e2e
+      - name: Upload Playwright report, traces and process logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-artifacts
+          path: |
+            apps/e2e/playwright-report/
+            apps/e2e/test-results/
+            apps/e2e/.logs/
+          include-hidden-files: true # .logs/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  prod-smoke:
+    name: prod smoke (compose)
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.heavy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      # scripts/gen-keys.mjs için.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: sh scripts/prod-smoke.sh
+
+  backup-check:
+    name: backup/restore check
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.heavy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Betik uygulama imajlarını derlemez; mevcut oto/migrate:latest'i ister.
+      - run: docker build -f docker/migrate.Dockerfile -t oto/migrate:latest .
+      - run: sh scripts/backup-restore-check.sh
