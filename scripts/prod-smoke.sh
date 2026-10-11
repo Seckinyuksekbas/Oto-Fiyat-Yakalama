@@ -283,6 +283,31 @@ else
   pass "worker log'unda zorla kapatma/hata satırı yok (zarif kapanış)"
 fi
 
+# --- 9. Graceful shutdown: açık SSE akışı varken api SIGTERM ile 10 sn içinde kapanır ---------------------
+# ShutdownSignal akışları düzgün bitirir, forceCloseConnections açık soketleri kapatır; aksi halde server.close()
+# açık SSE bağlantısını bekler ve Docker 20 sn sonra SIGKILL (137) gönderir.
+echo "==> api graceful stop (açık SSE ile)"
+rm -f "$TMP/sse-stop.out" "$TMP/sse-stop.rc"
+( rc=0; c -sN -m 60 -b "$JAR" -H 'Accept: text/event-stream' -o "$TMP/sse-stop.out" "$BASE/api/v1/admin/stream" 2>/dev/null || rc=$?
+  echo "$rc" >"$TMP/sse-stop.rc" ) &
+sse_pid=$!
+i=0
+until grep -q '^event: ready' "$TMP/sse-stop.out" 2>/dev/null || [ "$i" -ge 50 ]; do sleep 0.2; i=$((i + 1)); done
+if grep -q '^event: ready' "$TMP/sse-stop.out" 2>/dev/null; then pass "api durdurulmadan önce SSE akışı açık ('ready' alındı)"; else fail "api durdurulmadan önce SSE 'ready' gelmedi"; fi
+start=$(date +%s)
+dc stop api >/dev/null 2>&1 || true
+elapsed=$(( $(date +%s) - start ))
+wait "$sse_pid" 2>/dev/null || true
+status=$(docker ps -a --filter "label=com.docker.compose.project=$PROJECT" --filter 'label=com.docker.compose.service=api' --format '{{.Status}}' | sort -u | tr '\n' ' ')
+case "$status" in
+  *"Exited (137)"*) fail "api SIGKILL ile öldürüldü: $status (${elapsed}s)" ;;
+  *"Exited (0)"*|*"Exited (143)"*) if [ "$elapsed" -lt 10 ]; then pass "api açık SSE ile SIGTERM'de ${elapsed}s içinde kapandı ($status)"; else fail "api ${elapsed}s'de kapandı (10 sn bekleniyor): $status"; fi ;;
+  *) fail "api çıkış durumu: $status (${elapsed}s)" ;;
+esac
+# curl 0: akış sunucu tarafından düzgün bitirildi (28 = -m zaman aşımı, yani akış kapanmadı)
+rc=$(cat "$TMP/sse-stop.rc" 2>/dev/null || echo '?')
+if [ "$rc" = "0" ]; then pass "SSE istemcisi akış sonunu gördü (curl 0)"; else fail "SSE istemcisi çıkış kodu $rc (0 bekleniyor)"; fi
+
 if [ "$FAILS" -gt 0 ]; then
   echo "SONUÇ: FAIL ($FAILS)"
   exit 1
