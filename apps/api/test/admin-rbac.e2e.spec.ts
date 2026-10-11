@@ -16,7 +16,7 @@ const rolesOf = (r: RouteInfo): Role[] => {
   return Array.isArray(roles) ? roles : [];
 };
 const superOnly = (r: RouteInfo) => !rolesOf(r).includes('ADMIN');
-const url = (r: RouteInfo) => '/api/v1' + r.path.replace(/:[A-Za-z]+/g, 'x');
+const url = (r: RouteInfo) => '/api/v1' + r.path.replace(/:\w+/g, 'x');
 const isStream = (r: RouteInfo) => r.path.endsWith('/stream');
 
 beforeAll(async () => {
@@ -59,6 +59,7 @@ describe('admin RBAC matrix (auto-derived from controller metadata)', () => {
     for (const r of routes) {
       const res = await call(u.agent, r);
       expect({ route: `${r.method} ${r.path}`, status: res.status }).toEqual({ route: `${r.method} ${r.path}`, status: 403 });
+      expect(res.body?.error?.code).toBe('FORBIDDEN');
     }
   });
 
@@ -70,6 +71,7 @@ describe('admin RBAC matrix (auto-derived from controller metadata)', () => {
       if (superOnly(r)) {
         const res = await call(a.agent, r);
         expect({ route: label, status: res.status }).toEqual({ route: label, status: 403 });
+        expect(res.body?.error?.code).toBe('FORBIDDEN');
       } else if (!isStream(r)) {
         const res = await call(a.agent, r);
         expect({ route: label, forbidden: res.status === 403 || res.status === 401 }).toEqual({ route: label, forbidden: false });

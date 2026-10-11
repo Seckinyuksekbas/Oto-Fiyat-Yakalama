@@ -376,6 +376,9 @@ importers:
 
   packages/collection:
     dependencies:
+      '@oto/server-common':
+        specifier: workspace:*
+        version: link:../server-common
       cheerio:
         specifier: ^1.0.0
         version: 1.2.0

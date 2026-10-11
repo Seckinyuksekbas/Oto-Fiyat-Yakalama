@@ -1,6 +1,9 @@
+import { lookup as dnsLookup } from 'node:dns';
+import { isIP } from 'node:net';
+import { assertPublicHttpUrl, isPrivateAddress, UnsafeUrlError } from '@oto/server-common';
 import type Redis from 'ioredis';
 import { Agent, ProxyAgent, request, type Dispatcher } from 'undici';
-import { BlockedError, FetchError, toFetchError } from './errors';
+import { BlockedError, FetchError, PRIVATE_ADDRESS_CODE, toFetchError } from './errors';
 import { SourceRateLimiter } from './rate-limiter';
 import { RobotsCache } from './robots';
 
@@ -26,6 +29,43 @@ export interface PoliteHttpOptions {
   timeoutMs?: number;
   isBlockedPage?: (html: string) => boolean;
   sleep?: (ms: number) => Promise<void>;
+  /** Doğruysa iç/özel/ayrılmış adreslere (DNS çözümü, yönlendirme ve rebinding dahil) bağlanılmaz. Worker üretimde true geçer. */
+  blockPrivateAddresses?: boolean;
+  /** Test dikişi: ana makine adı çözümleyici (varsayılan: sistem DNS'i). */
+  lookup?: HostLookup;
+  /** Test dikişi: özel dispatcher (ör. MockAgent). */
+  dispatcher?: Dispatcher;
+}
+
+export type HostLookup = (hostname: string) => Promise<{ address: string; family: number }[]>;
+
+const MAX_REDIRECTS = 3;
+
+const systemLookup: HostLookup = (hostname) =>
+  new Promise((resolve, reject) => {
+    dnsLookup(hostname, { all: true, verbatim: true }, (err, addrs) => (err ? reject(err) : resolve(addrs)));
+  });
+
+function privateAddressError(message: string): Error {
+  return Object.assign(new Error(message), { code: PRIVATE_ADDRESS_CODE });
+}
+
+/** undici connect.lookup: tüm adresleri çözer, biri bile özelse bağlantıyı reddeder. */
+function guardedLookup(resolver: HostLookup) {
+  return (hostname: string, options: { all?: boolean }, cb: (...args: unknown[]) => void) => {
+    resolver(hostname).then(
+      (addrs) => {
+        if (addrs.length === 0 || addrs.some((a) => isPrivateAddress(a.address))) {
+          cb(privateAddressError(`İç ağ adresine bağlanılamaz: ${hostname}`));
+        } else if (options?.all) {
+          cb(null, addrs);
+        } else {
+          cb(null, addrs[0].address, addrs[0].family);
+        }
+      },
+      (err: unknown) => cb(err),
+    );
+  };
 }
 
 const GENERIC_BLOCK_MARKERS =
@@ -73,8 +113,14 @@ export class PoliteHttpClient implements HttpFetcher {
 
   constructor(private readonly opts: PoliteHttpOptions) {
     const timeout = opts.timeoutMs ?? 30_000;
-    const agentOptions = { connect: { timeout: 10_000 }, headersTimeout: timeout, bodyTimeout: timeout };
-    this.dispatcher = opts.proxyUrl ? new ProxyAgent({ uri: opts.proxyUrl, ...agentOptions }) : new Agent(agentOptions);
+    const resolver = opts.lookup ?? systemLookup;
+    const connect: Agent.Options['connect'] = {
+      timeout: 10_000,
+      ...(opts.blockPrivateAddresses ? ({ lookup: guardedLookup(resolver) } as object) : {}),
+    };
+    const agentOptions = { connect, headersTimeout: timeout, bodyTimeout: timeout };
+    this.dispatcher =
+      opts.dispatcher ?? (opts.proxyUrl ? new ProxyAgent({ uri: opts.proxyUrl, ...agentOptions }) : new Agent(agentOptions));
     this.sleep = opts.sleep ?? defaultSleep;
     this.maxAttempts = opts.maxAttempts ?? 3;
     this.limiter = new SourceRateLimiter(opts.redis, opts.sourceId, opts.minRequestGapMs, this.sleep);
@@ -127,15 +173,47 @@ export class PoliteHttpClient implements HttpFetcher {
     }
   }
 
+  /** Her atlama (ilk istek + yönlendirmeler) için: IP sabit adres ve (proxy ile) ad çözümü denetimi. */
+  private async assertHopAllowed(url: string): Promise<void> {
+    const host = new URL(url).hostname.replace(/^[|]$/g, '');
+    try {
+      if (isIP(host)) {
+        await assertPublicHttpUrl(url, { allowPrivate: false });
+      } else if (this.opts.proxyUrl) {
+        // Proxy kullanılırken hedef adı proxy çözer; connect.lookup yalnızca proxy'ye uygulanır.
+        const resolver = this.opts.lookup ?? systemLookup;
+        await assertPublicHttpUrl(url, { allowPrivate: false, lookup: async (h) => (await resolver(h)).map((a) => a.address) });
+      }
+    } catch (err) {
+      if (err instanceof UnsafeUrlError) throw new FetchError('NETWORK', `${err.message}: ${url}`, url, false);
+      throw err;
+    }
+  }
+
   private async fetchOnce(url: string): Promise<HttpResult> {
     await this.limiter.acquire();
     const started = Date.now();
-    const res = await request(url, {
-      method: 'GET',
-      dispatcher: this.dispatcher,
-      maxRedirections: 3,
-      headers: { 'user-agent': this.opts.userAgent, accept: 'text/html,application/xhtml+xml,text/plain;q=0.9' },
-    });
+    const block = this.opts.blockPrivateAddresses === true;
+    const headers = { 'user-agent': this.opts.userAgent, accept: 'text/html,application/xhtml+xml,text/plain;q=0.9' };
+    let res: Dispatcher.ResponseData;
+    if (!block) {
+      res = await request(url, { method: 'GET', dispatcher: this.dispatcher, maxRedirections: MAX_REDIRECTS, headers });
+    } else {
+      // Yönlendirmeleri elle izleriz: her atlama denetlenir (undici IP sabit adreslerde lookup çağırmaz).
+      let current = url;
+      for (let hop = 0; ; hop++) {
+        await this.assertHopAllowed(current);
+        res = await request(current, { method: 'GET', dispatcher: this.dispatcher, maxRedirections: 0, headers });
+        const location = res.headers.location;
+        if (res.statusCode >= 300 && res.statusCode < 400 && typeof location === 'string') {
+          await res.body.dump();
+          if (hop >= MAX_REDIRECTS) throw new FetchError('NETWORK', `Çok fazla yönlendirme: ${url}`, url, false);
+          current = new URL(location, current).href;
+          continue;
+        }
+        break;
+      }
+    }
     const body = await res.body.text();
     this.stats.requests += 1;
     this.stats.totalMs += Date.now() - started;

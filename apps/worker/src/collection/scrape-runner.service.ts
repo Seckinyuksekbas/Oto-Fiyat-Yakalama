@@ -37,6 +37,7 @@ const message = (err: unknown) => (err instanceof Error ? err.message : String(e
 export class ScrapeRunner {
   private readonly logger = new Logger(ScrapeRunner.name);
   private readonly userAgent: string;
+  private readonly blockPrivateAddresses: boolean;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -49,6 +50,7 @@ export class ScrapeRunner {
     @Inject(ENV) env: Env,
   ) {
     this.userAgent = `OtoFirsatBot/1.0 (+${env.BOT_CONTACT_URL})`;
+    this.blockPrivateAddresses = env.NODE_ENV === 'production';
   }
 
   /** İşi yalnızca hâlâ RUNNING ise kapatır; stale-reaper zaten kapattıysa üzerine yazmaz. */
@@ -92,6 +94,7 @@ export class ScrapeRunner {
         sourceId: source.id,
         minRequestGapMs: source.minRequestGapMs,
         userAgent: this.userAgent,
+        blockPrivateAddresses: this.blockPrivateAddresses,
         redis: this.redis,
         proxyUrl: source.proxyConfig?.isEnabled ? this.encryptor.decrypt(source.proxyConfig.urlEncrypted) : null,
         isBlockedPage: adapter.isBlockedPage ? (html) => adapter.isBlockedPage!(html) : undefined,
