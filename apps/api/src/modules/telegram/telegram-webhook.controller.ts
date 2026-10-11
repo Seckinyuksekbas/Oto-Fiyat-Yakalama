@@ -35,7 +35,14 @@ export class TelegramWebhookController {
       throw Errors.unauthenticated();
     }
     if (body && typeof body === 'object' && typeof (body as { update_id?: unknown }).update_id === 'number') {
-      await this.handler.handle(body as TelegramUpdate).catch((err: unknown) => this.logger.error(`Telegram güncellemesi işlenemedi: ${String(err)}`));
+      const update = body as TelegramUpdate;
+      try {
+        await this.handler.handle(update);
+      } catch (err) {
+        // Hata yutulmaz: AllExceptionsFilter 500 döner, Telegram güncellemeyi yeniden dener.
+        this.logger.error(`Telegram güncellemesi işlenemedi (update_id=${update.update_id}): ${err instanceof Error ? err.message : String(err)}`);
+        throw err;
+      }
     }
     return { ok: true };
   }

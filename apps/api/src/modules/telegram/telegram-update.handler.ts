@@ -13,6 +13,8 @@ export function maskEmail(email: string): string {
   return `${email.slice(0, 1)}***${email.slice(at)}`;
 }
 
+type LinkResult = { note: Notification; email: string; previous: Notification[] };
+
 @Injectable()
 export class TelegramUpdateHandler {
   private readonly logger = new Logger(TelegramUpdateHandler.name);
@@ -92,38 +94,34 @@ export class TelegramUpdateHandler {
       return;
     }
     const now = new Date();
-    let result: { note: Notification; email: string; previous: Notification[] } | null;
-    try {
-      result = await this.prisma.$transaction(async (tx) => {
-        const token = await tx.telegramLinkToken.findUnique({ where: { codeHash: hashToken(code) }, include: { user: true } });
-        if (!token || token.usedAt || token.expiresAt <= now) return null;
-        if (token.user.status !== 'ACTIVE' || !token.user.emailVerifiedAt) return null;
-        const used = await tx.telegramLinkToken.updateMany({ where: { id: token.id, usedAt: null }, data: { usedAt: now } });
-        if (used.count !== 1) return null;
-        const hash = hashToken(String(chatId));
-        // Bir sohbet yalnızca bir kullanıcıya bağlı olabilir: önceki sahibin bağı kaldırılır.
-        const others = await tx.notificationChannel.findMany({
-          where: { type: 'TELEGRAM', externalIdHash: hash, userId: { not: token.userId } },
-          select: { id: true, userId: true },
-        });
-        const previous: Notification[] = [];
-        if (others.length > 0) {
-          await tx.notificationChannel.deleteMany({ where: { id: { in: others.map((o) => o.id) } } });
-          for (const o of others) previous.push(await this.securityNote(tx, o.userId, 'TELEGRAM_UNLINKED', now));
-        }
-        const data = { config: this.encryptor.encryptJson({ chatId }), externalIdHash: hash, isVerified: true, isEnabled: true };
-        await tx.notificationChannel.upsert({
-          where: { userId_type: { userId: token.userId, type: 'TELEGRAM' } },
-          update: data,
-          create: { userId: token.userId, type: 'TELEGRAM', ...data },
-        });
-        const note = await this.securityNote(tx, token.userId, 'TELEGRAM_LINKED', now);
-        return { note, email: token.user.email, previous };
+    // Yalnızca "kod yok / kullanılmış / süresi dolmuş / hesap uygun değil" durumu null döner ve kullanıcıya
+    // "geçersiz" denir. Geçici DB hataları yeniden fırlatılır; webhook 500 döner ve Telegram yeniden dener.
+    const result = await this.prisma.$transaction(async (tx): Promise<LinkResult | null> => {
+      const token = await tx.telegramLinkToken.findUnique({ where: { codeHash: hashToken(code) }, include: { user: true } });
+      if (!token || token.usedAt || token.expiresAt <= now) return null;
+      if (token.user.status !== 'ACTIVE' || !token.user.emailVerifiedAt) return null;
+      const used = await tx.telegramLinkToken.updateMany({ where: { id: token.id, usedAt: null }, data: { usedAt: now } });
+      if (used.count !== 1) return null;
+      const hash = hashToken(String(chatId));
+      // Bir sohbet yalnızca bir kullanıcıya bağlı olabilir: önceki sahibin bağı kaldırılır.
+      const others = await tx.notificationChannel.findMany({
+        where: { type: 'TELEGRAM', externalIdHash: hash, userId: { not: token.userId } },
+        select: { id: true, userId: true },
       });
-    } catch (err) {
-      this.logger.warn(`Bağlama işlemi başarısız: ${String(err)}`);
-      result = null;
-    }
+      const previous: Notification[] = [];
+      if (others.length > 0) {
+        await tx.notificationChannel.deleteMany({ where: { id: { in: others.map((o) => o.id) } } });
+        for (const o of others) previous.push(await this.securityNote(tx, o.userId, 'TELEGRAM_UNLINKED', now));
+      }
+      const data = { config: this.encryptor.encryptJson({ chatId }), externalIdHash: hash, isVerified: true, isEnabled: true };
+      await tx.notificationChannel.upsert({
+        where: { userId_type: { userId: token.userId, type: 'TELEGRAM' } },
+        update: data,
+        create: { userId: token.userId, type: 'TELEGRAM', ...data },
+      });
+      const note = await this.securityNote(tx, token.userId, 'TELEGRAM_LINKED', now);
+      return { note, email: token.user.email, previous };
+    });
     if (!result) {
       await this.reply(chatId, 'Bağlantı kodu geçersiz veya süresi dolmuş. Panelden yeni bir kod oluşturun.');
       return;
