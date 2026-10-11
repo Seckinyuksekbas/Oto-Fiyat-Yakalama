@@ -321,11 +321,15 @@ model CollectionJob {
   errorsCount     Int           @default(0)
   avgResponseMs   Int?
   errorSummary    String?
+  /// Dry-run taramanın ilk 20 normalize ilanı ve sorun listesi
+  dryRunResult    Json?
   createdAt       DateTime      @default(now())
   errors          ScrapeError[]
 
   @@index([sourceId, createdAt])
   @@index([status])
+  /// İzleme: son 1 saatte biten işler (parse oranı)
+  @@index([finishedAt])
 }
 
 model ScrapeError {
@@ -341,6 +345,10 @@ model ScrapeError {
   createdAt DateTime        @default(now())
 
   @@index([sourceId, createdAt])
+  /// İzleme: iş başına PARSE hatası sayımı
+  @@index([jobId])
+  /// Saklama temizliği (createdAt < sınır)
+  @@index([createdAt])
 }
 
 // ---------- İlan ----------
@@ -417,30 +425,32 @@ model ListingIssue {
 }
 
 model ListingAnalysis {
-  id                 Int            @id @default(autoincrement())
-  listingId          Int
-  listing            Listing        @relation("ListingAnalyses", fields: [listingId], references: [id], onDelete: Cascade)
-  latestFor          Listing?       @relation("LatestAnalysis")
-  engineVersion      String
-  estimatedPrice     BigInt?
-  priceDiff          BigInt?
-  discountPct        Decimal?       @db.Decimal(6, 4)
-  opportunityScore   Int
-  comparableCount    Int
-  confidence         Confidence
-  expansionLevel     Int?
-  flags              AnalysisFlag[]
-  explanation        Json
-  comparableIds      Int[]
+  id                    Int            @id @default(autoincrement())
+  listingId             Int
+  listing               Listing        @relation("ListingAnalyses", fields: [listingId], references: [id], onDelete: Cascade)
+  latestFor             Listing?       @relation("LatestAnalysis")
+  engineVersion         String
+  estimatedPrice        BigInt?
+  priceDiff             BigInt?
+  discountPct           Decimal?       @db.Decimal(6, 4)
+  opportunityScore      Int
+  comparableCount       Int
+  confidence            Confidence
+  expansionLevel        Int?
+  flags                 AnalysisFlag[]
+  explanation           Json
+  comparableIds         Int[]
   /// Analiz anındaki ilan fiyatı ve içerik özeti: sonraki analizde "ne değişti" buradan anlaşılır
-  listingPrice       BigInt?
-  listingContentHash String?
+  listingPrice          BigInt?
+  listingContentHash    String?
   /// Bu analizin ürettiği eşleştirme olayı (NEW/PRICE_DROP/RELIST) ve kuyruğa alınma zamanı
-  matchEvent         MatchReason?
-  matchPreviousPrice BigInt?
-  matchQueuedAt      DateTime?
-  createdAt          DateTime       @default(now())
-  matches            ListingMatch[]
+  matchEvent            MatchReason?
+  matchPreviousPrice    BigInt?
+  matchQueuedAt         DateTime?
+  /// Eşleştirme kuyruğuna yeniden alma başarısızlık sayısı (>= 10 ise atlanır)
+  matchDispatchAttempts Int            @default(0)
+  createdAt             DateTime       @default(now())
+  matches               ListingMatch[]
 
   @@index([listingId, createdAt])
   @@index([confidence, opportunityScore])
@@ -522,6 +532,10 @@ model Notification {
   @@index([userId, createdAt])
   @@index([status, channel])
   @@index([status, queuedAt])
+  /// İzleme (son 1 saat hata oranı) ve genel bakış "bugün" sayımları
+  @@index([status, createdAt])
+  /// Genel bakış: bugün gönderilen ve son 24 saat gecikme p50/p95
+  @@index([status, sentAt])
 }
 
 model Favorite {

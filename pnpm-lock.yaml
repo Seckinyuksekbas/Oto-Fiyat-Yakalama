@@ -65,6 +65,9 @@ importers:
       argon2:
         specifier: ^0.41.1
         version: 0.41.1
+      bullmq:
+        specifier: ^5.34.0
+        version: 5.81.5
       cookie-parser:
         specifier: ^1.4.7
         version: 1.4.7
@@ -98,6 +101,9 @@ importers:
       rxjs:
         specifier: ^7.8.1
         version: 7.8.2
+      undici:
+        specifier: ^6.21.1
+        version: 6.29.0
       zod:
         specifier: ^3.24.1
         version: 3.25.76
@@ -360,6 +366,9 @@ importers:
 
   packages/analysis:
     dependencies:
+      '@oto/shared':
+        specifier: workspace:*
+        version: link:../shared
       zod:
         specifier: ^3.24.1
         version: 3.25.76
@@ -370,6 +379,9 @@ importers:
 
   packages/collection:
     dependencies:
+      '@oto/server-common':
+        specifier: workspace:*
+        version: link:../server-common
       cheerio:
         specifier: ^1.0.0
         version: 1.2.0

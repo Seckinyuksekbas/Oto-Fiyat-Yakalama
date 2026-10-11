@@ -18,6 +18,8 @@ export const matchNotificationPayloadSchema = z.object({
   }),
   previousPrice: money.nullable(),
   limitExceeded: z.boolean(),
+  /** Olayın gerçekleştiği an (NEW: ilanın ilk görülmesi; diğerleri: analiz zamanı). Eski satırlarda yok. */
+  eventAt: iso.optional(),
 });
 export type MatchNotificationPayload = z.infer<typeof matchNotificationPayloadSchema>;
 

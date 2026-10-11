@@ -1,7 +1,7 @@
 import type { TestingModule } from '@nestjs/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AlertService } from '../src/common/alert.service';
-import { HeartbeatService, HEARTBEAT_TTL_SEC } from '../src/common/heartbeat.service';
+import { HeartbeatService, HEARTBEAT_TTL_SEC, WORKER_SEEN_TTL_SEC } from '../src/common/heartbeat.service';
 import { PrismaService } from '../src/infra/prisma.service';
 import { RedisService } from '../src/infra/redis.service';
 import { QueueRegistry } from '../src/queues/queue-registry';
@@ -60,8 +60,15 @@ describe('HeartbeatService', () => {
     const ttl = await redis.ttl(hb.key);
     expect(ttl).toBeGreaterThan(0);
     expect(ttl).toBeLessThanOrEqual(HEARTBEAT_TTL_SEC);
+    // Son görülme kaydı (ölü worker listesi için) aynı içerikle, 24 saat TTL ile
+    expect(hb.seenKey).toBe(hb.key.replace('worker:heartbeat:', 'worker:seen:'));
+    expect(await redis.get(hb.seenKey)).toBe(await redis.get(hb.key));
+    const seenTtl = await redis.ttl(hb.seenKey);
+    expect(seenTtl).toBeGreaterThan(HEARTBEAT_TTL_SEC);
+    expect(seenTtl).toBeLessThanOrEqual(WORKER_SEEN_TTL_SEC);
     await hb.onModuleDestroy();
     expect(await redis.get(hb.key)).toBeNull();
+    expect(await redis.get(hb.seenKey)).toBeNull();
   });
 });
 

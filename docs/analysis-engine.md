@@ -52,3 +52,12 @@ Dayanıklılık:
 Her `ListingAnalysis.explanation`: seviye, hedef özeti, emsal başına özet (`id`, fiyat, yıl, km, hasar, düzeltilmiş değer, `clamped`, `outlier`), havuz sayıları (aday, geçersiz fiyat, tekilleştirme sonrası, seviyede, hasarlı çıkarılan, kullanılan, uç değer id'leri), düzeltme yöntemi ve katsayıları, Q1/medyan/Q3/yayılım, güven adımları (`confidenceSteps`), `insufficientReason`, bayraklar ve kullanılan ayarlar. `comparableIds` kullanılan (uç değer olmayan) emsallerdir.
 
 - Tarama sonrası yeniden analiz: başarıyla (`SUCCEEDED`) biten bir taramanın sonunda, o taramada ilk görülen ve son analizi `INSUFFICIENT` olan (ya da hiç analizi olmayan) ilanlar için `REFRESH` analiz işi eklenir (`jobId = analyze-post-<ilanId>-<collectionJobId>`, 500'lük sayfalarla `addBulk`, gerçek zamanlı öncelik). Havuz tarama boyunca dolduğundan ilk analiz zayıf kalan ilanlar böylece güncellenir; hata günlüğe yazılır, tarama işini başarısız yapmaz. Gece yenileme işleri düşük öncelikli (`priority: 100`) eklenir.
+
+## Sertleştirmeler (Plan 07)
+
+- **MANUAL yeniden analiz** (`POST /admin/listings/:id/reanalyze`, `reason: 'MANUAL'`): `REFRESH`in "maddi değişiklik" eşiğini (tahmin > %2, güven/motor sürümü) atlar ve her zaman yeni satır yazar; olay türetmesi aynıdır. Eşik altı değişiklikte (`materiallyChanged` false) "daha eşleşebilir" türevi `NEW` olayı üretilmez, yani bir yönetici tıklaması kullanıcı bildirimi doğurmaz. Gerçek olaylar (`NEW`, `PRICE_DROP`, `RELIST`) her zamanki gibi yayılır. İş `removeOnComplete` ile silindiğinden jobId tamamlandıktan sonra sorgulanamaz.
+
+- Analiz kilidi (`lock:analyze:<id>`) Lua CAS ile bırakılır; kilit TTL'i dolup başka süreç yazdıysa `latestAnalysisId` CAS'ı başarısız olur, satır geri alınır ve `AnalysisLockBusyError` ile iş yeniden denenir (`debug` log).
+- `AnalysisSettingsService` Redis `settings:changed` kanalını (mesaj = anahtar) dinler ve `analysis.settings` için önbelleği anında temizler; 60 sn TTL yedek kalır.
+- Eşleştirme olayı yeniden gönderimi `matchDispatchAttempts` sayar; 10 denemede takılan satır atlanır ve bir kez `match-dispatch-stuck` alarmı verilir.
+- Günlük `SubscriptionSweepService` (Redis `subs:sweep:<istanbulDay>`): süresi dolan ACTIVE abonelikler EXPIRED olur, limiti aşan ACTIVE profiller en yeniden başlayarak PAUSED olur ve kullanıcıya IN_APP `SYSTEM_ALERT` bildirimi gider.

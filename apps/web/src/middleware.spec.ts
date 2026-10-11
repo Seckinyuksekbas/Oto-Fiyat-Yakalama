@@ -6,8 +6,16 @@ const req = (path: string, cookie?: string) =>
   new NextRequest(`http://localhost:3000${path}`, { headers: cookie ? { cookie } : {} });
 
 describe('middleware', () => {
-  it('matches /app only', () => {
-    expect(config.matcher).toEqual(['/app/:path*']);
+  it('matches /app and /admin', () => {
+    expect(config.matcher).toEqual(['/app/:path*', '/admin/:path*']);
+  });
+
+  it('redirects /admin without a cookie to login and keeps next', () => {
+    const res = middleware(req('/admin/kullanicilar?status=SUSPENDED'));
+    expect(res.status).toBe(307);
+    const loc = new URL(res.headers.get('location')!);
+    expect(loc.pathname).toBe('/giris');
+    expect(loc.searchParams.get('next')).toBe('/admin/kullanicilar?status=SUSPENDED');
   });
 
   it('redirects to login with next and try_refresh when access_token is missing', () => {

@@ -8,5 +8,8 @@ export * from './schemas/admin';
 export * from './queues';
 export * from './schemas/search-profile';
 export * from './notifications';
+export * from './admin-events';
 export * from './schemas/channels';
 export * from './schemas/panel';
+export * from './schemas/analysis-settings';
+export * from './adapter-keys';

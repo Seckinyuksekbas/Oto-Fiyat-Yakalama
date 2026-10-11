@@ -300,3 +300,41 @@ describe('NotifyService', () => {
     expect(row.attempts).toBe(1);
   });
 });
+
+describe('NotifyService latency', () => {
+  const setEventAt = async (id: number, eventAt: string | null) => {
+    const row = await prisma.notification.findUniqueOrThrow({ where: { id } });
+    const payload = { ...(row.payload as Record<string, unknown>) };
+    if (eventAt === null) delete payload.eventAt;
+    else payload.eventAt = eventAt;
+    await prisma.notification.update({ where: { id }, data: { payload: payload as never } });
+  };
+
+  it('stamps eventAt into the payload (NEW = listing.firstSeenAt)', async () => {
+    const { u } = await setup(['IN_APP']);
+    const l = await makeMatch(u.id);
+    const [n] = await rowFor(u.id, 'IN_APP');
+    expect((n.payload as { eventAt?: string }).eventAt).toBe(l.firstSeenAt.toISOString());
+  });
+
+  it('computes latencyMs from payload.eventAt, not firstSeenAt', async () => {
+    const { u } = await setup(['IN_APP']);
+    await makeMatch(u.id);
+    const [n] = await rowFor(u.id, 'IN_APP');
+    await setEventAt(n.id, new Date(Date.now() - 60_000).toISOString());
+    await notify.process(n.id, FIRST);
+    const row = await prisma.notification.findUniqueOrThrow({ where: { id: n.id } });
+    expect(row.latencyMs!).toBeGreaterThanOrEqual(60_000);
+    expect(row.latencyMs!).toBeLessThan(65_000);
+  });
+
+  it('falls back to listing.firstSeenAt for old rows without eventAt', async () => {
+    const { u } = await setup(['IN_APP']);
+    const l = await makeMatch(u.id, { firstSeenAt: new Date(Date.now() - 120_000) });
+    const [n] = await rowFor(u.id, 'IN_APP');
+    await setEventAt(n.id, null);
+    await notify.process(n.id, FIRST);
+    const row = await prisma.notification.findUniqueOrThrow({ where: { id: n.id } });
+    expect(Math.abs(row.latencyMs! - (row.sentAt!.getTime() - l.firstSeenAt.getTime()))).toBeLessThan(1000);
+  });
+});

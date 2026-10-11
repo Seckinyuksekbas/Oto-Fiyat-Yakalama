@@ -14,6 +14,9 @@ export interface PublicUser {
   email: string;
   name: string;
   emailVerifiedAt?: string | null;
+  /** Yalnızca görünürlük için; yetki her istekte API'de denetlenir. */
+  role?: 'USER' | 'ADMIN' | 'SUPER_ADMIN';
+  status?: 'ACTIVE' | 'SUSPENDED' | 'DELETED';
   [key: string]: unknown;
 }
 

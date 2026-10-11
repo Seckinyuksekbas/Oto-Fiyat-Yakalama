@@ -1,4 +1,4 @@
-import { type Prisma, resolveUserPlan, type Listing, type ListingAnalysis } from '@oto/db';
+import { COUNTS_TOWARD_QUOTA, type Prisma, resolveUserPlan, type Listing, type ListingAnalysis } from '@oto/db';
 import { startOfIstanbulDay, type MatchEvent } from '@oto/shared';
 import { buildMatchPayload } from './payload';
 
@@ -31,6 +31,8 @@ export async function planNotifications(
   input: { listing: Listing; analysis: ListingAnalysis; matches: PlannedMatch[]; now: Date; telegramEnabled: boolean },
 ): Promise<PlannedNotification[]> {
   const out: PlannedNotification[] = [];
+  // Gerçek ilk-görülme NEW'i ilanın ilk analizidir; sonradan terfi eden NEW için olay anı analiz zamanıdır.
+  const firstAnalysis = (await tx.listingAnalysis.count({ where: { listingId: input.listing.id, id: { lt: input.analysis.id } } })) === 0;
   const byUser = new Map<string, PlannedMatch[]>();
   for (const m of input.matches) byUser.set(m.userId, [...(byUser.get(m.userId) ?? []), m]);
   const userIds = [...byUser.keys()].sort();
@@ -45,7 +47,7 @@ export async function planNotifications(
     const open = new Set<string>(['IN_APP', ...verified.map((c) => c.type)]);
     const allowed = new Set<string>(['IN_APP', ...plan.limits.channels]);
     let usedToday = await tx.notification.count({
-      where: { userId, kind: 'MATCH', channel: { not: 'IN_APP' }, status: { not: 'SKIPPED_LIMIT' }, createdAt: { gte: dayStart } },
+      where: { userId, kind: 'MATCH', channel: { not: 'IN_APP' }, status: { not: 'SKIPPED_LIMIT' }, AND: [COUNTS_TOWARD_QUOTA], createdAt: { gte: dayStart } },
     });
     for (const m of byUser.get(userId)!) {
       const channels = [...new Set(['IN_APP', ...m.profile.channels])].filter(
@@ -62,7 +64,7 @@ export async function planNotifications(
       const limitExceeded = [...statuses.values()].includes('SKIPPED_LIMIT');
       const payload = buildMatchPayload({
         listing: input.listing, analysis: input.analysis, reason: m.reason, previousPrice: m.previousPrice,
-        profile: { id: m.profile.id, name: m.profile.name }, limitExceeded,
+        profile: { id: m.profile.id, name: m.profile.name }, limitExceeded, firstAnalysis,
       });
       for (const c of channels) {
         const status = c === 'IN_APP' ? 'PENDING' : statuses.get(c)!;

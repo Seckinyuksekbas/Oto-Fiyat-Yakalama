@@ -1,3 +1,5 @@
+import { isIP } from 'node:net';
+import { assertPublicHttpUrl, guardedLookup, systemLookup, UnsafeUrlError, type HostLookup } from '@oto/server-common';
 import type Redis from 'ioredis';
 import { Agent, ProxyAgent, request, type Dispatcher } from 'undici';
 import { BlockedError, FetchError, toFetchError } from './errors';
@@ -15,6 +17,8 @@ export interface HttpFetcher {
   getText(url: string): Promise<HttpResult>;
 }
 
+export type { HostLookup };
+
 export interface PoliteHttpOptions {
   sourceId: number;
   minRequestGapMs: number;
@@ -26,7 +30,15 @@ export interface PoliteHttpOptions {
   timeoutMs?: number;
   isBlockedPage?: (html: string) => boolean;
   sleep?: (ms: number) => Promise<void>;
+  /** Doğruysa iç/özel/ayrılmış adreslere (DNS çözümü, yönlendirme ve rebinding dahil) bağlanılmaz. Worker üretimde true geçer. */
+  blockPrivateAddresses?: boolean;
+  /** Test dikişi: ana makine adı çözümleyici (varsayılan: sistem DNS'i). */
+  lookup?: HostLookup;
+  /** Test dikişi: özel dispatcher (ör. MockAgent). */
+  dispatcher?: Dispatcher;
 }
+
+const MAX_REDIRECTS = 3;
 
 const GENERIC_BLOCK_MARKERS =
   /class=["'][^"']*\b(g-recaptcha|h-captcha|cf-turnstile)\b|cf-chl-|challenge-platform|<title>[^<]*(attention required|just a moment)/i;
@@ -73,8 +85,14 @@ export class PoliteHttpClient implements HttpFetcher {
 
   constructor(private readonly opts: PoliteHttpOptions) {
     const timeout = opts.timeoutMs ?? 30_000;
-    const agentOptions = { connect: { timeout: 10_000 }, headersTimeout: timeout, bodyTimeout: timeout };
-    this.dispatcher = opts.proxyUrl ? new ProxyAgent({ uri: opts.proxyUrl, ...agentOptions }) : new Agent(agentOptions);
+    const resolver = opts.lookup ?? systemLookup;
+    const connect: Agent.Options['connect'] = {
+      timeout: 10_000,
+      ...(opts.blockPrivateAddresses ? ({ lookup: guardedLookup(resolver) } as object) : {}),
+    };
+    const agentOptions = { connect, headersTimeout: timeout, bodyTimeout: timeout };
+    this.dispatcher =
+      opts.dispatcher ?? (opts.proxyUrl ? new ProxyAgent({ uri: opts.proxyUrl, ...agentOptions, proxyTls: connect }) : new Agent(agentOptions));
     this.sleep = opts.sleep ?? defaultSleep;
     this.maxAttempts = opts.maxAttempts ?? 3;
     this.limiter = new SourceRateLimiter(opts.redis, opts.sourceId, opts.minRequestGapMs, this.sleep);
@@ -127,15 +145,52 @@ export class PoliteHttpClient implements HttpFetcher {
     }
   }
 
+  /** Her atlama (ilk istek + yönlendirmeler) için: IP sabit adres ve (proxy ile) ad çözümü denetimi. */
+  private async assertHopAllowed(url: string): Promise<void> {
+    const host = new URL(url).hostname.replace(/^\[|\]$/g, '');
+    try {
+      if (this.opts.proxyUrl) {
+        // undici IP sabit adreslerde lookup çağırmaz: IP olarak verilmiş proxy burada denetlenir.
+        const proxyHost = new URL(this.opts.proxyUrl).hostname.replace(/^\[|\]$/g, '');
+        if (isIP(proxyHost)) await assertPublicHttpUrl(this.opts.proxyUrl, { allowPrivate: false, allowCredentials: true });
+      }
+      if (isIP(host)) {
+        await assertPublicHttpUrl(url, { allowPrivate: false });
+      } else if (this.opts.proxyUrl) {
+        // Proxy kullanılırken hedef adı proxy çözer; connect.lookup yalnızca proxy'ye uygulanır.
+        const resolver = this.opts.lookup ?? systemLookup;
+        await assertPublicHttpUrl(url, { allowPrivate: false, lookup: async (h) => (await resolver(h)).map((a) => a.address) });
+      }
+    } catch (err) {
+      if (err instanceof UnsafeUrlError) throw new FetchError('NETWORK', `${err.message}: ${url}`, url, false);
+      throw err;
+    }
+  }
+
   private async fetchOnce(url: string): Promise<HttpResult> {
     await this.limiter.acquire();
     const started = Date.now();
-    const res = await request(url, {
-      method: 'GET',
-      dispatcher: this.dispatcher,
-      maxRedirections: 3,
-      headers: { 'user-agent': this.opts.userAgent, accept: 'text/html,application/xhtml+xml,text/plain;q=0.9' },
-    });
+    const block = this.opts.blockPrivateAddresses === true;
+    const headers = { 'user-agent': this.opts.userAgent, accept: 'text/html,application/xhtml+xml,text/plain;q=0.9' };
+    let res: Dispatcher.ResponseData;
+    if (!block) {
+      res = await request(url, { method: 'GET', dispatcher: this.dispatcher, maxRedirections: MAX_REDIRECTS, headers });
+    } else {
+      // Yönlendirmeleri elle izleriz: her atlama denetlenir (undici IP sabit adreslerde lookup çağırmaz).
+      let current = url;
+      for (let hop = 0; ; hop++) {
+        await this.assertHopAllowed(current);
+        res = await request(current, { method: 'GET', dispatcher: this.dispatcher, maxRedirections: 0, headers });
+        const location = res.headers.location;
+        if (res.statusCode >= 300 && res.statusCode < 400 && typeof location === 'string') {
+          await res.body.dump();
+          if (hop >= MAX_REDIRECTS) throw new FetchError('NETWORK', `Çok fazla yönlendirme: ${url}`, url, false);
+          current = new URL(location, current).href;
+          continue;
+        }
+        break;
+      }
+    }
     const body = await res.body.text();
     this.stats.requests += 1;
     this.stats.totalMs += Date.now() - started;

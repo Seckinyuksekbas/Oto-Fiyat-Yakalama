@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 /**
  * Not: refresh_token çerezi yalnızca /api/v1/auth yoluna kısıtlı olduğundan /app isteklerinde gelmez.
- * Bu yüzden yalnızca access_token'a bakılır; yoksa giriş sayfası try_refresh=1 ile önce
+ * Bu yüzden yalnızca access_token'a bakılır (/app ve /admin); yoksa giriş sayfası try_refresh=1 ile önce
  * istemci tarafında oturumu yenilemeyi dener.
  */
 export function middleware(req: NextRequest) {
@@ -21,4 +21,5 @@ export function middleware(req: NextRequest) {
   return NextResponse.redirect(url, 307);
 }
 
-export const config = { matcher: ['/app/:path*'] };
+/** `/admin` yalnızca oturum varlığına bakar; rol denetimi istemcide (404 görünümü) ve API'de (403) yapılır. */
+export const config = { matcher: ['/app/:path*', '/admin/:path*'] };

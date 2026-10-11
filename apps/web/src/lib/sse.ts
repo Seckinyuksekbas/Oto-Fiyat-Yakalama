@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import type { UserEvent } from '@oto/shared';
 import { refreshSessionDetailed } from './api';
 import { describeNotification, type NotificationView } from './notification-text';
+import { queryKeys } from './queries';
 import { onLoggedOut } from './session';
 
 export type StreamStatus = 'connecting' | 'open' | 'closed';
@@ -19,6 +20,11 @@ export interface NotificationStreamOptions {
   /** 'expired' (ya da false): oturum bitti, bırak. 'transient': yeniden dene. */
   refresh?: () => Promise<boolean | 'ok' | 'expired' | 'transient'>;
   now?: () => number;
+  /**
+   * `ready` sonrası bağlantı koptu (sunucu oturum geçersiz/kullanıcı pasifse akışı bitirir). Hook `['me']`'yi
+   * geçersiz kılar: oturum bittiyse `/me` 401 → yenileme → oturum-bitti işleyicisi.
+   */
+  onTrouble?(): void;
 }
 
 const STREAM_URL = '/api/v1/me/notifications/stream';
@@ -28,6 +34,9 @@ const MAX_DELAY_MS = 30_000;
 const PROACTIVE_MS = 14 * 60_000 + 30_000;
 /** Sunucu 25 sn'de bir ping gönderir; 60 sn sessizlik takılı bağlantı sayılır. */
 const STALL_MS = 60_000;
+/** `ready` sonrası bundan kısa yaşayan bağlantı kısa ömürlüdür; art arda 3'ten sonra `ready` geri çekilmeyi sıfırlamaz. */
+const STABLE_MS = 60_000;
+const SHORT_LIVED_LIMIT = 3;
 
 const defaultFactory = (url: string): EventSource => new EventSource(url, { withCredentials: true });
 
@@ -49,6 +58,8 @@ export function createNotificationStream(opts: NotificationStreamOptions): { clo
   let es: EventSource | null = null;
   let closed = false;
   let attempt = 0;
+  let readyAt: number | null = null;
+  let shortLived = 0;
   let lastId = 0;
   const seen = new Set<number>();
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -103,6 +114,7 @@ export function createNotificationStream(opts: NotificationStreamOptions): { clo
   };
 
   const connect = () => {
+    readyAt = null;
     opts.onStatus?.('connecting');
     const source = factory(STREAM_URL);
     es = source;
@@ -125,7 +137,8 @@ export function createNotificationStream(opts: NotificationStreamOptions): { clo
       alive();
       const r = parse<{ unreadCount: number; lastId: number | null }>(e);
       if (!r) return;
-      attempt = 0;
+      readyAt = Date.now();
+      if (shortLived < SHORT_LIVED_LIMIT) attempt = 0;
       lastId = Math.max(lastId, r.lastId ?? 0);
       for (const id of seen) if (id <= lastId) seen.delete(id);
       opts.onStatus?.('open');
@@ -141,6 +154,13 @@ export function createNotificationStream(opts: NotificationStreamOptions): { clo
     });
     source.addEventListener('error', () => {
       if (closed || es !== source) return;
+      if (readyAt !== null) {
+        const stable = Date.now() - readyAt >= STABLE_MS;
+        shortLived = stable ? 0 : shortLived + 1;
+        if (stable) attempt = 0;
+        readyAt = null;
+        opts.onTrouble?.();
+      }
       dropSource();
       clearTimeout(proactiveTimer);
       clearTimeout(watchdogTimer);
@@ -229,6 +249,7 @@ export function useNotificationStream(): void {
     const push = createToastLimiter({ show: showToast, showOverflow: showOverflowToast });
     const stream = createNotificationStream({
       refresh: refreshSessionDetailed,
+      onTrouble: () => void qc.invalidateQueries({ queryKey: queryKeys.me }),
       onReady: ({ unreadCount }) => {
         lastReadyAt = Date.now();
         qc.setQueryData<number>(NOTIFICATION_KEYS.unread, unreadCount);

@@ -1,7 +1,8 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { FetchError, getAdapter, LayoutError, normalizeListing, PoliteHttpClient, type ListingProblem, type SourceAdapter } from '@oto/collection';
+import { BlockedError, FetchError, getAdapter, LayoutError, normalizeListing, PoliteHttpClient, type ListingProblem, type SourceAdapter } from '@oto/collection';
 import type { JobStatus, Prisma } from '@oto/db';
-import { Encryptor } from '@oto/server-common';
+import { ADMIN_EVENTS_CHANNEL, adminJobEventSchema } from '@oto/shared';
+import { Encryptor, redactSecrets } from '@oto/server-common';
 import { AlertService } from '../common/alert.service';
 import { ENV } from '../config/config.module';
 import type { Env } from '../config/env';
@@ -31,12 +32,18 @@ class InfraError extends Error {
 export const MASS_REMOVAL_MIN = 20;
 export const MASS_REMOVAL_RATIO = 0.3;
 
-const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
+/** Dry-run en fazla bu kadar liste sayfası çeker ve ilk bu kadar ilan/sorun saklar. */
+export const DRY_RUN_MAX_PAGES = 2;
+const DRY_RUN_SAMPLE = 20;
+
+/** Kalıcılaştırılan/loglanan hata metni: URL kimlik bilgisi, sorgu dizisi ve token'lar yazım anında maskelenir. */
+const message = (err: unknown) => redactSecrets(err instanceof Error ? err.message : String(err));
 
 @Injectable()
 export class ScrapeRunner {
   private readonly logger = new Logger(ScrapeRunner.name);
   private readonly userAgent: string;
+  private readonly blockPrivateAddresses: boolean;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -49,12 +56,25 @@ export class ScrapeRunner {
     @Inject(ENV) env: Env,
   ) {
     this.userAgent = `OtoFirsatBot/1.0 (+${env.BOT_CONTACT_URL})`;
+    this.blockPrivateAddresses = env.NODE_ENV === 'production';
   }
 
   /** İşi yalnızca hâlâ RUNNING ise kapatır; stale-reaper zaten kapattıysa üzerine yazmaz. */
-  private async closeJob(id: number, data: Prisma.CollectionJobUpdateManyMutationInput): Promise<void> {
-    const { count } = await this.prisma.collectionJob.updateMany({ where: { id, status: 'RUNNING' }, data });
-    if (count === 0) this.logger.warn(`İş zaten kapatılmış (stale?): ${id}`);
+  private async closeJob(job: { id: number; sourceId: number }, data: Prisma.CollectionJobUpdateManyMutationInput & { status: JobStatus }): Promise<void> {
+    if (typeof data.errorSummary === 'string') data = { ...data, errorSummary: redactSecrets(data.errorSummary).slice(0, 500) };
+    const { count } = await this.prisma.collectionJob.updateMany({ where: { id: job.id, status: 'RUNNING' }, data });
+    if (count === 0) this.logger.warn(`İş zaten kapatılmış (stale?): ${job.id}`);
+    else await this.publishJob(job, data.status);
+  }
+
+  /** Admin canlı akışı için iş durumu değişimi (`admin:events`); en iyi çaba, taramayı asla bozmaz. */
+  private async publishJob(job: { id: number; sourceId: number }, status: JobStatus): Promise<void> {
+    const event = adminJobEventSchema.safeParse({ type: 'job', jobId: job.id, sourceId: job.sourceId, status, at: new Date().toISOString() });
+    if (!event.success) {
+      this.logger.warn(`Geçersiz iş olayı yayınlanmadı (iş ${job.id})`);
+      return;
+    }
+    await this.redis.publish(ADMIN_EVENTS_CHANNEL, JSON.stringify(event.data)).catch((err: unknown) => this.logger.warn(`İş olayı yayınlanamadı: ${message(err)}`));
   }
 
   /** Bir CollectionJob'u uçtan uca yürütür. Yalnızca QUEUED işleri çalıştırır (yeniden teslimde güvenli). */
@@ -68,9 +88,10 @@ export class ScrapeRunner {
 
     const refuse = async (reason: string) => {
       await this.prisma.collectionJob.update({ where: { id: job.id }, data: { status: 'FAILED', finishedAt: new Date(), errorSummary: reason } });
+      await this.publishJob(job, 'FAILED');
       return null;
     };
-    if (job.dryRun) return refuse('Dry-run henüz desteklenmiyor (Plan 07)');
+    if (job.dryRun) return this.runDry(job, source, refuse);
     if (!source.isActive || !source.permissionVerifiedAt || source.health === 'PAUSED') {
       return refuse('Kaynak pasif, izinsiz veya duraklatılmış');
     }
@@ -84,6 +105,7 @@ export class ScrapeRunner {
     const startedAt = new Date();
     const claimed = await this.prisma.collectionJob.updateMany({ where: { id: job.id, status: 'QUEUED' }, data: { status: 'RUNNING', startedAt } });
     if (claimed.count !== 1) return null;
+    await this.publishJob(job, 'RUNNING');
 
     let http: PoliteHttpClient | null = null;
     let resolve: Awaited<ReturnType<AliasService['resolver']>>;
@@ -92,6 +114,7 @@ export class ScrapeRunner {
         sourceId: source.id,
         minRequestGapMs: source.minRequestGapMs,
         userAgent: this.userAgent,
+        blockPrivateAddresses: this.blockPrivateAddresses,
         redis: this.redis,
         proxyUrl: source.proxyConfig?.isEnabled ? this.encryptor.decrypt(source.proxyConfig.urlEncrypted) : null,
         isBlockedPage: adapter.isBlockedPage ? (html) => adapter.isBlockedPage!(html) : undefined,
@@ -101,7 +124,7 @@ export class ScrapeRunner {
       await http?.close().catch(() => undefined);
       const reason = `Kurulum hatası: ${message(err)}`.slice(0, 500);
       this.logger.error(`Kaynak ${source.code} için ${reason}`);
-      await this.closeJob(job.id, { status: 'FAILED', finishedAt: new Date(), errorSummary: reason });
+      await this.closeJob(job, { status: 'FAILED', finishedAt: new Date(), errorSummary: reason });
       return { status: 'FAILED', pages: 0, cards: 0, created: 0, updated: 0, removed: 0, failed: 0 };
     }
 
@@ -149,7 +172,7 @@ export class ScrapeRunner {
     if (infra) {
       const reason = `Altyapı hatası: ${message(infra)}`.slice(0, 500);
       this.logger.error(`Kaynak ${source.code} taraması altyapı hatasıyla durdu: ${message(infra)}`);
-      await this.closeJob(job.id, { status: 'FAILED', finishedAt: new Date(), pagesFetched: c.pages, listingsSeen: c.cards, listingsNew: c.created, listingsUpdated: c.updated, errorsCount: c.failed, errorSummary: reason })
+      await this.closeJob(job, { status: 'FAILED', finishedAt: new Date(), pagesFetched: c.pages, listingsSeen: c.cards, listingsNew: c.created, listingsUpdated: c.updated, errorsCount: c.failed, errorSummary: reason })
         .catch((e: unknown) => this.logger.error(`İş durumu güncellenemedi: ${message(e)}`));
       throw infra;
     }
@@ -197,7 +220,7 @@ export class ScrapeRunner {
         errorSummary = notes.length > 0 ? notes.join('; ').slice(0, 500) : null;
       }
 
-      await this.closeJob(job.id, {
+      await this.closeJob(job, {
           status,
           finishedAt: new Date(),
           pagesFetched: c.pages,
@@ -211,7 +234,7 @@ export class ScrapeRunner {
       });
     } catch (err) {
       this.logger.error(`Kaynak ${source.code} sonuç kaydı başarısız: ${message(err)}`);
-      await this.closeJob(job.id, { status: 'FAILED', finishedAt: new Date(), errorSummary: `Altyapı hatası: ${message(err)}`.slice(0, 500) })
+      await this.closeJob(job, { status: 'FAILED', finishedAt: new Date(), errorSummary: `Altyapı hatası: ${message(err)}`.slice(0, 500) })
         .catch((e: unknown) => this.logger.error(`İş durumu güncellenemedi: ${message(e)}`));
       throw err;
     }
@@ -224,5 +247,89 @@ export class ScrapeRunner {
       }
     }
     return { status, pages: c.pages, cards: c.cards, created: c.created, updated: c.updated, removed: c.removed, failed: c.failed };
+  }
+
+  /**
+   * Dry-run: liste sayfalarını aynı politika kurallarıyla (robots, aralık, proxy) çeker, ayrıştırıp normalize eder;
+   * ingest, kaldırma, analiz, ScrapeError ve kaynak sağlığı DEĞİŞTİRİLMEZ. En fazla DRY_RUN_MAX_PAGES sayfa.
+   * Kaynak etkin olmasa da çalışır, ancak izin doğrulaması (permissionVerifiedAt) zorunludur.
+   */
+  private async runDry(
+    job: { id: number; sourceId: number },
+    source: Prisma.DataSourceGetPayload<{ include: { proxyConfig: true } }>,
+    refuse: (reason: string) => Promise<null>,
+  ): Promise<RunSummary | null> {
+    if (!source.permissionVerifiedAt) return refuse('Kaynağın izni doğrulanmamış');
+    // Engel sinyali sonrası (PAUSED) dry-run dahil hiçbir istek atılmaz.
+    if (source.health === 'PAUSED') return refuse('Kaynak engel nedeniyle duraklatılmış; önce nedeni inceleyip etkinleştirin');
+    let adapter: SourceAdapter;
+    try {
+      adapter = getAdapter(source.adapterKey);
+    } catch (err) {
+      return refuse(message(err));
+    }
+    const claimed = await this.prisma.collectionJob.updateMany({ where: { id: job.id, status: 'QUEUED' }, data: { status: 'RUNNING', startedAt: new Date() } });
+    if (claimed.count !== 1) return null;
+    await this.publishJob(job, 'RUNNING');
+
+    const startedAt = Date.now();
+    const c = { pages: 0, cards: 0, failed: 0 };
+    const items: Record<string, unknown>[] = [];
+    const problems: ListingProblem[] = [];
+    let fatal: unknown = null;
+    let http: PoliteHttpClient | null = null;
+    try {
+      http = new PoliteHttpClient({
+        sourceId: source.id,
+        minRequestGapMs: source.minRequestGapMs,
+        userAgent: this.userAgent,
+        blockPrivateAddresses: this.blockPrivateAddresses,
+        redis: this.redis,
+        proxyUrl: source.proxyConfig?.isEnabled ? this.encryptor.decrypt(source.proxyConfig.urlEncrypted) : null,
+        isBlockedPage: adapter.isBlockedPage ? (html) => adapter.isBlockedPage!(html) : undefined,
+      });
+      const resolve = await this.aliases.resolver();
+      for await (const page of adapter.listPages({ http, config: source.config })) {
+        c.pages += 1;
+        const parsed = adapter.parseList(page);
+        c.cards += parsed.listings.length + parsed.problems.length;
+        c.failed += parsed.problems.length;
+        problems.push(...parsed.problems);
+        for (const raw of parsed.listings) {
+          const normalized = normalizeListing(raw, resolve);
+          if (!normalized.ok) {
+            c.failed += 1;
+            problems.push(...normalized.problems);
+            continue;
+          }
+          if (items.length < DRY_RUN_SAMPLE) items.push({ ...normalized.listing, price: normalized.listing.price.toString() });
+        }
+        if (c.pages >= DRY_RUN_MAX_PAGES) break;
+      }
+    } catch (err) {
+      fatal = err;
+    } finally {
+      await http?.close().catch(() => undefined);
+    }
+
+    const durationMs = Date.now() - startedAt;
+    const status: JobStatus = fatal ? 'FAILED' : 'SUCCEEDED';
+    const dryRunResult = { pages: c.pages, items, problems: problems.slice(0, DRY_RUN_SAMPLE), durationMs } as unknown as Prisma.InputJsonValue;
+    await this.closeJob(job, {
+      status,
+      finishedAt: new Date(),
+      pagesFetched: c.pages,
+      listingsSeen: c.cards,
+      errorsCount: c.failed + (fatal ? 1 : 0),
+      avgResponseMs: http && http.stats.requests > 0 ? Math.round(http.stats.totalMs / http.stats.requests) : null,
+      errorSummary: fatal ? message(fatal).slice(0, 500) : null,
+      dryRunResult,
+    });
+    if (fatal) this.logger.warn(`Kaynak ${source.code} dry-run başarısız: ${message(fatal)}`);
+    // Tek yan etki: engel sinyali (403/captcha/robots) normal taramadaki gibi kaynağı duraklatır ve uyarır.
+    if (fatal instanceof BlockedError) {
+      await this.health.recordFailure(source.id, fatal).catch((e: unknown) => this.logger.error(`Engel kaydı yazılamadı: ${message(e)}`));
+    }
+    return { status, pages: c.pages, cards: c.cards, created: 0, updated: 0, removed: 0, failed: c.failed };
   }
 }

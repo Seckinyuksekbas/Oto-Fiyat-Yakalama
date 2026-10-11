@@ -29,3 +29,11 @@ export async function resolveUserPlan(db: LimitsDb, userId: string, now = new Da
   if (!free) throw new Error('FREE planı tanımlı değil (seedPlans çalıştırılmalı)');
   return { planCode: free.code, planName: free.name, status: 'FALLBACK', endsAt: null, limits: planLimitsSchema.parse(free.limits) };
 }
+
+/**
+ * Doğrulanmamış e-postalı kullanıcı en fazla 1 aktif profil tutabilir (plan limiti daha düşükse o).
+ * API LimitsService ve worker süpürmesi aynı kuralı buradan almalıdır.
+ */
+export function maxSearchProfilesFor(limits: Pick<PlanLimits, 'maxSearchProfiles'>, emailVerified: boolean): number {
+  return emailVerified ? limits.maxSearchProfiles : Math.min(1, limits.maxSearchProfiles);
+}

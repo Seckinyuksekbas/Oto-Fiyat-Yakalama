@@ -53,6 +53,17 @@ describe('SchedulerService.tick', () => {
     expect(await scheduler.tick(plus(60_000))).toBe(1);
   });
 
+  it('a dry-run does not reset the interval clock, but an in-flight dry-run blocks a new scheduled job', async () => {
+    const source = await createSource(ref, demo.baseUrl, { intervalSec: 60 });
+    await prisma.collectionJob.create({ data: { sourceId: source.id, trigger: 'SCHEDULED', status: 'SUCCEEDED', createdAt: T0 } });
+    const dry = await prisma.collectionJob.create({ data: { sourceId: source.id, trigger: 'MANUAL', dryRun: true, status: 'SUCCEEDED', createdAt: plus(50_000) } });
+    // son dry-run 10 sn önce olsa da saat son GERÇEK işten (T0) hesaplanır
+    expect(await scheduler.tick(plus(60_000))).toBe(1);
+    await prisma.collectionJob.updateMany({ where: { sourceId: source.id }, data: { status: 'SUCCEEDED' } });
+    await prisma.collectionJob.update({ where: { id: dry.id }, data: { status: 'RUNNING' } });
+    expect(await scheduler.tick(plus(200_000))).toBe(0);
+  });
+
   it('ignores inactive and paused sources', async () => {
     await createSource(ref, demo.baseUrl, { isActive: false });
     await createSource(ref, demo.baseUrl, { health: 'PAUSED' });

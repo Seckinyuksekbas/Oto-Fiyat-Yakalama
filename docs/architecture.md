@@ -1,4 +1,4 @@
-# Mimari (Plan 06 sonrası durum)
+# Mimari (Plan 07 sonrası durum)
 
 Ayrıntılı tasarım: `docs/superpowers/specs/2026-10-10-oto-firsat-platformu-design.md`.
 
@@ -6,12 +6,13 @@ Ayrıntılı tasarım: `docs/superpowers/specs/2026-10-10-oto-firsat-platformu-d
 - `packages/shared` — zod şemaları (API sözleşmesi), hata kodları, plan limit tipi, zaman yardımcıları. Frontend de aynı şemaları kullanır.
 - `packages/db` — Prisma şeması (tüm platform modelleri), migration'lar, seed (`FREE/PRO/BUSINESS` planları, ilk süper admin).
 - `apps/api` — NestJS 11 REST API, `/api/v1`.
-- `apps/web` — Next.js 15 kullanıcı paneli (bkz. aşağıda Web katmanı).
+- `apps/web` — Next.js 15 kullanıcı ve yönetim paneli (bkz. aşağıda Web katmanı ve Admin paneli).
+- `packages/server-common` — API ve worker'ın ortak sunucu yardımcıları (SSRF denetimi `assertPublicHttpUrl`/`guardedLookup`, `isPrivateAddress`, `bullConnection`, `redactSecrets`).
 
 ## İstek yaşam döngüsü (apps/api)
 1. `helmet` → `cookie-parser` → JSON gövde (100 kb, hatalar standart formatta) → pino-http (`x-request-id`).
 2. Global guard sırası: **CsrfGuard** (mutasyonlarda `X-Requested-With` + Origin) → **JwtAuthGuard** (`access_token` cookie; `@Public()` yoksa zorunlu) → **RolesGuard** (`@Roles` varsa oturum/kullanıcı/rol DB'den canlı) → **AppThrottlerGuard** (Redis; 120/dk, `/auth` 10/dk).
-3. Handler → (`@Audited` ise) **AuditInterceptor** `AuditLog` yazar → **AllExceptionsFilter** tüm hataları `{ error: { code, message, details? } }` biçimine çevirir.
+3. Handler → **AllExceptionsFilter** tüm hataları `{ error: { code, message, details? } }` biçimine çevirir. Admin mutasyonları denetim kaydını servis içinde, mutasyonla aynı transaction'da yazar (`AuditService.recordInTx`, aktör/IP `@AuditCtx()` ile; `@Audited` yalnızca kapsama meta verisidir). Ayrıntılar: [admin.md](admin.md).
 
 ## Kimlik doğrulama
 - Access: EdDSA JWT, 15 dk. Refresh: opak token, 30 gün, DB'de SHA-256; her kullanımda döner. Eski token 10 sn içinde gelirse `REFRESH_RACE` (aile korunur), sonra gelirse `REFRESH_REUSED` (aile iptal + güvenlik bildirimi + audit).
@@ -59,3 +60,12 @@ Ayrıntılar: [web.md](web.md).
 - **Canlı bildirim:** tek SSE bağlantısı (`ready`/`notification`/`ping`), 60 sn watchdog, 14 dk 30 sn'de proaktif yenileme, oturum bitince durur.
 - **Panel API'leri (Plan 06):** `/me/opportunities`, `/me/listings/:id`, `/me/favorites`, `/me/dashboard`, `/me/subscription`, `/catalog/*` — hepsi userId kapsamlı repository'ler üzerinden; `Favorite.id` (SERIAL, benzersiz) keyset imleci içindir.
 - **Tasarım sistemi:** CSS tokenları `globals.css`'te; koyu varsayılan, açık tema WCAG AA; yazı tipleri self-hosted (derleme ağsızdır). Plan 07 admin paneli aynı sistemi kullanacaktır.
+
+## Admin paneli (Plan 07)
+Ayrıntılar: [admin.md](admin.md) (yetki matrisi, denetim, kaynak yaşam döngüsü, alarmlar, SSRF).
+
+- **API:** `apps/api/src/modules/admin/*` alan başına controller + servis. `/admin/*` → `ADMIN | SUPER_ADMIN`; rol değiştirme, kullanıcı silme, paketler ve ayar yazımı yalnızca `SUPER_ADMIN`. Listeler offset `{ items, total }`, `pageSize ≤ 100`. Kuyruklara `AdminQueues` (tembel BullMQ `Queue` örnekleri; Redis yoksa 503) ile erişilir; worker'a özgü işler (dry-run tarama, `MANUAL` yeniden analiz, bildirim yeniden deneme) kuyruk işi olarak gönderilir.
+- **Worker:** `MonitorService` scheduler adımı (`MONITOR_INTERVAL_MS`, varsayılan 60 sn) alarm koşullarını `alerts.thresholds` eşikleriyle değerlendirir; `AlertService` SystemLog + adminlere IN_APP `SYSTEM_ALERT` (+ doğrulanmış Telegram kanalı) + `admin:events` yayını yapar (30 dk susturma, kalıcı durumlar 6 saatte bir). `settings:changed` yayını analiz ayar önbelleğini anında geçersiz kılar. Günlük abonelik süpürmesi süresi dolan abonelikleri `EXPIRED` yapar.
+- **Canlı akış:** `GET /admin/stream` (`ready`/`alert`/`job`/`kpi`/`ping`); sunucu oturumu ve rolü 30 sn'de bir yeniden kontrol eder (kullanıcı akışı da).
+- **SSRF:** admin girdisi URL'ler kayıtta (`assertPublicHttpUrl`) ve production'da çekim anında (`PoliteHttpClient` bağlantı yolunda `guardedLookup`, proxy soketi dahil; yönlendirmelerde her atlama) denetlenir.
+- **Web:** `/admin/*` Plan 06 tasarım sistemiyle; middleware çerez kontrolü + istemci rol kapısı (yetkisizse 404 görünümü); asıl yetki API'de.

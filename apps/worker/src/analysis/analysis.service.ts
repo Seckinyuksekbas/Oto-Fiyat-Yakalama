@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { analyze } from '@oto/analysis';
 import { Prisma } from '@oto/db';
-import type { MatchEvent } from '@oto/shared';
+import type { AnalyzeReason, MatchEvent } from '@oto/shared';
 import { PrismaService } from '../infra/prisma.service';
 import { RedisService } from '../infra/redis.service';
 import { AnalysisSettingsService } from './analysis-settings.service';
@@ -10,8 +10,11 @@ import { becameMoreMatchable, deriveEvent, isDamaged, isMatchEvent, materiallyCh
 import { MatchDispatcher } from './match-dispatcher.service';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** Kilit yenilenmez: TTL, tek analizin en kötü süresinden uzundur; aşılırsa latestAnalysisId CAS'ı güvenlik ağıdır. */
 const LOCK_TTL_MS = 60_000;
 const MAX_CANDIDATES = 1000;
+/** Kilidi yalnızca sahibi bırakabilir (token eşleşirse sil). */
+const RELEASE_LOCK_LUA = `if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end`;
 
 export class AnalysisLockBusyError extends Error {
   constructor(listingId: number) {
@@ -38,18 +41,19 @@ export class AnalysisService {
   ) {}
 
   /** Kilit doluysa AnalysisLockBusyError fırlatır; BullMQ işi geri çekilmeyle yeniden dener. */
-  async process(listingId: number, now: Date = new Date()): Promise<AnalyzeOutcome> {
+  async process(listingId: number, now: Date = new Date(), reason?: AnalyzeReason): Promise<AnalyzeOutcome> {
     const lockKey = `lock:analyze:${listingId}`;
     const token = randomUUID();
     if ((await this.redis.set(lockKey, token, 'PX', LOCK_TTL_MS, 'NX')) !== 'OK') throw new AnalysisLockBusyError(listingId);
     try {
-      return await this.processLocked(listingId, now);
+      return await this.processLocked(listingId, now, reason);
     } finally {
-      if ((await this.redis.get(lockKey)) === token) await this.redis.del(lockKey);
+      // Bırakma hatası asıl sonucu/hatayı maskelememeli; kilit TTL ile kendiliğinden düşer.
+      await this.redis.eval(RELEASE_LOCK_LUA, 1, lockKey, token).catch((err: unknown) => this.logger.warn(`Analiz kilidi bırakılamadı (${lockKey}): ${err instanceof Error ? err.message : String(err)}`));
     }
   }
 
-  private async processLocked(listingId: number, now: Date): Promise<AnalyzeOutcome> {
+  private async processLocked(listingId: number, now: Date, reason?: AnalyzeReason): Promise<AnalyzeOutcome> {
     const listing = await this.prisma.listing.findUnique({ where: { id: listingId }, include: { latestAnalysis: true } });
     if (!listing || listing.status !== 'ACTIVE') return { status: 'SKIPPED', event: null, analysisId: null };
 
@@ -90,13 +94,16 @@ export class AnalysisService {
 
     const latest = listing.latestAnalysis;
     const event = deriveEvent(listing, latest);
-    if (event === 'REFRESH' && latest && !materiallyChanged(latest, result, settings)) {
+    if (reason !== 'MANUAL' && event === 'REFRESH' && latest && !materiallyChanged(latest, result, settings)) {
       return { status: 'UNCHANGED', event, analysisId: latest.id };
     }
 
+    // MANUAL (admin) yeniden analizi eşik altı değişiklikte kullanıcı bildirimi üretmez: "daha eşleşebilir" türevi
+    // yalnızca maddi değişiklikte geçerlidir. Gerçek olaylar (NEW/PRICE_DROP/RELIST) her zaman yayılır.
+    const manualImmaterial = reason === 'MANUAL' && latest !== null && !materiallyChanged(latest, result, settings);
     const matchEvent: MatchEvent | null = isMatchEvent(event)
       ? event
-      : (event === 'REFRESH' || event === 'CHANGE') && latest && becameMoreMatchable(latest, result)
+      : !manualImmaterial && (event === 'REFRESH' || event === 'CHANGE') && latest && becameMoreMatchable(latest, result)
         ? 'NEW'
         : null;
     const matchPreviousPrice = event === 'PRICE_DROP' ? (latest?.listingPrice ?? null) : null;
@@ -121,7 +128,12 @@ export class AnalysisService {
           matchPreviousPrice,
         },
       });
-      await tx.listing.update({ where: { id: listing.id }, data: { latestAnalysisId: created.id } });
+      // Kilit TTL'i dolup başka süreç yazdıysa (CAS): bizim satırı geri al, iş yeniden denensin.
+      const swapped = await tx.listing.updateMany({
+        where: { id: listing.id, latestAnalysisId: listing.latestAnalysisId },
+        data: { latestAnalysisId: created.id },
+      });
+      if (swapped.count === 0) throw new AnalysisLockBusyError(listing.id);
       return created;
     });
 

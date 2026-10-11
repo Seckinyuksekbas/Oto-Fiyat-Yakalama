@@ -119,3 +119,7 @@ Fiyat analizi tahminidir; aracın durumunu garanti etmez.
 ```
 
 Başlık: `NEW` için indirim > 0 ve güven ≠ INSUFFICIENT ise "🔥 Fırsat", değilse "🆕 Yeni ilan"; `PRICE_DROP` için "📉 Fiyat düştü: <önceki> → <yeni> TL"; `RELIST` için "🔁 Yeniden yayında". Tarihler Europe/Istanbul, sayılar `tr-TR` biçimindedir. Metin HTML kaçışlıdır; fotoğraflı mesajda caption 1024, düz mesajda 4096 karakterle sınırlıdır.
+
+## Gecikme ve saklama (Plan 07)
+
+`MatchNotificationPayload.eventAt` (NEW: ilanın `firstSeenAt`'i; PRICE_DROP/RELIST: analizin `createdAt`'i) payload'a yazılır; `latencyMs = sentAt - eventAt` (eski satırlarda `eventAt` yoksa `listing.firstSeenAt`). Başarısız bildirim işleri 7 gün saklanır (`NOTIFY_JOB_OPTS.removeOnFail`).

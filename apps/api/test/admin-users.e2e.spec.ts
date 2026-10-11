@@ -1,5 +1,8 @@
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import request from 'supertest';
+import { vi } from 'vitest';
+import { AuditService } from '../src/common/audit/audit.service';
+import { SessionService } from '../src/modules/auth/session.service';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { PrismaService } from '../src/infra/prisma.service';
 import { createTestApp, registerUser, resetState, setRole } from './helpers';
@@ -63,7 +66,7 @@ describe('admin users', () => {
     const victim = await registerUser(app, { email: 'victim@test.com' });
 
     const res = await admin.agent.post(`/api/v1/admin/users/${victim.user.id}/suspend`);
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(200);
     expect(res.body.user.status).toBe('SUSPENDED');
 
     expect((await victim.agent.post('/api/v1/auth/refresh')).status).toBe(401);
@@ -100,5 +103,79 @@ describe('admin users', () => {
     await setRole(app, admin.user.id, 'ADMIN');
     expect((await admin.agent.get('/api/v1/admin/users/does-not-exist')).status).toBe(404);
     expect((await admin.agent.post('/api/v1/admin/users/does-not-exist/suspend')).status).toBe(404);
+  });
+});
+
+describe('admin users: atomic audit', () => {
+  it('no-op suspend/activate writes no audit and no change', async () => {
+    const admin = await registerUser(app);
+    await setRole(app, admin.user.id, 'ADMIN');
+    const victim = await registerUser(app, { email: 'noop@test.com' });
+
+    const act = await admin.agent.post(`/api/v1/admin/users/${victim.user.id}/activate`);
+    expect(act.body.user.status).toBe('ACTIVE');
+    expect(await prisma.auditLog.count({ where: { action: 'user.activate' } })).toBe(0);
+
+    await admin.agent.post(`/api/v1/admin/users/${victim.user.id}/suspend`);
+    const again = await admin.agent.post(`/api/v1/admin/users/${victim.user.id}/suspend`);
+    expect(again.body.user.status).toBe('SUSPENDED');
+    expect(await prisma.auditLog.count({ where: { action: 'user.suspend' } })).toBe(1);
+  });
+
+  it('audit write failing inside the transaction rolls back the status change', async () => {
+    const admin = await registerUser(app);
+    await setRole(app, admin.user.id, 'ADMIN');
+    const victim = await registerUser(app, { email: 'atomic@test.com' });
+    const spy = vi.spyOn(app.get(AuditService), 'recordInTx').mockRejectedValueOnce(new Error('audit down'));
+    try {
+      const res = await admin.agent.post(`/api/v1/admin/users/${victim.user.id}/suspend`);
+      expect(res.status).toBe(500);
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: victim.user.id } })).status).toBe('ACTIVE');
+    expect(await prisma.auditLog.count({ where: { action: 'user.suspend' } })).toBe(0);
+    expect((await prisma.session.count({ where: { userId: victim.user.id, revokedAt: null } }))).toBeGreaterThan(0);
+  });
+
+  it('audit row is committed with the status change (same transaction client)', async () => {
+    const admin = await registerUser(app);
+    await setRole(app, admin.user.id, 'ADMIN');
+    const victim = await registerUser(app, { email: 'tx@test.com' });
+    const audit = app.get(AuditService);
+    const orig = audit.recordInTx.bind(audit);
+    let sawTxClient = false;
+    const spy = vi.spyOn(audit, 'recordInTx').mockImplementation(async (tx, ctx, e) => {
+      sawTxClient = tx !== (prisma as unknown);
+      // Tx içinde görünür: durum değişimi aynı tx'te yapılmış olmalı
+      const row = await tx.user.findUniqueOrThrow({ where: { id: victim.user.id } });
+      expect(row.status).toBe('SUSPENDED');
+      // Tx dışından henüz görünmez
+      expect((await prisma.user.findUniqueOrThrow({ where: { id: victim.user.id } })).status).toBe('ACTIVE');
+      return orig(tx, ctx, e);
+    });
+    try {
+      expect((await admin.agent.post(`/api/v1/admin/users/${victim.user.id}/suspend`)).status).toBe(200);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(sawTxClient).toBe(true);
+    expect(await prisma.auditLog.count({ where: { action: 'user.suspend' } })).toBe(1);
+  });
+
+  it('session revoke failure after commit is logged, not fatal: status and audit persist', async () => {
+    const admin = await registerUser(app);
+    await setRole(app, admin.user.id, 'ADMIN');
+    const victim = await registerUser(app, { email: 'revoke@test.com' });
+    const spy = vi.spyOn(app.get(SessionService), 'revokeAllForUser').mockRejectedValueOnce(new Error('redis down'));
+    try {
+      const res = await admin.agent.post(`/api/v1/admin/users/${victim.user.id}/suspend`);
+      expect(res.status).toBe(200);
+      expect(res.body.user.status).toBe('SUSPENDED');
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await prisma.auditLog.count({ where: { action: 'user.suspend' } })).toBe(1);
   });
 });

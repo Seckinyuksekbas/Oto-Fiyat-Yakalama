@@ -1,7 +1,7 @@
 'use client';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ChevronDown, LogOut, Settings } from 'lucide-react';
+import { ChevronDown, LayoutDashboard, LogOut, Settings, ShieldCheck } from 'lucide-react';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -11,6 +11,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useQueryClient } from '@tanstack/react-query';
+import { isAdminRole } from '@/lib/admin-api';
 import { purgeUserCache, useLogout, useMe } from '@/lib/queries';
 
 function initials(name: string): string {
@@ -19,7 +20,8 @@ function initials(name: string): string {
   return picked.map((p) => p.charAt(0).toLocaleUpperCase('tr-TR')).join('');
 }
 
-export function UserMenu() {
+/** `context="admin"`: yönetim kabuğunda kullanıcı paneline dönüş bağlantısı gösterilir. */
+export function UserMenu({ context = 'app' }: { context?: 'app' | 'admin' }) {
   const me = useMe();
   const logout = useLogout();
   const router = useRouter();
@@ -54,6 +56,21 @@ export function UserMenu() {
           <span className="truncate text-[13px] font-normal text-muted">{user?.email}</span>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
+        {context === 'admin' ? (
+          <DropdownMenuItem asChild>
+            <Link href="/app">
+              <LayoutDashboard aria-hidden className="size-4" />
+              Kullanıcı paneli
+            </Link>
+          </DropdownMenuItem>
+        ) : isAdminRole(user?.role) ? (
+          <DropdownMenuItem asChild>
+            <Link href="/admin">
+              <ShieldCheck aria-hidden className="size-4" />
+              Yönetim paneli
+            </Link>
+          </DropdownMenuItem>
+        ) : null}
         <DropdownMenuItem asChild>
           <Link href="/app/ayarlar">
             <Settings aria-hidden className="size-4" />

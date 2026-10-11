@@ -28,6 +28,8 @@ const baseSchema = z.object({
   TELEGRAM_BOT_USERNAME: z.string().regex(/^[A-Za-z0-9_]{5,32}$/).optional(),
   TELEGRAM_MODE: z.enum(['polling', 'webhook']).default('polling'),
   TELEGRAM_WEBHOOK_SECRET: z.string().regex(/^[A-Za-z0-9_-]{32,256}$/).optional(),
+  /** Proxy sağlık kontrolü hedefi */
+  PROXY_CHECK_URL: z.string().url().default('https://www.gstatic.com/generate_204'),
   TELEGRAM_API_BASE: z.string().url().default('https://api.telegram.org'),
 });
 

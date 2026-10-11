@@ -2,7 +2,9 @@ import { Inject, Injectable, Logger, type OnApplicationBootstrap, type OnModuleD
 import { ENV } from '../config/config.module';
 import type { Env } from '../config/env';
 import { AnalysisSweepService } from './analysis-sweep.service';
+import { MonitorService } from './monitor.service';
 import { NotificationSweepService } from './notification-sweep.service';
+import { SubscriptionSweepService } from './subscription-sweep.service';
 import { SchedulerService } from './scheduler.service';
 
 const CLEANUP_EVERY_MS = 24 * 60 * 60 * 1000;
@@ -14,11 +16,14 @@ export class SchedulerLoop implements OnApplicationBootstrap, OnModuleDestroy {
   private tickTimer?: NodeJS.Timeout;
   private cleanupTimer?: NodeJS.Timeout;
   private ticking = false;
+  private lastMonitorAt = 0;
 
   constructor(
     private readonly scheduler: SchedulerService,
     private readonly sweep: AnalysisSweepService,
     private readonly notifySweep: NotificationSweepService,
+    private readonly subscriptionSweep: SubscriptionSweepService,
+    private readonly monitor: MonitorService,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
@@ -48,6 +53,11 @@ export class SchedulerLoop implements OnApplicationBootstrap, OnModuleDestroy {
         if (requeued > 0) this.logger.warn(`${requeued} eşleştirme olayı yeniden kuyruğa alındı`);
       });
       await this.step('Bildirim yeniden gönderimi', () => this.notifySweep.requeuePending());
+      await this.step('Abonelik süresi süpürmesi', () => this.subscriptionSweep.run());
+      if (Date.now() - this.lastMonitorAt >= this.env.MONITOR_INTERVAL_MS) {
+        this.lastMonitorAt = Date.now();
+        await this.step('Alarm izleme', () => this.monitor.check(new Date()));
+      }
     } finally {
       this.ticking = false;
     }

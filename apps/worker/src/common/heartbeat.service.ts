@@ -6,11 +6,18 @@ import { RedisService } from '../infra/redis.service';
 
 export const HEARTBEAT_INTERVAL_MS = 15_000;
 export const HEARTBEAT_TTL_SEC = 45;
+/** Ölü worker'ların admin listesinde görünmesi için son görülme kaydı bu kadar tutulur. */
+export const WORKER_SEEN_TTL_SEC = 24 * 60 * 60;
 
-/** Admin panelinin canlı/ölü worker listesini Redis'teki bu anahtarlardan üretir (Plan 07). */
+/**
+ * Admin panelinin canlı/ölü worker listesini Redis'teki bu anahtarlardan üretir (Plan 07):
+ * `worker:heartbeat:<host>:<pid>` (TTL 45 sn, canlılık) ve `worker:seen:<host>:<pid>` (aynı JSON, TTL 24 saat).
+ * Heartbeat'i bitmiş ama seen kaydı duran worker "ölü" listelenir. Düzgün kapanışta ikisi de silinir.
+ */
 @Injectable()
 export class HeartbeatService implements OnModuleInit, OnModuleDestroy {
   readonly key = `worker:heartbeat:${hostname()}:${process.pid}`;
+  readonly seenKey = `worker:seen:${hostname()}:${process.pid}`;
   private readonly logger = new Logger(HeartbeatService.name);
   private timer?: NodeJS.Timeout;
   private readonly startedAt = new Date().toISOString();
@@ -31,11 +38,16 @@ export class HeartbeatService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleDestroy(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
-    await this.redis.del(this.key);
+    await this.redis.del(this.key, this.seenKey);
   }
 
   private async beat(): Promise<void> {
     const value = JSON.stringify({ role: this.env.ROLE, pid: process.pid, host: hostname(), startedAt: this.startedAt, at: new Date().toISOString() });
-    await this.redis.set(this.key, value, 'EX', HEARTBEAT_TTL_SEC);
+    const results = await this.redis.multi().set(this.key, value, 'EX', HEARTBEAT_TTL_SEC).set(this.seenKey, value, 'EX', WORKER_SEEN_TTL_SEC).exec();
+    // MULTI komut başına hata döndürebilir (exec reddetmez): yutulmasın, günlüğe yazılsın.
+    for (const [err] of results ?? []) {
+      if (err) this.logger.warn(`Heartbeat komutu başarısız: ${err.message}`);
+    }
+    if (!results) this.logger.warn('Heartbeat MULTI iptal edildi');
   }
 }

@@ -9,6 +9,6 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run"
   },
-  "dependencies": { "zod": "^3.24.1" },
+  "dependencies": { "@oto/shared": "workspace:*", "zod": "^3.24.1" },
   "devDependencies": { "vitest": "^3.0.5" }
 }

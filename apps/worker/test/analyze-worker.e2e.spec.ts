@@ -1,7 +1,8 @@
 import { Module } from '@nestjs/common';
 import type { TestingModule } from '@nestjs/testing';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AnalysisModule } from '../src/analysis/analysis.module';
+import { AnalysisService } from '../src/analysis/analysis.service';
 import { PrismaService } from '../src/infra/prisma.service';
 import { ANALYZE_WORKER_AUTOSTART, AnalyzeWorkerHost } from '../src/processors/analyze-worker.host';
 import { RETRYING_JOB_OPTS } from '../src/queues/job-options';
@@ -52,6 +53,19 @@ describe('AnalyzeWorkerHost', () => {
     const a = await prisma.listingAnalysis.findUniqueOrThrow({ where: { id: analyzed } });
     expect(a.matchEvent).toBe('NEW');
     expect(await ref.get(QueueRegistry).match.getJob(`match-${a.id}`)).toBeTruthy();
+  });
+
+  it('passes a MANUAL job reason through to AnalysisService.process', async () => {
+    const spy = vi.spyOn(ref.get(AnalysisService), 'process');
+    ref.get(AnalyzeWorkerHost).start();
+    const sourceId = (await createSource(ref, 'http://demo.invalid')).id;
+    const t = await createListing(ref, sourceId, { price: 900_000n });
+    await ref.get(AnalysisService).process(t.id);
+    spy.mockClear();
+    await ref.get(QueueRegistry).analyze.add('analyze', { listingId: t.id, reason: 'MANUAL' }, { jobId: `analyze-manual-${t.id}-1`, ...RETRYING_JOB_OPTS });
+    await waitFor(async () => ((await prisma.listingAnalysis.count({ where: { listingId: t.id } })) >= 2 ? true : null));
+    expect(spy).toHaveBeenCalledWith(t.id, expect.any(Date), 'MANUAL');
+    spy.mockRestore();
   });
 
   it('fails malformed job data on the first attempt without crashing the worker', async () => {

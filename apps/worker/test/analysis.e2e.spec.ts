@@ -4,6 +4,7 @@ import { AnalysisModule } from '../src/analysis/analysis.module';
 import { ANALYSIS_SETTINGS_KEY, AnalysisSettingsService } from '../src/analysis/analysis-settings.service';
 import { AnalysisLockBusyError, AnalysisService } from '../src/analysis/analysis.service';
 import { PrismaService } from '../src/infra/prisma.service';
+import { RedisService } from '../src/infra/redis.service';
 import { QueueRegistry } from '../src/queues/queue-registry';
 import { createContext, createListing, createSource, resetState } from './helpers';
 
@@ -57,6 +58,47 @@ describe('AnalysisService.process', () => {
     expect(again).toMatchObject({ status: 'UNCHANGED', event: 'REFRESH' });
     expect(await prisma.listingAnalysis.count()).toBe(1);
     expect(await matchJobs()).toHaveLength(1);
+  });
+
+  it('a MANUAL reason bypasses the materially-changed check: always a new row, event derivation unchanged', async () => {
+    await seedMarket();
+    const t = await createListing(ref, sourceId, { price: 960_000n });
+    await service.process(t.id);
+    expect(await service.process(t.id)).toMatchObject({ status: 'UNCHANGED', event: 'REFRESH' });
+    const out = await service.process(t.id, new Date(), 'MANUAL');
+    expect(out).toMatchObject({ status: 'WRITTEN', event: 'REFRESH' });
+    expect(await prisma.listingAnalysis.count()).toBe(2);
+    const a = await prisma.listingAnalysis.findUniqueOrThrow({ where: { id: out.analysisId! } });
+    expect(a.matchEvent).toBeNull();
+    expect((await prisma.listing.findUniqueOrThrow({ where: { id: t.id } })).latestAnalysisId).toBe(a.id);
+    expect(await matchJobs()).toHaveLength(1);
+  });
+
+  it('a MANUAL reanalysis after a sub-threshold (+1.5%) estimate change writes a row but enqueues no match job', async () => {
+    await seedMarket();
+    const t = await createListing(ref, sourceId, { price: 960_000n });
+    const first = await service.process(t.id);
+    const before = await prisma.listingAnalysis.findUniqueOrThrow({ where: { id: first.analysisId! } });
+    await prisma.listing.updateMany({ where: { id: { not: t.id } }, data: { price: { increment: 18_000n } } });
+    const out = await service.process(t.id, new Date(), 'MANUAL');
+    expect(out.status).toBe('WRITTEN');
+    const a = await prisma.listingAnalysis.findUniqueOrThrow({ where: { id: out.analysisId! } });
+    const change = Math.abs(Number(a.estimatedPrice! - before.estimatedPrice!)) / Number(before.estimatedPrice!);
+    expect(change).toBeGreaterThan(0.01);
+    expect(change).toBeLessThan(0.02); // below refreshMinChangePct
+    expect(Number(a.discountPct) - Number(before.discountPct)).toBeGreaterThanOrEqual(0.01); // would be "more matchable"
+    expect(a.matchEvent).toBeNull();
+    expect(await matchJobs()).toHaveLength(1); // only the first analysis' job
+  });
+
+  it('a MANUAL reanalysis still emits real events (PRICE_DROP)', async () => {
+    await seedMarket();
+    const t = await createListing(ref, sourceId, { price: 1_100_000n });
+    await service.process(t.id);
+    await prisma.listing.update({ where: { id: t.id }, data: { price: 980_000n, contentHash: 'drop' } });
+    const out = await service.process(t.id, new Date(), 'MANUAL');
+    expect(out.event).toBe('PRICE_DROP');
+    expect((await prisma.listingAnalysis.findUniqueOrThrow({ where: { id: out.analysisId! } })).matchEvent).toBe('PRICE_DROP');
   });
 
   it('a refresh after the market moved > 2% writes a new row but emits no match event', async () => {
@@ -186,5 +228,36 @@ describe('AnalysisService.process', () => {
     expect(out.status).toBe('WRITTEN');
     const a = await prisma.listingAnalysis.findUniqueOrThrow({ where: { id: out.analysisId! } });
     expect(a).toMatchObject({ matchEvent: 'NEW', matchQueuedAt: null });
+  });
+});
+
+describe('AnalysisSettingsService settings:changed', () => {
+  const waitUntil = async (fn: () => Promise<boolean>) => {
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      if (await fn()) return true;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return false;
+  };
+
+  it('invalidates the cache immediately when the analysis.settings key is published', async () => {
+    const settings = ref.get(AnalysisSettingsService);
+    await prisma.systemSetting.create({ data: { key: ANALYSIS_SETTINGS_KEY, value: { minComparables: 20 } } });
+    expect((await settings.get()).minComparables).toBe(20);
+    await prisma.systemSetting.update({ where: { key: ANALYSIS_SETTINGS_KEY }, data: { value: { minComparables: 7 } } });
+    expect((await settings.get()).minComparables).toBe(20); // 60 sn TTL: hâlâ önbellekte
+    await ref.get(RedisService).publish('settings:changed', ANALYSIS_SETTINGS_KEY);
+    expect(await waitUntil(async () => (await settings.get()).minComparables === 7)).toBe(true);
+  });
+
+  it('ignores changes to unrelated keys', async () => {
+    const settings = ref.get(AnalysisSettingsService);
+    await prisma.systemSetting.create({ data: { key: ANALYSIS_SETTINGS_KEY, value: { minComparables: 20 } } });
+    expect((await settings.get()).minComparables).toBe(20);
+    await prisma.systemSetting.update({ where: { key: ANALYSIS_SETTINGS_KEY }, data: { value: { minComparables: 7 } } });
+    await ref.get(RedisService).publish('settings:changed', 'alerts.thresholds');
+    await new Promise((r) => setTimeout(r, 300));
+    expect((await settings.get()).minComparables).toBe(20);
   });
 });

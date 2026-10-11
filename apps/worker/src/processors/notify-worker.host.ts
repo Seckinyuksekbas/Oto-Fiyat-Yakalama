@@ -1,4 +1,5 @@
 import { Inject, Injectable, Logger, Optional, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
+import { redactSecrets } from '@oto/server-common';
 import { notifyJobSchema, QueueName, type NotifyJobData } from '@oto/shared';
 import { DelayedError, UnrecoverableError, Worker, type Job } from 'bullmq';
 import { ENV } from '../config/config.module';
@@ -71,7 +72,7 @@ export class NotifyWorkerHost implements OnModuleInit, OnModuleDestroy {
     if (typeof id !== 'number') return;
     await this.prisma.notification.updateMany({
       where: { id, status: 'PENDING' },
-      data: { status: 'FAILED', lastError: err.message.slice(0, 500) },
+      data: { status: 'FAILED', lastError: redactSecrets(err.message).slice(0, 500) },
     });
   }
 

@@ -1,13 +1,13 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { redactSecrets } from '@oto/server-common';
+import { SCRAPE_JOB_OPTS, scrapeQueueJobId } from '@oto/shared';
 import { PrismaService } from '../infra/prisma.service';
 import { QueueRegistry } from '../queues/queue-registry';
 
 export const STALE_AFTER_MS = 30 * 60 * 1000;
 export const RETENTION_DAYS = 30;
 
-export function scrapeQueueJobId(collectionJobId: number): string {
-  return `scrape-${collectionJobId}`;
-}
+export { scrapeQueueJobId };
 
 @Injectable()
 export class SchedulerService {
@@ -23,26 +23,36 @@ export class SchedulerService {
     await this.failStaleJobs(now);
     const sources = await this.prisma.dataSource.findMany({
       where: { isActive: true, permissionVerifiedAt: { not: null }, health: { not: 'PAUSED' } },
-      include: { jobs: { orderBy: { createdAt: 'desc' }, take: 1 } },
     });
     let enqueued = 0;
     for (const source of sources) {
-      const last = source.jobs[0];
-      if (last && (last.status === 'QUEUED' || last.status === 'RUNNING')) continue;
-      if (last && now.getTime() - last.createdAt.getTime() < source.intervalSec * 1000) continue;
-      const job = await this.prisma.collectionJob.create({ data: { sourceId: source.id, trigger: 'SCHEDULED', createdAt: now } });
+      // Kaynak satır kilidi: admin test taramasıyla iş oluşturma sıralanır (aynı anda iki iş oluşmaz).
+      const job = await this.prisma.$transaction(async (tx) => {
+        // Kilit altında uygunluğu yeniden oku: bu arada duraklatılmış/izni kalkmış kaynağa iş oluşturulmaz.
+        const [fresh] = await tx.$queryRaw<{ isActive: boolean; health: string; permissionVerifiedAt: Date | null }[]>`
+          SELECT "isActive", health::text AS health, "permissionVerifiedAt" FROM "DataSource" WHERE id = ${source.id} FOR NO KEY UPDATE`;
+        if (!fresh || !fresh.isActive || fresh.health === 'PAUSED' || !fresh.permissionVerifiedAt) return null;
+        // Uçuştaki herhangi bir iş (dry-run dahil) yeni zamanlanmış işi engeller.
+        const inFlight = await tx.collectionJob.findFirst({ where: { sourceId: source.id, status: { in: ['QUEUED', 'RUNNING'] } }, select: { id: true } });
+        if (inFlight) return null;
+        // Aralık saati yalnızca dry-run olmayan işlerden hesaplanır (test taraması saati sıfırlamaz).
+        const last = await tx.collectionJob.findFirst({ where: { sourceId: source.id, dryRun: false }, orderBy: { createdAt: 'desc' }, select: { createdAt: true } });
+        if (last && now.getTime() - last.createdAt.getTime() < source.intervalSec * 1000) return null;
+        return tx.collectionJob.create({ data: { sourceId: source.id, trigger: 'SCHEDULED', createdAt: now } });
+      });
+      if (!job) continue;
       try {
         await this.queues.scrape.add(
           'scrape',
           { collectionJobId: job.id, sourceId: source.id },
-          { jobId: scrapeQueueJobId(job.id), removeOnComplete: { age: 24 * 60 * 60 }, removeOnFail: { age: 7 * 24 * 60 * 60 } },
+          { jobId: scrapeQueueJobId(job.id), ...SCRAPE_JOB_OPTS },
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         this.logger.error(`Kaynak ${source.code} için iş kuyruğa eklenemedi: ${message}`);
         await this.prisma.collectionJob.update({
           where: { id: job.id },
-          data: { status: 'FAILED', finishedAt: now, errorSummary: `Kuyruğa eklenemedi: ${message}` },
+          data: { status: 'FAILED', finishedAt: now, errorSummary: redactSecrets(`Kuyruğa eklenemedi: ${message}`).slice(0, 500) },
         });
         continue;
       }

@@ -45,7 +45,9 @@ describe('notification planning inside the match transaction', () => {
       listing: { id: l.id, price: '960000' }, analysis: { confidence: 'HIGH', estimatedPrice: '1200000', discountPct: 0.2 },
     });
     expect(rows.every((r) => r.queuedAt !== null)).toBe(true);
-    expect(await ref.get(QueueRegistry).notify.getJob(`notify-${rows[0].id}`)).toBeTruthy();
+    const inAppJob = await ref.get(QueueRegistry).notify.getJob(`notify-${rows[0].id}`);
+    expect(inAppJob).toBeTruthy();
+    expect(inAppJob!.opts.removeOnFail).toEqual({ age: 7 * 86400 });
     expect(await ref.get(QueueRegistry).notifyTelegram.getJob(`notify-${rows[1].id}`)).toBeTruthy();
   });
 
@@ -99,6 +101,21 @@ describe('notification planning inside the match transaction', () => {
     expect(inApp).toHaveLength(6);
     expect(inApp.filter((n) => (n.payload as { limitExceeded: boolean }).limitExceeded)).toHaveLength(3);
     expect(await ref.get(QueueRegistry).notifyTelegram.count()).toBe(3);
+  });
+
+  it('FAILED/USER_INACTIVE rows (suspension) do not count against the daily quota', async () => {
+    const u = await createUser(ref);
+    await createChannel(ref, u.id);
+    await createProfile(ref, u.id, { channels: ['IN_APP', 'TELEGRAM'] });
+    const free = await prisma.subscriptionPlan.findUniqueOrThrow({ where: { code: 'FREE' } });
+    await prisma.userSubscription.create({ data: { userId: u.id, planId: free.id, limitOverrides: { maxNotificationsPerDay: 1 } } });
+    await prisma.notification.create({
+      data: { userId: u.id, kind: 'MATCH', channel: 'TELEGRAM', status: 'FAILED', lastError: 'USER_INACTIVE', payload: {} },
+    });
+    const { l, a } = await deal();
+    await svc.process({ listingId: l.id, analysisId: a.id, event: 'NEW' });
+    const fresh = await prisma.notification.findMany({ where: { channel: 'TELEGRAM', matchId: { not: null } } });
+    expect(fresh.map((n) => n.status)).toEqual(['PENDING']);
   });
 
   it('PRICE_DROP payload carries the previous matched price', async () => {

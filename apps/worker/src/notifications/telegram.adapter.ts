@@ -1,8 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { Notification } from '@oto/db';
-import { matchNotificationPayloadSchema } from '@oto/shared';
+import { matchNotificationPayloadSchema, systemAlertPayloadSchema } from '@oto/shared';
 import { Encryptor, hashToken } from '@oto/server-common';
-import { classifyTelegramError, isPhotoFallbackError, renderMatchMessage, type TelegramClient } from '@oto/telegram';
+import { classifyTelegramError, isPhotoFallbackError, renderAlertMessage, renderMatchMessage, type InlineKeyboard, type TelegramClient } from '@oto/telegram';
 import { ENV } from '../config/config.module';
 import type { Env } from '../config/env';
 import { RedisService } from '../infra/redis.service';
@@ -29,8 +29,16 @@ export class TelegramAdapter {
     } catch {
       return { kind: 'PERMANENT', error: 'CHANNEL_CONFIG_INVALID' };
     }
-    const parsed = matchNotificationPayloadSchema.safeParse(n.payload);
-    if (!parsed.success) return { kind: 'PERMANENT', error: 'INVALID_PAYLOAD' };
+    let msg: { text: string; photoUrl: string | null; replyMarkup?: InlineKeyboard };
+    if (n.kind === 'SYSTEM_ALERT') {
+      const parsed = systemAlertPayloadSchema.safeParse(n.payload);
+      if (!parsed.success) return { kind: 'PERMANENT', error: 'INVALID_PAYLOAD' };
+      msg = { text: renderAlertMessage(parsed.data), photoUrl: null };
+    } else {
+      const parsed = matchNotificationPayloadSchema.safeParse(n.payload);
+      if (!parsed.success) return { kind: 'PERMANENT', error: 'INVALID_PAYLOAD' };
+      msg = renderMatchMessage(parsed.data, { publicBaseUrl: this.env.PUBLIC_BASE_URL });
+    }
     // Sohbet başına 1 msj/sn (spec §5.4); kilit alınamazsa deneme hakkı yemeden ertele.
     const gateKey = `tg:chat:${hashToken(String(chatId))}`;
     const gate = await this.redis.set(gateKey, '1', 'PX', CHAT_GAP_MS, 'NX');
@@ -39,7 +47,6 @@ export class TelegramAdapter {
       const jitter = Math.floor(Math.random() * 100);
       return { kind: 'THROTTLED', retryAfterMs: pttl > 0 ? pttl + jitter : CHAT_GAP_MS };
     }
-    const msg = renderMatchMessage(parsed.data, { publicBaseUrl: this.env.PUBLIC_BASE_URL });
     try {
       if (msg.photoUrl) {
         try {

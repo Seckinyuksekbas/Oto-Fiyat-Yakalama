@@ -1,7 +1,7 @@
 import type { MatchNotificationPayload } from '@oto/shared';
 import { describe, expect, it } from 'vitest';
 import { formatIstanbulDateTime, formatTl, isPublicHttpUrl } from './format';
-import { renderMatchMessage } from './render';
+import { renderAlertMessage, renderMatchMessage } from './render';
 
 const base: MatchNotificationPayload = {
   type: 'MATCH', reason: 'NEW', profile: { id: 'p1', name: 'BMW' },
@@ -105,4 +105,22 @@ describe('isPublicHttpUrl private ranges', () => {
     'http://printer.local/x', 'http://svc.internal/x', 'http://LOCALHOST/x', 'data:text/html,x', 'javascript:alert(1)',
   ])('rejects %s', (u) => expect(isPublicHttpUrl(u)).toBe(false));
   it.each(['https://ornek.com/x', 'http://172.32.0.1/x', 'http://8.8.8.8/x'])('accepts %s', (u) => expect(isPublicHttpUrl(u)).toBe(true));
+});
+
+describe('renderAlertMessage', () => {
+  it('renders level icon, escaped message and Istanbul time', () => {
+    const t = renderAlertMessage({ level: 'ERROR', message: 'Kaynak <b>Demo</b> & co DOWN', at: '2026-10-10T11:32:00.000Z' });
+    expect(t).toBe(['🚨 <b>Sistem alarmı</b>', 'Kaynak &lt;b&gt;Demo&lt;/b&gt; &amp; co DOWN', '', '🕒 10.10.2026 14:32'].join('\n'));
+    expect(renderAlertMessage({ level: 'WARN', message: 'x', at: '2026-10-10T11:32:00.000Z' }).split('\n')[0]).toBe('⚠️ <b>Sistem uyarısı</b>');
+  });
+
+  it('stays within the 4096 message limit without breaking escapes', () => {
+    const t = renderAlertMessage({ level: 'ERROR', message: '<'.repeat(5000), at: '2026-10-10T11:32:00.000Z' });
+    expect(t.length).toBeLessThanOrEqual(4096);
+    expect(t).toContain('…');
+    // Mesaj satırı yalnızca tam `&lt;` birimlerinden + kırpma işaretinden oluşur (yarım kalmış kaçış yok)
+    expect(t.split('\n')[1]).toMatch(/^(&lt;)+…$/);
+    expect(t.replace(/&(lt|gt|amp);/g, '')).not.toContain('&');
+    expect(t.endsWith('🕒 10.10.2026 14:32')).toBe(true);
+  });
 });

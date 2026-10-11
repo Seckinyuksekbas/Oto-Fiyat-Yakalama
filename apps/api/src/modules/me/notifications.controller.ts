@@ -8,6 +8,7 @@ import {
 import { interval, Observable, takeUntil, timer } from 'rxjs';
 import { CurrentUser } from '../../common/decorators/current-user';
 import { ZodPipe } from '../../common/zod.pipe';
+import { StreamSessionService } from '../../infra/stream-session.service';
 import { UserEventsService } from '../../infra/user-events.service';
 import type { AuthUser } from '../auth/auth-user';
 import { NotificationsRepository } from './notifications.repository';
@@ -33,6 +34,7 @@ export class NotificationsController {
   constructor(
     private readonly repo: NotificationsRepository,
     private readonly events: UserEventsService,
+    private readonly session: StreamSessionService,
   ) {}
 
   @Get()
@@ -78,6 +80,15 @@ export class NotificationsController {
         else buffer.push(m);
       });
       const ping = interval(SSE_PING_MS).subscribe(() => subscriber.next({ type: 'ping', data: {} } as MessageEvent));
+      // Oturum iptal edildiyse / kullanıcı askıya alındıysa akış 15 dk ömrünü beklemeden kapanır.
+      const recheck = interval(this.session.recheckMs).subscribe(() => {
+        this.session
+          .isValid(user)
+          .then((ok) => {
+            if (!ok) subscriber.complete();
+          })
+          .catch(() => undefined);
+      });
       void (async () => {
         await this.events.subscribed();
         const snapshot = await this.repo.readySnapshot(user.id);
@@ -89,6 +100,7 @@ export class NotificationsController {
       return () => {
         live.unsubscribe();
         ping.unsubscribe();
+        recheck.unsubscribe();
       };
     }).pipe(takeUntil(timer(SSE_MAX_LIFETIME_MS)));
   }

@@ -47,7 +47,7 @@ export const NAV_GROUPS: NavItem[][] = [
 
 const ALL_ITEMS = NAV_GROUPS.flat();
 
-function isActive(item: NavItem, pathname: string): boolean {
+export function isActive(item: NavItem, pathname: string): boolean {
   return item.exact ? pathname === item.href : pathname === item.href || pathname.startsWith(`${item.href}/`);
 }
 
@@ -61,35 +61,48 @@ export function NotificationBellSlot() {
   return null;
 }
 
-function Brand() {
+export function Brand({ href = '/app', badge }: { href?: string; badge?: ReactNode }) {
   return (
-    <Link
-      href="/app"
-      className="flex items-center gap-2.5 rounded-md px-1 py-1 font-display text-[17px] font-semibold tracking-tight"
-    >
-      <span aria-hidden className="grid size-7 place-items-center rounded-[9px] bg-accent text-accent-fg">
-        <svg
-          viewBox="0 0 24 24"
-          className="size-4"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2.4"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <path d="M4 16a8 8 0 1 1 16 0" />
-          <path d="m12 16 4-5" />
-        </svg>
-      </span>
-      Oto Fırsat
-    </Link>
+    <div className="flex items-center gap-2">
+      <Link
+        href={href}
+        className="flex items-center gap-2.5 rounded-md px-1 py-1 font-display text-[17px] font-semibold tracking-tight"
+      >
+        <span aria-hidden className="grid size-7 place-items-center rounded-[9px] bg-accent text-accent-fg">
+          <svg
+            viewBox="0 0 24 24"
+            className="size-4"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.4"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M4 16a8 8 0 1 1 16 0" />
+            <path d="m12 16 4-5" />
+          </svg>
+        </span>
+        Oto Fırsat
+      </Link>
+      {badge}
+    </div>
   );
 }
 
-function NavList({ pathname, onNavigate }: { pathname: string; onNavigate?: () => void }) {
+export function NavList({
+  groups,
+  pathname,
+  label = 'Ana menü',
+  onNavigate,
+}: {
+  groups: NavItem[][];
+  pathname: string;
+  label?: string;
+  onNavigate?: () => void;
+}) {
   return (
-    <nav aria-label="Ana menü" className="flex flex-col gap-4">
-      {NAV_GROUPS.map((group, gi) => (
+    <nav aria-label={label} className="flex flex-col gap-4">
+      {groups.map((group, gi) => (
         <ul key={gi} className={cn('flex flex-col gap-0.5', gi > 0 && 'border-t border-border pt-4')}>
           {group.map((item) => {
             const active = isActive(item, pathname);
@@ -119,8 +132,24 @@ function NavList({ pathname, onNavigate }: { pathname: string; onNavigate?: () =
   );
 }
 
-export function AppShell({ children, bellSlot }: { children: ReactNode; bellSlot?: ReactNode }) {
-  const pathname = usePathname() ?? '/app';
+export interface ShellFrameProps {
+  children: ReactNode;
+  groups: NavItem[][];
+  navLabel?: string;
+  /** Başlık çubuğundaki sayfa adı (`<p>`; sayfanın h1'i içerikte). */
+  title: string;
+  brand: ReactNode;
+  /** Başlık çubuğunun sağındaki denetimler (zil, tema, kullanıcı menüsü …). */
+  actions: ReactNode;
+  /** Kenar çubuğunun altı (ör. yönetimden panele dönüş). */
+  sidebarFooter?: ReactNode;
+  /** Başlık çubuğunun altında, içerikten önce (ör. doğrulama bandı). */
+  banner?: ReactNode;
+}
+
+/** Panel ve yönetim kabuklarının ortak iskeleti: kenar çubuğu, mobil çekmece, yapışkan başlık, "İçeriğe geç". */
+export function ShellFrame({ children, groups, navLabel, title, brand, actions, sidebarFooter, banner }: ShellFrameProps) {
+  const pathname = usePathname() ?? '/';
   const [open, setOpen] = useState(false);
 
   // Görünüm masaüstü genişliğine geçince açık çekmece kapanır.
@@ -142,10 +171,9 @@ export function AppShell({ children, bellSlot }: { children: ReactNode; bellSlot
         İçeriğe geç
       </a>
       <aside className="sticky top-0 hidden h-dvh flex-col gap-6 overflow-y-auto border-r border-border bg-surface px-3 py-5 md:flex">
-        <div className="px-1">
-          <Brand />
-        </div>
-        <NavList pathname={pathname} />
+        <div className="px-1">{brand}</div>
+        <NavList groups={groups} pathname={pathname} label={navLabel} />
+        {sidebarFooter ? <div className="mt-auto">{sidebarFooter}</div> : null}
       </aside>
 
       <div className="flex min-w-0 flex-col">
@@ -161,30 +189,44 @@ export function AppShell({ children, bellSlot }: { children: ReactNode; bellSlot
             </button>
             <SheetContent side="left" className="gap-6 px-3 py-5">
               <SheetTitle className="sr-only">Menü</SheetTitle>
-              <SheetDescription className="sr-only">Panel sayfaları arasında gezinin.</SheetDescription>
-              <div className="px-1">
-                <Brand />
-              </div>
-              <NavList pathname={pathname} onNavigate={() => setOpen(false)} />
+              <SheetDescription className="sr-only">Sayfalar arasında gezinin.</SheetDescription>
+              <div className="px-1">{brand}</div>
+              <NavList groups={groups} pathname={pathname} label={navLabel} onNavigate={() => setOpen(false)} />
+              {sidebarFooter ? <div className="mt-auto">{sidebarFooter}</div> : null}
             </SheetContent>
           </Sheet>
 
-          <p className="min-w-0 flex-1 truncate font-display text-[17px] font-semibold tracking-tight">
-            {pageTitle(pathname)}
-          </p>
+          <p className="min-w-0 flex-1 truncate font-display text-[17px] font-semibold tracking-tight">{title}</p>
 
-          <div className="flex items-center gap-1">
-            {bellSlot ?? <NotificationBellSlot />}
-            <ThemeToggle />
-            <UserMenu />
-          </div>
+          <div className="flex items-center gap-1">{actions}</div>
         </header>
 
-        <VerifyBanner />
+        {banner}
         <main id="icerik" tabIndex={-1} className="min-w-0 flex-1 px-4 py-6 outline-none md:px-8 md:py-8">
           {children}
         </main>
       </div>
     </div>
+  );
+}
+
+export function AppShell({ children, bellSlot }: { children: ReactNode; bellSlot?: ReactNode }) {
+  const pathname = usePathname() ?? '/app';
+  return (
+    <ShellFrame
+      groups={NAV_GROUPS}
+      title={pageTitle(pathname)}
+      brand={<Brand />}
+      actions={
+        <>
+          {bellSlot ?? <NotificationBellSlot />}
+          <ThemeToggle />
+          <UserMenu />
+        </>
+      }
+      banner={<VerifyBanner />}
+    >
+      {children}
+    </ShellFrame>
   );
 }

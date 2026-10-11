@@ -1,5 +1,7 @@
-// Görsel smoke: çalışan yığına (web :3000 -> api :3001) karşı sayfa ekran görüntüleri alır.
-// Kullanım: node apps/web/scripts/screenshots.mjs   (WEB_URL, PG_CONTAINER ile ayarlanabilir)
+// Görsel smoke: çalışan yığına (web :3000 -> api :3001) karşı kullanıcı ve admin sayfalarının ekran görüntülerini alır.
+// Kullanım: node apps/web/scripts/screenshots.mjs
+//   WEB_URL, PG_CONTAINER; admin sayfaları için seed süper admin: SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD
+//   (yoksa .env.example varsayılanları). SKIP_ADMIN=1 admin sayfalarını atlar.
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -12,6 +14,9 @@ const OUT = join(dirname(fileURLToPath(import.meta.url)), '..', '.screenshots');
 const stamp = Date.now();
 const email = `smoke-${stamp}@example.com`;
 const password = 'Smoke-Test-Pass-123';
+const adminEmail = process.env.SEED_ADMIN_EMAIL ?? 'admin@example.com';
+const adminPassword = process.env.SEED_ADMIN_PASSWORD ?? 'change-me-please-123';
+const withAdmin = process.env.SKIP_ADMIN !== '1';
 
 rmSync(OUT, { recursive: true, force: true });
 mkdirSync(OUT, { recursive: true });
@@ -54,6 +59,44 @@ const oppId = opp?.id ?? null;
 console.log('fırsat id:', oppId);
 await setup.close();
 
+// Admin oturumu (seed SUPER_ADMIN) ve detay sayfaları için örnek kimlikler.
+let adminState = null;
+const adminIds = {};
+if (withAdmin) {
+  const adminCtx = await browser.newContext();
+  await api(adminCtx, 'POST', '/auth/login', { email: adminEmail, password: adminPassword });
+  const first = async (path) => (await api(adminCtx, 'GET', path))?.items?.[0]?.id ?? null;
+  adminIds.user = await first(`/admin/users?q=${encodeURIComponent(email)}`);
+  adminIds.listing = oppId ?? (await first('/admin/listings?pageSize=1'));
+  adminIds.source = await first('/admin/sources?pageSize=1');
+  adminIds.job = await first('/admin/jobs?pageSize=1');
+  console.log('admin örnek kimlikleri:', JSON.stringify(adminIds));
+  adminState = await adminCtx.storageState();
+  await adminCtx.close();
+}
+
+const ADMIN_PAGES = withAdmin
+  ? [
+      ['admin', '/admin'],
+      ['admin-kullanicilar', '/admin/kullanicilar'],
+      ...(adminIds.user ? [['admin-kullanici', `/admin/kullanicilar/${adminIds.user}`]] : []),
+      ['admin-ilanlar', '/admin/ilanlar'],
+      ...(adminIds.listing ? [['admin-ilan', `/admin/ilanlar/${adminIds.listing}`]] : []),
+      ['admin-analizler', '/admin/analizler'],
+      ['admin-kaynaklar', '/admin/kaynaklar'],
+      ...(adminIds.source ? [['admin-kaynak', `/admin/kaynaklar/${adminIds.source}`]] : []),
+      ['admin-isler', '/admin/isler'],
+      ...(adminIds.job ? [['admin-is', `/admin/isler/${adminIds.job}`]] : []),
+      ['admin-proxyler', '/admin/proxyler'],
+      ['admin-sistem', '/admin/sistem'],
+      ['admin-bildirimler', '/admin/bildirimler'],
+      ['admin-paketler', '/admin/paketler'],
+      ['admin-ayarlar', '/admin/ayarlar'],
+      ['admin-denetim', '/admin/denetim'],
+      ['admin-loglar', '/admin/loglar'],
+    ].map(([name, path]) => [name, path, 'admin'])
+  : [];
+
 const PAGES = [
   ['home', '/', false],
   ['giris', '/giris', false],
@@ -65,15 +108,16 @@ const PAGES = [
   ['kanallar', '/app/ayarlar/kanallar', true],
   ['favoriler', '/app/favoriler', true],
   ['abonelik', '/app/abonelik', true],
+  ...ADMIN_PAGES,
 ];
 
-const report = { email, oppId, pages: [] };
+const report = { email, oppId, adminIds, pages: [] };
 for (const vp of VIEWPORTS) {
   for (const [name, path, authed] of PAGES) {
     // /giris oturumluyken /app'e yönlenebilir; bu yüzden çıkış yapmış bağlamla alınır.
     const ctx = await browser.newContext({
       viewport: { width: vp.width, height: vp.height },
-      storageState: authed ? state : undefined,
+      storageState: authed === 'admin' ? adminState : authed ? state : undefined,
       colorScheme: vp.theme,
     });
     await ctx.addInitScript(`try { window.localStorage.setItem('theme', '${vp.theme}'); } catch (e) { void e; }`);
