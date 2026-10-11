@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { parseCspOrigins } from './lib/csp';
 
 /**
  * Web sürecinin (Next.js sunucu tarafı) ortam değişkenleri. Tek doğruluk kaynağı:
@@ -11,6 +12,21 @@ const webEnvSchema = z.object({
     .refine((v) => URL.canParse(v) && ['http:', 'https:'].includes(new URL(v).protocol), 'http(s) adresi olmalı')
     .transform((v) => v.replace(/\/+$/, ''))
     .default('http://localhost:3001'),
+  /**
+   * Çalışma zamanı: CSP `img-src`'e eklenecek, boşlukla ayrılmış http(s) origin'leri (ör. E2E demo-site
+   * `http://127.0.0.1:4100`). Middleware her istekte `process.env`'den okur; burada açılışta doğrulanır.
+   */
+  CSP_IMG_EXTRA: z
+    .string()
+    .optional()
+    .transform((v, ctx) => {
+      try {
+        return parseCspOrigins(v);
+      } catch (e) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: (e as Error).message });
+        return z.NEVER;
+      }
+    }),
 });
 export type WebEnv = z.infer<typeof webEnvSchema>;
 

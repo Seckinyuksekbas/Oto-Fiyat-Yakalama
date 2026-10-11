@@ -28,7 +28,8 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       className={GeistMono.variable}
     >
       <head>
-        <script nonce={nonce} dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        {/* Tarayıcı nonce özniteliğini ayrıştırmadan sonra gizler (""), React dev uyuşmazlık uyarısı verir. */}
+        <script nonce={nonce} suppressHydrationWarning dangerouslySetInnerHTML={{ __html: themeInitScript }} />
       </head>
       <body>
         <Providers>{children}</Providers>

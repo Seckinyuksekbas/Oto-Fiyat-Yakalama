@@ -31,4 +31,11 @@ describe('root layout theme script', () => {
     // İçerik değişmemeli: hash de CSP'de olduğu için bayt bayt aynı olmalı.
     expect(html).toContain(themeInitScript);
   });
+
+  it('renders the theme script without a nonce attribute when x-nonce is missing', async () => {
+    headerStore.clear();
+    const html = renderToStaticMarkup(await RootLayout({ children: null }));
+    expect(html).toContain(`<script>${themeInitScript}</script>`);
+    expect(html).not.toContain('nonce=');
+  });
 });

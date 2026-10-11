@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { buildCsp, generateNonce, themeScriptHash } from './csp';
+import { buildCsp, generateNonce, parseCspOrigins, themeScriptHash } from './csp';
 import { themeInitScript } from './theme';
 
 function directives(csp: string): Map<string, string[]> {
@@ -59,5 +59,46 @@ describe('nonce', () => {
     expect(a).not.toBe(b);
     expect(a).toMatch(/^[A-Za-z0-9+/]+=*$/);
     expect(Buffer.from(a, 'base64').length).toBeGreaterThanOrEqual(16);
+  });
+});
+
+describe('img-src (scraped listing photos are absolute source URLs)', () => {
+  it("prod allows 'self' data: blob: https: but not plain http:", () => {
+    const img = directives(buildCsp({ dev: false })).get('img-src');
+    expect(img).toEqual(["'self'", 'data:', 'blob:', 'https:']);
+  });
+
+  it('dev additionally allows http: (local demo sources)', () => {
+    expect(directives(buildCsp({ dev: true })).get('img-src')).toContain('http:');
+  });
+
+  it('appends extra origins (CSP_IMG_EXTRA)', () => {
+    const img = directives(buildCsp({ dev: false, imgExtra: ['http://127.0.0.1:4100'] })).get('img-src');
+    expect(img).toEqual(["'self'", 'data:', 'blob:', 'https:', 'http://127.0.0.1:4100']);
+  });
+});
+
+describe('parseCspOrigins', () => {
+  it('returns [] for empty / missing values', () => {
+    expect(parseCspOrigins(undefined)).toEqual([]);
+    expect(parseCspOrigins('   ')).toEqual([]);
+  });
+
+  it('accepts space-separated http(s) origins and normalizes a trailing slash', () => {
+    expect(parseCspOrigins(' http://127.0.0.1:4100  https://img.example.com/ ')).toEqual([
+      'http://127.0.0.1:4100',
+      'https://img.example.com',
+    ]);
+  });
+
+  it.each(['ftp://x.example.com', 'https://x.example.com/path', '*', 'https://*.example.com', 'javascript:alert(1)', "'unsafe-inline'", 'example.com', 'https://x.example.com?q=1'])(
+    'rejects %s',
+    (bad) => {
+      expect(() => parseCspOrigins(`http://ok.example.com ${bad}`)).toThrow(/http\(s\) origin/);
+    },
+  );
+
+  it('does not echo the rejected value', () => {
+    expect(() => parseCspOrigins('https://x.example.com/secret-path')).toThrow(/^(?!.*secret-path)/);
   });
 });

@@ -1,7 +1,28 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { buildCsp, generateNonce } from '@/lib/csp';
+import { buildCsp, generateNonce, parseCspOrigins } from '@/lib/csp';
 
 const PROTECTED = ['/app', '/admin'];
+
+let imgExtraCache: { raw: string | undefined; origins: string[] } | undefined;
+
+/**
+ * `CSP_IMG_EXTRA` çalışma zamanında okunur (derlemeye gömülmez; `next start` ve standalone `server.js`
+ * middleware'e süreç env'ini verir). Geçersiz değer açılışta `instrumentation.ts` tarafından reddedilir;
+ * burada yine de istek düşürülmez, ek origin eklenmez.
+ */
+function imgExtra(): string[] {
+  const raw = process.env.CSP_IMG_EXTRA;
+  if (!imgExtraCache || imgExtraCache.raw !== raw) {
+    let origins: string[] = [];
+    try {
+      origins = parseCspOrigins(raw);
+    } catch {
+      origins = [];
+    }
+    imgExtraCache = { raw, origins };
+  }
+  return imgExtraCache.origins;
+}
 
 function isProtected(pathname: string): boolean {
   return PROTECTED.some((p) => pathname === p || pathname.startsWith(`${p}/`));
@@ -38,7 +59,7 @@ export function middleware(req: NextRequest) {
   if (isProtected(req.nextUrl.pathname) && !req.cookies.has('access_token')) return authRedirect(req);
 
   const nonce = generateNonce();
-  const csp = buildCsp({ dev: process.env.NODE_ENV !== 'production', nonce });
+  const csp = buildCsp({ dev: process.env.NODE_ENV !== 'production', nonce, imgExtra: imgExtra() });
   const requestHeaders = new Headers(req.headers);
   requestHeaders.set('x-nonce', nonce);
   requestHeaders.set('content-security-policy', csp);
@@ -47,5 +68,8 @@ export function middleware(req: NextRequest) {
   return res;
 }
 
-/** `/api` (aynı kökenli rewrite, SSE dahil) ve Next statik varlıkları hariç her yol. */
+/**
+ * `/api` (aynı kökenli rewrite, SSE dahil) ve Next statik varlıkları hariç her yol. Prefetch (RSC) istekleri
+ * de eşleşir ve CSP alır: zararsız (RSC yükü betik çalıştırmaz), ayrı `missing` kuralı bilinçli olarak eklenmedi.
+ */
 export const config = { matcher: ['/((?!api/|_next/static|_next/image|favicon.ico).*)'] };
