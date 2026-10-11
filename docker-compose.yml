@@ -7,10 +7,19 @@
 # Ağlar: `edge` (caddy, web, api), `backend` (internal: dışa çıkışı yok; postgres, redis ve onlara bağlanan
 # servisler), `egress` (worker/scheduler'ın dış kaynaklara/Telegram'a çıkışı).
 #
-# Env: değerler yalnız `--env-file` ile verilen dosyadan okunur ve her servise YALNIZ ihtiyacı olan değişkenler
-# aktarılır (en az yetki: web hiçbir sır görmez, worker JWT özel anahtarını görmez). Değeri verilmeyen liste
-# girdileri (`- SMTP_USER` gibi) env dosyasında yoksa konteynere hiç aktarılmaz (boş dize değil).
+# Env: değerler `--env-file` ile verilen dosyadan okunur ve her servise YALNIZ ihtiyacı olan değişkenler
+# aktarılır (en az yetki: web hiçbir sır görmez, worker JWT özel anahtarını görmez, scheduler Telegram token'ını
+# görmez). Değersiz anahtarlar (`SMTP_USER:` gibi) tanımsızsa konteynere hiç aktarılmaz (boş dize değil).
 # `${VAR:?...}` zorunlu değişkenlerde compose eksik değerle başlamayı reddeder.
+# DİKKAT — öncelik: compose'u çalıştıran kabuğun ortam değişkenleri `--env-file` değerlerini EZER (aynı ad kabukta
+# export edilmişse, ör. geliştirme .env'inden kalan DATABASE_URL/SMTP_HOST, dosyadaki değer yok sayılır). Komutları
+# temiz bir kabukta çalıştırın (`env -i HOME="$HOME" PATH="$PATH" docker compose --env-file .env.prod ...`).
+# DİKKAT — sır ifşası: `docker compose config` ve `docker inspect <konteyner>` çözülmüş env'i (parolalar, JWT özel
+# anahtarı, DATA_ENCRYPTION_KEY) açık metin yazdırır; çıktılarını log'a, issue'ya, sohbete yapıştırmayın.
+#
+# SEED_ON_MIGRATE: yalnız İLK kurulumda true; ardından false yapın (ve SEED_ADMIN_* satırlarını silin). Seed her
+# çalıştığında SEED_ADMIN_EMAIL kullanıcısını yeniden SUPER_ADMIN + ACTIVE yapar (askıya alınmış/rolü düşürülmüş
+# hesabı geri getirir).
 #
 # Uygulama env kuralları production'da ayrıca açılışta doğrulanır (COOKIE_SECURE, https PUBLIC_BASE_URL, SMTP,
 # connection_limit...): eksik/güvensiz değerde süreç açılmaz, hata değişken adını söyler, değeri yazdırmaz.
@@ -41,7 +50,6 @@ x-worker-env: &worker-env
   ANALYZE_CONCURRENCY:
   MATCH_CONCURRENCY:
   NOTIFY_CONCURRENCY:
-  TELEGRAM_BOT_TOKEN:
   TELEGRAM_API_BASE:
 
 services:
@@ -123,6 +131,7 @@ services:
       TELEGRAM_WEBHOOK_SECRET:
       TELEGRAM_API_BASE:
       PROXY_CHECK_URL:
+    stop_grace_period: 20s # açık SSE/HTTP bağlantıları kapanırken Nest kapanış kancalarına süre
     networks: [edge, backend]
     depends_on:
       migrate: { condition: service_completed_successfully }
@@ -137,6 +146,8 @@ services:
     environment:
       <<: *worker-env
       ROLE: worker
+      # Telegram gönderimini yalnız worker yapar (scheduler yalnız kuyruğa alır, token'a ihtiyacı yok)
+      TELEGRAM_BOT_TOKEN:
       # connection_limit >= SCRAPE+ANALYZE+MATCH+NOTIFY_CONCURRENCY + 5 (Telegram) + 3 (varsayılanlarla 26)
       DATABASE_URL: postgresql://${POSTGRES_USER:-oto}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD zorunlu}@postgres:5432/${POSTGRES_DB:-oto}?connection_limit=${WORKER_DB_CONNECTION_LIMIT:-30}
     deploy:
@@ -178,6 +189,7 @@ services:
     environment:
       NODE_ENV: production
       DATABASE_URL: postgresql://${POSTGRES_USER:-oto}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD zorunlu}@postgres:5432/${POSTGRES_DB:-oto}
+      # Yalnız ilk kurulumda true; sonra false (seed, SEED_ADMIN_EMAIL hesabını yeniden SUPER_ADMIN + ACTIVE yapar)
       SEED_ON_MIGRATE: ${SEED_ON_MIGRATE:-false}
       SEED_DEMO_SOURCE: "false" # production'da demo kaynak yok (seed true'yu zaten reddeder)
       SEED_ADMIN_EMAIL: # isteğe bağlı: ilk süper admin (yalnız SEED_ON_MIGRATE=true iken)
@@ -193,10 +205,15 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-oto}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD zorunlu}
       POSTGRES_DB: ${POSTGRES_DB:-oto}
+    # Havuz toplamı: API_DB_CONNECTION_LIMIT + WORKER_REPLICAS × WORKER_DB_CONNECTION_LIMIT
+    #   + SCHEDULER_DB_CONNECTION_LIMIT + migrate/yedek/psql payı (~10) < max_connections (varsayılanlarla 10+2×30+5+10=85)
+    command: ["postgres", "-c", "max_connections=${POSTGRES_MAX_CONNECTIONS:-150}"]
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      # TCP üzerinden (-h 127.0.0.1): ilk açılıştaki initdb geçici sunucusu yalnız unix soketinde dinler; soket
+      # denetimi onu "hazır" sayar ve migrate gerçek sunucu açılmadan bağlanmaya çalışır (P1001).
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
       interval: 10s
       timeout: 5s
       start_period: 20s
@@ -211,11 +228,18 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     # AOF (her saniye fsync) + kuyruk verisi için noeviction (BullMQ anahtarları asla atılmamalı).
-    # Parola argv yerine yalnız konteyner env'inden okunur.
+    # Parola süreç argv'sine (ps, /proc/<pid>/cmdline) girmez: açılışta konteyner içi, yalnız redis kullanıcısının
+    # okuyabildiği (0600) bir yapılandırma dosyasına yazılır. Konteyner env'inde durur (docker inspect gösterir).
+    # docker-entrypoint.sh /data sahipliğini düzeltir ve redis kullanıcısına düşer (root çalışmaz).
     command:
       - sh
       - -c
-      - exec redis-server --appendonly yes --appendfsync everysec --maxmemory-policy noeviction --requirepass "$$REDIS_PASSWORD"
+      - |
+        umask 077
+        printf 'requirepass "%s"\n' "$$REDIS_PASSWORD" > /tmp/redis-auth.conf
+        chown redis:redis /tmp/redis-auth.conf
+        unset REDIS_PASSWORD
+        exec docker-entrypoint.sh redis-server /tmp/redis-auth.conf --appendonly yes --appendfsync everysec --maxmemory-policy noeviction
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD zorunlu}
       REDISCLI_AUTH: ${REDIS_PASSWORD:?REDIS_PASSWORD zorunlu}

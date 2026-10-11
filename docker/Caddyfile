@@ -39,6 +39,11 @@
 	}
 
 	handle /api/* {
+		# Kenar sınırı: api JSON gövdesini zaten 100 KB ile sınırlar (bootstrap.ts), dosya yükleme yok; büyük
+		# gövdeler upstream'e akıtılmadan 413 ile kesilir. SSE uçları (GET, gövdesiz) yukarıdaki handle'da.
+		request_body {
+			max_size 1MB
+		}
 		encode zstd gzip
 		reverse_proxy api:3001
 	}
