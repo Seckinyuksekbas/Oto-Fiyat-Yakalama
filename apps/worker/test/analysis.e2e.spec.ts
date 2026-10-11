@@ -60,6 +60,20 @@ describe('AnalysisService.process', () => {
     expect(await matchJobs()).toHaveLength(1);
   });
 
+  it('a MANUAL reason bypasses the materially-changed check: always a new row, event derivation unchanged', async () => {
+    await seedMarket();
+    const t = await createListing(ref, sourceId, { price: 960_000n });
+    await service.process(t.id);
+    expect(await service.process(t.id)).toMatchObject({ status: 'UNCHANGED', event: 'REFRESH' });
+    const out = await service.process(t.id, new Date(), 'MANUAL');
+    expect(out).toMatchObject({ status: 'WRITTEN', event: 'REFRESH' });
+    expect(await prisma.listingAnalysis.count()).toBe(2);
+    const a = await prisma.listingAnalysis.findUniqueOrThrow({ where: { id: out.analysisId! } });
+    expect(a.matchEvent).toBeNull();
+    expect((await prisma.listing.findUniqueOrThrow({ where: { id: t.id } })).latestAnalysisId).toBe(a.id);
+    expect(await matchJobs()).toHaveLength(1);
+  });
+
   it('a refresh after the market moved > 2% writes a new row but emits no match event', async () => {
     await seedMarket();
     const t = await createListing(ref, sourceId, { price: 960_000n });

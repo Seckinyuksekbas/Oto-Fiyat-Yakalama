@@ -31,7 +31,7 @@ export class AnalyzeWorkerHost implements OnModuleInit, OnModuleDestroy {
         const parsed = analyzeJobSchema.safeParse(job.data);
         // Bozuk payload kalıcı hatadır; yeniden denemek anlamsız.
         if (!parsed.success) throw new UnrecoverableError(`Geçersiz analiz işi: ${parsed.error.message}`);
-        await this.analysis.process(parsed.data.listingId);
+        await this.analysis.process(parsed.data.listingId, new Date(), parsed.data.reason);
       },
       { connection: bullConnection(this.env.REDIS_URL), concurrency: this.env.ANALYZE_CONCURRENCY },
     );

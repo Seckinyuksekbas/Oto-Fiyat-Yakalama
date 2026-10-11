@@ -16,8 +16,8 @@ export const scrapeJobSchema = z.object({
 });
 export type ScrapeJobData = z.infer<typeof scrapeJobSchema>;
 
-/** İpucu niteliğindedir: tüketici asıl olayı DB durumundan türetir. REFRESH = gece yeniden analizi. */
-export const analyzeReasonSchema = z.enum(['NEW', 'PRICE_CHANGE', 'RELIST', 'UPDATE', 'REFRESH']);
+/** İpucu niteliğindedir: tüketici asıl olayı DB durumundan türetir. REFRESH = gece yeniden analizi; MANUAL = admin yeniden analizi (maddi değişiklik kontrolünü atlar). */
+export const analyzeReasonSchema = z.enum(['NEW', 'PRICE_CHANGE', 'RELIST', 'UPDATE', 'REFRESH', 'MANUAL']);
 export type AnalyzeReason = z.infer<typeof analyzeReasonSchema>;
 
 export const analyzeJobSchema = z.object({

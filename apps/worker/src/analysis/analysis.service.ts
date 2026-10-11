@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { analyze } from '@oto/analysis';
 import { Prisma } from '@oto/db';
-import type { MatchEvent } from '@oto/shared';
+import type { AnalyzeReason, MatchEvent } from '@oto/shared';
 import { PrismaService } from '../infra/prisma.service';
 import { RedisService } from '../infra/redis.service';
 import { AnalysisSettingsService } from './analysis-settings.service';
@@ -41,19 +41,19 @@ export class AnalysisService {
   ) {}
 
   /** Kilit doluysa AnalysisLockBusyError fırlatır; BullMQ işi geri çekilmeyle yeniden dener. */
-  async process(listingId: number, now: Date = new Date()): Promise<AnalyzeOutcome> {
+  async process(listingId: number, now: Date = new Date(), reason?: AnalyzeReason): Promise<AnalyzeOutcome> {
     const lockKey = `lock:analyze:${listingId}`;
     const token = randomUUID();
     if ((await this.redis.set(lockKey, token, 'PX', LOCK_TTL_MS, 'NX')) !== 'OK') throw new AnalysisLockBusyError(listingId);
     try {
-      return await this.processLocked(listingId, now);
+      return await this.processLocked(listingId, now, reason);
     } finally {
       // Bırakma hatası asıl sonucu/hatayı maskelememeli; kilit TTL ile kendiliğinden düşer.
       await this.redis.eval(RELEASE_LOCK_LUA, 1, lockKey, token).catch((err: unknown) => this.logger.warn(`Analiz kilidi bırakılamadı (${lockKey}): ${err instanceof Error ? err.message : String(err)}`));
     }
   }
 
-  private async processLocked(listingId: number, now: Date): Promise<AnalyzeOutcome> {
+  private async processLocked(listingId: number, now: Date, reason?: AnalyzeReason): Promise<AnalyzeOutcome> {
     const listing = await this.prisma.listing.findUnique({ where: { id: listingId }, include: { latestAnalysis: true } });
     if (!listing || listing.status !== 'ACTIVE') return { status: 'SKIPPED', event: null, analysisId: null };
 
@@ -94,7 +94,7 @@ export class AnalysisService {
 
     const latest = listing.latestAnalysis;
     const event = deriveEvent(listing, latest);
-    if (event === 'REFRESH' && latest && !materiallyChanged(latest, result, settings)) {
+    if (reason !== 'MANUAL' && event === 'REFRESH' && latest && !materiallyChanged(latest, result, settings)) {
       return { status: 'UNCHANGED', event, analysisId: latest.id };
     }
 
