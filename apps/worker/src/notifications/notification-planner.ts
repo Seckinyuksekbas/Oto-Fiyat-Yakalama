@@ -31,6 +31,8 @@ export async function planNotifications(
   input: { listing: Listing; analysis: ListingAnalysis; matches: PlannedMatch[]; now: Date; telegramEnabled: boolean },
 ): Promise<PlannedNotification[]> {
   const out: PlannedNotification[] = [];
+  // Gerçek ilk-görülme NEW'i ilanın ilk analizidir; sonradan terfi eden NEW için olay anı analiz zamanıdır.
+  const firstAnalysis = (await tx.listingAnalysis.count({ where: { listingId: input.listing.id, id: { lt: input.analysis.id } } })) === 0;
   const byUser = new Map<string, PlannedMatch[]>();
   for (const m of input.matches) byUser.set(m.userId, [...(byUser.get(m.userId) ?? []), m]);
   const userIds = [...byUser.keys()].sort();
@@ -62,7 +64,7 @@ export async function planNotifications(
       const limitExceeded = [...statuses.values()].includes('SKIPPED_LIMIT');
       const payload = buildMatchPayload({
         listing: input.listing, analysis: input.analysis, reason: m.reason, previousPrice: m.previousPrice,
-        profile: { id: m.profile.id, name: m.profile.name }, limitExceeded,
+        profile: { id: m.profile.id, name: m.profile.name }, limitExceeded, firstAnalysis,
       });
       for (const c of channels) {
         const status = c === 'IN_APP' ? 'PENDING' : statuses.get(c)!;

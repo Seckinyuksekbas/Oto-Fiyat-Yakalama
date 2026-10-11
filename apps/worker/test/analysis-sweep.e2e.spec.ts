@@ -1,5 +1,6 @@
 import type { TestingModule } from '@nestjs/testing';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AlertService } from '../src/common/alert.service';
 import { MatchDispatcher } from '../src/analysis/match-dispatcher.service';
 import { AnalysisModule } from '../src/analysis/analysis.module';
 import { PrismaService } from '../src/infra/prisma.service';
@@ -156,5 +157,26 @@ describe('AnalysisSweepService head-of-line protection', () => {
     expect(spy).not.toHaveBeenCalled();
     expect(await stuckLogs()).toBe(1);
     expect((await prisma.listingAnalysis.findUniqueOrThrow({ where: { id: healthy.id } })).matchQueuedAt).not.toBeNull();
+  });
+});
+
+describe('AnalysisSweepService stuck alert delivery', () => {
+  it('retries the alarm on the next sweep when raising it failed, then stays quiet', async () => {
+    const l = await createListing(ref, sourceId);
+    const now = new Date('2026-10-12T10:00:00Z');
+    const a = await prisma.listingAnalysis.create({
+      data: { listingId: l.id, engineVersion: 'rules-v1', opportunityScore: 50, comparableCount: 5, confidence: 'MEDIUM', explanation: {}, comparableIds: [], matchEvent: 'NEW', createdAt: new Date(now.getTime() - 120_000), matchDispatchAttempts: 9 },
+    });
+    vi.spyOn(ref.get(MatchDispatcher), 'dispatch').mockRejectedValue(new Error('poison'));
+    const alerts = ref.get(AlertService);
+    const raise = vi.spyOn(alerts, 'raise').mockRejectedValueOnce(new Error('alert store down'));
+    await sweep.requeuePendingMatches(now); // 10. başarısızlık; alarm başarısız
+    expect((await prisma.listingAnalysis.findUniqueOrThrow({ where: { id: a.id } })).matchDispatchAttempts).toBe(10);
+    expect(raise).toHaveBeenCalledTimes(1);
+    await sweep.requeuePendingMatches(now); // alarm yeniden denenir ve başarılı olur
+    expect(raise).toHaveBeenCalledTimes(2);
+    await sweep.requeuePendingMatches(now);
+    await sweep.requeuePendingMatches(now);
+    expect(raise).toHaveBeenCalledTimes(2);
   });
 });

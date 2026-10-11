@@ -21,3 +21,10 @@ describe('buildMatchPayload eventAt', () => {
     expect(buildMatchPayload({ ...base, reason: 'RELIST' }).eventAt).toBe('2026-10-11T09:00:00.000Z');
   });
 });
+
+describe('buildMatchPayload promoted NEW', () => {
+  it('uses analysis createdAt when the NEW is not from the first analysis', () => {
+    expect(buildMatchPayload({ ...base, reason: 'NEW', firstAnalysis: false }).eventAt).toBe('2026-10-11T09:00:00.000Z');
+    expect(buildMatchPayload({ ...base, reason: 'NEW', firstAnalysis: true }).eventAt).toBe('2026-10-10T10:00:00.000Z');
+  });
+});

@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Logger, Module } from '@nestjs/common';
 import type { TestingModule } from '@nestjs/testing';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AnalysisSettingsService } from '../src/analysis/analysis-settings.service';
@@ -99,5 +99,24 @@ describe('analysis lock', () => {
     await job.promote();
     await waitFor(async () => (await job.getState()) === 'completed');
     expect(await prisma.listingAnalysis.count({ where: { listingId: l.id } })).toBe(1);
+  });
+
+  it('logs lock-busy retries at debug (not warn) while attempts remain', async () => {
+    const l = await createListing(ref, sourceId);
+    await redis.set(`lock:analyze:${l.id}`, 'held-by-other', 'PX', 120_000);
+    const debug = vi.spyOn(Logger.prototype, 'debug');
+    const warn = vi.spyOn(Logger.prototype, 'warn');
+    ref.get(AnalyzeWorkerHost).start();
+    const job = await ref.get(QueueRegistry).analyze.add('analyze', { listingId: l.id, reason: 'NEW' }, { jobId: `analyze-${l.id}-NEW-dbg`, ...RETRYING_JOB_OPTS });
+    await waitFor(async () => (await job.getState()) === 'delayed');
+    await waitFor(async () => debug.mock.calls.some((c) => String(c[0]).includes('kilit')));
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('başarısız'))).toBe(false);
+  });
+
+  it('a failing lock release does not mask the result', async () => {
+    const l = await createListing(ref, sourceId);
+    vi.spyOn(redis, 'eval').mockRejectedValueOnce(new Error('redis hiccup'));
+    const out = await service.process(l.id);
+    expect(out.status).toBe('WRITTEN');
   });
 });

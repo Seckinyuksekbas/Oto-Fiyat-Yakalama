@@ -8,6 +8,8 @@ export function buildMatchPayload(i: {
   previousPrice: bigint | null;
   profile: { id: string; name: string };
   limitExceeded: boolean;
+  /** İlanın ilk analizi mi? NEW olayı daha sonra (REFRESH/CHANGE ile) terfi ettiyse false: olay anı analiz zamanıdır. */
+  firstAnalysis?: boolean;
 }): MatchNotificationPayload {
   const { listing: l, analysis: a } = i;
   return {
@@ -26,6 +28,6 @@ export function buildMatchPayload(i: {
     },
     previousPrice: i.previousPrice?.toString() ?? null,
     limitExceeded: i.limitExceeded,
-    eventAt: (i.reason === 'NEW' ? l.firstSeenAt : a.createdAt).toISOString(),
+    eventAt: (i.reason === 'NEW' && i.firstAnalysis !== false ? l.firstSeenAt : a.createdAt).toISOString(),
   };
 }

@@ -3,6 +3,7 @@ import { userEventChannel } from '@oto/shared';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PrismaService } from '../src/infra/prisma.service';
 import { RedisService } from '../src/infra/redis.service';
+import { maxSearchProfilesFor } from '@oto/db';
 import { SchedulerModule } from '../src/scheduler/scheduler.module';
 import { SubscriptionSweepService } from '../src/scheduler/subscription-sweep.service';
 import { createContext, createProfile, createUser, resetState } from './helpers';
@@ -31,7 +32,7 @@ async function subscribe(userId: string, planCode: string, endsAt: Date | null, 
 
 describe('SubscriptionSweepService', () => {
   it('expires lapsed ACTIVE subscriptions and pauses excess profiles newest-first, notifying in-app', async () => {
-    const u = await createUser(ref);
+    const u = await createUser(ref, { emailVerifiedAt: new Date('2026-01-01T00:00:00Z') });
     const sub = await subscribe(u.id, 'PRO', new Date('2026-10-11T10:00:00Z'));
     const created = [];
     for (let i = 0; i < 4; i++) created.push(await createProfile(ref, u.id, { name: `P${i}`, createdAt: new Date(`2026-02-0${i + 1}T00:00:00Z`) }));
@@ -59,13 +60,13 @@ describe('SubscriptionSweepService', () => {
   });
 
   it('does not touch live, non-expiring or already-canceled subscriptions, and does not notify when nothing is paused', async () => {
-    const live = await createUser(ref);
+    const live = await createUser(ref, { emailVerifiedAt: new Date('2026-01-01T00:00:00Z') });
     await subscribe(live.id, 'PRO', new Date('2026-11-01T00:00:00Z'));
-    const forever = await createUser(ref);
+    const forever = await createUser(ref, { emailVerifiedAt: new Date('2026-01-01T00:00:00Z') });
     await subscribe(forever.id, 'PRO', null);
-    const canceled = await createUser(ref);
+    const canceled = await createUser(ref, { emailVerifiedAt: new Date('2026-01-01T00:00:00Z') });
     await subscribe(canceled.id, 'PRO', new Date('2026-10-01T00:00:00Z'), 'CANCELED');
-    const small = await createUser(ref);
+    const small = await createUser(ref, { emailVerifiedAt: new Date('2026-01-01T00:00:00Z') });
     const smallSub = await subscribe(small.id, 'PRO', new Date('2026-10-10T00:00:00Z'));
     await createProfile(ref, small.id);
     for (const id of [live.id, forever.id]) for (let i = 0; i < 4; i++) await createProfile(ref, id);
@@ -78,7 +79,7 @@ describe('SubscriptionSweepService', () => {
   });
 
   it('keeps profiles active when the user still has another live subscription covering them', async () => {
-    const u = await createUser(ref);
+    const u = await createUser(ref, { emailVerifiedAt: new Date('2026-01-01T00:00:00Z') });
     await subscribe(u.id, 'PRO', new Date('2026-10-11T00:00:00Z'));
     await subscribe(u.id, 'BUSINESS', null);
     for (let i = 0; i < 4; i++) await createProfile(ref, u.id);
@@ -87,10 +88,10 @@ describe('SubscriptionSweepService', () => {
   });
 
   it('runs once per Istanbul day (Redis NX) and again the next Istanbul day', async () => {
-    const a = await createUser(ref);
+    const a = await createUser(ref, { emailVerifiedAt: new Date('2026-01-01T00:00:00Z') });
     await subscribe(a.id, 'PRO', new Date('2026-10-12T05:00:00Z'));
     expect(await sweep.run(NOW)).toEqual({ expired: 1, paused: 0 });
-    const b = await createUser(ref);
+    const b = await createUser(ref, { emailVerifiedAt: new Date('2026-01-01T00:00:00Z') });
     const subB = await subscribe(b.id, 'PRO', new Date('2026-10-12T08:00:00Z'));
     expect(await sweep.run(new Date('2026-10-12T11:00:00Z'))).toBeNull(); // aynı gün
     expect((await prisma.userSubscription.findUniqueOrThrow({ where: { id: subB.id } })).status).toBe('ACTIVE');
@@ -100,11 +101,62 @@ describe('SubscriptionSweepService', () => {
   });
 
   it('releases the day marker when the sweep fails so the next tick retries', async () => {
-    const u = await createUser(ref);
+    const u = await createUser(ref, { emailVerifiedAt: new Date('2026-01-01T00:00:00Z') });
     await subscribe(u.id, 'PRO', new Date('2026-10-11T00:00:00Z'));
     vi.spyOn(sweep as unknown as { sweep: () => Promise<unknown> }, 'sweep').mockRejectedValueOnce(new Error('db down'));
     await expect(sweep.run(NOW)).rejects.toThrow('db down');
     expect(await ref.get(RedisService).exists('subs:sweep:20261012')).toBe(0);
     expect(await sweep.run(NOW)).toEqual({ expired: 1, paused: 0 });
+  });
+
+  it('caps unverified-email users at one active profile', async () => {
+    const u = await createUser(ref); // doğrulanmamış
+    await subscribe(u.id, 'PRO', new Date('2026-10-11T00:00:00Z'));
+    for (let i = 0; i < 3; i++) await createProfile(ref, u.id, { name: `P${i}`, createdAt: new Date(`2026-02-0${i + 1}T00:00:00Z`) });
+    expect(await sweep.run(NOW)).toEqual({ expired: 1, paused: 2 });
+    const status = Object.fromEntries((await prisma.searchProfile.findMany()).map((p) => [p.name, p.status]));
+    expect(status).toEqual({ P0: 'ACTIVE', P1: 'PAUSED', P2: 'PAUSED' });
+  });
+
+  it('one user failing does not block others; the day key is released and a rerun repairs only the failed user', async () => {
+    const mk = async (n: number) => {
+      const u = await createUser(ref, { emailVerifiedAt: new Date('2026-01-01T00:00:00Z') });
+      await subscribe(u.id, 'PRO', new Date('2026-10-11T00:00:00Z'));
+      for (let i = 0; i < 4; i++) await createProfile(ref, u.id, { name: `U${n}P${i}`, createdAt: new Date(`2026-02-0${i + 1}T00:00:00Z`) });
+      return u;
+    };
+    const bad = await mk(1);
+    const good = await mk(2);
+    const original = (sweep as unknown as { processUser: (id: string, now: Date) => Promise<unknown> }).processUser.bind(sweep);
+    vi.spyOn(sweep as unknown as { processUser: typeof original }, 'processUser').mockImplementation(async (id, now) => {
+      if (id === bad.id) throw new Error('boom');
+      return original(id, now);
+    });
+    await expect(sweep.run(NOW)).rejects.toThrow('1 kullanıcıda');
+    expect(await prisma.searchProfile.count({ where: { userId: good.id, status: 'PAUSED' } })).toBe(2);
+    expect(await prisma.searchProfile.count({ where: { userId: bad.id, status: 'PAUSED' } })).toBe(0);
+    expect(await ref.get(RedisService).exists('subs:sweep:20261012')).toBe(0);
+    vi.restoreAllMocks();
+    // Yeniden çalıştırma: bad kullanıcının abonelikleri hâlâ ACTIVE+süresi dolmuş; good zaten onarılmış (EXPIRED, fazla profil yok)
+    expect(await sweep.run(NOW)).toEqual({ expired: 1, paused: 2 });
+    expect(await prisma.searchProfile.count({ where: { userId: bad.id, status: 'PAUSED' } })).toBe(2);
+    expect(await prisma.notification.count({ where: { userId: good.id } })).toBe(1); // çift bildirim yok
+  });
+
+  it('repairs a user whose subscription was already EXPIRED but whose profiles are still over the limit', async () => {
+    const u = await createUser(ref, { emailVerifiedAt: new Date('2026-01-01T00:00:00Z') });
+    await prisma.userSubscription.create({
+      data: { userId: u.id, planId: (await prisma.subscriptionPlan.findUniqueOrThrow({ where: { code: 'PRO' } })).id, status: 'EXPIRED', endsAt: new Date('2026-10-10T00:00:00Z') },
+    });
+    for (let i = 0; i < 4; i++) await createProfile(ref, u.id, { name: `P${i}`, createdAt: new Date(`2026-02-0${i + 1}T00:00:00Z`) });
+    expect(await sweep.run(NOW)).toEqual({ expired: 0, paused: 2 });
+  });
+});
+
+describe('maxSearchProfilesFor', () => {
+  it('limits unverified users to one profile at most', () => {
+    expect(maxSearchProfilesFor({ maxSearchProfiles: 10 }, true)).toBe(10);
+    expect(maxSearchProfilesFor({ maxSearchProfiles: 10 }, false)).toBe(1);
+    expect(maxSearchProfilesFor({ maxSearchProfiles: 0 }, false)).toBe(0);
   });
 });

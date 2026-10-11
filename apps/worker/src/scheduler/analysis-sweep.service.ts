@@ -94,31 +94,47 @@ export class AnalysisSweepService {
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         this.logger.warn(`Eşleştirme olayı yeniden gönderilemedi (analiz ${p.id}): ${reason}`);
-        await this.recordDispatchFailure(p.id, p.listingId, reason);
+        await this.recordDispatchFailure(p.id, reason);
       }
     }
+    await this.alertStuck();
     return sent;
   }
 
-  /** Deneme sayacını artırır; sınıra ilk ulaşıldığında (tam bir kez) alarm verir. */
-  private async recordDispatchFailure(analysisId: number, listingId: number, reason: string): Promise<void> {
+  private async recordDispatchFailure(analysisId: number, reason: string): Promise<void> {
     try {
-      const row = await this.prisma.listingAnalysis.update({
-        where: { id: analysisId },
-        data: { matchDispatchAttempts: { increment: 1 } },
-        select: { matchDispatchAttempts: true },
-      });
-      if (row.matchDispatchAttempts === MATCH_DISPATCH_MAX_ATTEMPTS) {
+      await this.prisma.listingAnalysis.update({ where: { id: analysisId }, data: { matchDispatchAttempts: { increment: 1 } } });
+    } catch (err) {
+      this.logger.warn(`Deneme sayacı güncellenemedi (analiz ${analysisId}, ${reason}): ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /**
+   * Sınıra ulaşmış satırlar için bir kez `match-dispatch-stuck` alarmı. Alarm teslimi başarısız olursa işaret konmaz
+   * ve bir sonraki süpürmede yeniden denenir.
+   */
+  private async alertStuck(): Promise<void> {
+    const stuck = await this.prisma.listingAnalysis.findMany({
+      where: { matchEvent: { in: ['NEW', 'PRICE_DROP', 'RELIST'] }, matchQueuedAt: null, matchDispatchAttempts: { gte: MATCH_DISPATCH_MAX_ATTEMPTS } },
+      orderBy: { id: 'asc' },
+      take: 50,
+      select: { id: true, listingId: true },
+    });
+    for (const row of stuck) {
+      const flag = `match-dispatch-stuck:alerted:${row.id}`;
+      try {
+        if ((await this.redis.exists(flag)) === 1) continue;
         await this.alerts.raise({
-          key: `match-dispatch-stuck:${analysisId}`,
+          key: `match-dispatch-stuck:${row.id}`,
           level: 'ERROR',
           component: 'analysis-sweep',
-          message: `match-dispatch-stuck: analiz ${analysisId} (ilan ${listingId}) eşleştirme kuyruğuna ${MATCH_DISPATCH_MAX_ATTEMPTS} denemede alınamadı: ${reason.slice(0, 200)}`,
-          context: { analysisId, listingId },
+          message: `match-dispatch-stuck: analiz ${row.id} (ilan ${row.listingId}) eşleştirme kuyruğuna ${MATCH_DISPATCH_MAX_ATTEMPTS} denemede alınamadı`,
+          context: { analysisId: row.id, listingId: row.listingId },
         });
+        await this.redis.set(flag, '1', 'EX', 30 * 24 * 60 * 60);
+      } catch (err) {
+        this.logger.warn(`Takılı eşleştirme alarmı verilemedi (analiz ${row.id}); sonraki süpürmede yeniden denenecek: ${err instanceof Error ? err.message : String(err)}`);
       }
-    } catch (err) {
-      this.logger.warn(`Deneme sayacı güncellenemedi (analiz ${analysisId}): ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 }

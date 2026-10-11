@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { resolveUserPlan } from '@oto/db';
+import { maxSearchProfilesFor, resolveUserPlan } from '@oto/db';
 import { userEventChannel, type UserEvent } from '@oto/shared';
 import { PrismaService } from '../infra/prisma.service';
 import { RedisService } from '../infra/redis.service';
@@ -8,6 +8,13 @@ import { istanbulDayKey } from './analysis-sweep.service';
 export interface SubscriptionSweepResult {
   expired: number;
   paused: number;
+}
+
+/** Önceki çalıştırmada yarım kalmış (EXPIRED ama profilleri hâlâ fazla) kullanıcıları onarmak için geriye bakış. */
+const REPAIR_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
+
+interface UserOutcome extends SubscriptionSweepResult {
+  event?: { userId: string; event: UserEvent };
 }
 
 /** Süresi dolan abonelikleri kapatır; yeni limite sığmayan ACTIVE profilleri (en yeniden başlayarak) duraklatır. */
@@ -20,7 +27,11 @@ export class SubscriptionSweepService {
     private readonly redis: RedisService,
   ) {}
 
-  /** İstanbul gününde bir kez çalışır (Redis NX); bugün zaten çalıştıysa null döner. Hata olursa işaret serbest bırakılır. */
+  /**
+   * İstanbul gününde bir kez çalışır (Redis NX); bugün zaten çalıştıysa null döner.
+   * Herhangi bir kullanıcı başarısız olursa diğerleri yine işlenir, gün işareti serbest bırakılır ve hata fırlatılır;
+   * sonraki tick yalnızca eksik kalanları onarır (işlem kullanıcı başına idempotenttir).
+   */
   async run(now: Date = new Date()): Promise<SubscriptionSweepResult | null> {
     const key = `subs:sweep:${istanbulDayKey(now)}`;
     const claimed = await this.redis.set(key, '1', 'EX', 2 * 24 * 60 * 60, 'NX');
@@ -34,50 +45,65 @@ export class SubscriptionSweepService {
   }
 
   private async sweep(now: Date): Promise<SubscriptionSweepResult> {
-    const lapsed = await this.prisma.userSubscription.findMany({
-      where: { status: 'ACTIVE', endsAt: { lte: now } },
-      select: { id: true, userId: true },
-    });
-    if (lapsed.length === 0) return { expired: 0, paused: 0 };
-    const upd = await this.prisma.userSubscription.updateMany({
-      where: { id: { in: lapsed.map((s) => s.id) }, status: 'ACTIVE' },
-      data: { status: 'EXPIRED' },
-    });
-    let paused = 0;
-    for (const userId of new Set(lapsed.map((s) => s.userId))) {
+    const [lapsed, repair] = await Promise.all([
+      this.prisma.userSubscription.findMany({ where: { status: 'ACTIVE', endsAt: { lte: now } }, select: { userId: true } }),
+      this.prisma.userSubscription.findMany({
+        where: { status: 'EXPIRED', endsAt: { gte: new Date(now.getTime() - REPAIR_LOOKBACK_MS) }, user: { searchProfiles: { some: { status: 'ACTIVE' } } } },
+        select: { userId: true },
+      }),
+    ]);
+    const userIds = [...new Set([...lapsed, ...repair].map((s) => s.userId))];
+    const total: SubscriptionSweepResult = { expired: 0, paused: 0 };
+    const failures: string[] = [];
+    for (const userId of userIds) {
       try {
-        paused += await this.enforceProfileLimit(userId, now);
+        const out = await this.processUser(userId, now);
+        total.expired += out.expired;
+        total.paused += out.paused;
+        if (out.event) {
+          // Yayın commit'ten sonra; başarısızlığı sonucu değiştirmez.
+          await this.redis.publish(userEventChannel(userId), JSON.stringify(out.event.event)).catch((err: unknown) => this.logger.warn(`Bildirim yayınlanamadı: ${String(err)}`));
+        }
       } catch (err) {
-        this.logger.error(`Kullanıcı ${userId} profil limiti uygulanamadı: ${err instanceof Error ? err.message : String(err)}`);
+        failures.push(userId);
+        this.logger.error(`Kullanıcı ${userId} abonelik süpürmesi başarısız: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    this.logger.log(`Abonelik süpürmesi: ${upd.count} abonelik süresi doldu, ${paused} profil duraklatıldı`);
-    return { expired: upd.count, paused };
+    this.logger.log(`Abonelik süpürmesi: ${total.expired} abonelik süresi doldu, ${total.paused} profil duraklatıldı`);
+    if (failures.length > 0) throw new Error(`Abonelik süpürmesi ${failures.length} kullanıcıda başarısız oldu`);
+    return total;
   }
 
-  private async enforceProfileLimit(userId: string, now: Date): Promise<number> {
-    const plan = await resolveUserPlan(this.prisma, userId, now);
-    const limit = plan.limits.maxSearchProfiles;
-    const active = await this.prisma.searchProfile.findMany({
-      where: { userId, status: 'ACTIVE' },
-      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-      select: { id: true },
+  /** Tek kullanıcı, tek transaction: süresi dolanları kapat + fazla profilleri duraklat + bildirimi yaz. */
+  private async processUser(userId: string, now: Date): Promise<UserOutcome> {
+    return this.prisma.$transaction(async (tx) => {
+      // Eşzamanlı profil oluşturma/aktifleştirme ile yarışmamak için kullanıcı satırını kilitle.
+      await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${userId} FOR UPDATE`;
+      const expired = await tx.userSubscription.updateMany({ where: { userId, status: 'ACTIVE', endsAt: { lte: now } }, data: { status: 'EXPIRED' } });
+      const user = await tx.user.findUnique({ where: { id: userId }, select: { emailVerifiedAt: true } });
+      if (!user) return { expired: expired.count, paused: 0 };
+      const plan = await resolveUserPlan(tx, userId, now);
+      const limit = maxSearchProfilesFor(plan.limits, user.emailVerifiedAt !== null);
+      const active = await tx.searchProfile.findMany({
+        where: { userId, status: 'ACTIVE' },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        select: { id: true },
+      });
+      const excess = active.slice(limit);
+      if (excess.length === 0) return { expired: expired.count, paused: 0 };
+      await tx.searchProfile.updateMany({ where: { id: { in: excess.map((p) => p.id) }, status: 'ACTIVE' }, data: { status: 'PAUSED' } });
+      const message = `Aboneliğinizin süresi doldu; ${plan.planName} planı en fazla ${limit} aktif profile izin veriyor. ${excess.length} profil duraklatıldı.`;
+      const note = await tx.notification.create({
+        data: {
+          userId, kind: 'SYSTEM_ALERT', channel: 'IN_APP', status: 'SENT', sentAt: now,
+          payload: { type: 'SUBSCRIPTION_EXPIRED', level: 'WARN', message, pausedProfiles: excess.length },
+        },
+      });
+      const event: UserEvent = {
+        type: 'notification',
+        notification: { id: note.id, kind: 'SYSTEM_ALERT', channel: 'IN_APP', status: 'SENT', payload: note.payload, createdAt: note.createdAt.toISOString() },
+      };
+      return { expired: expired.count, paused: excess.length, event: { userId, event } };
     });
-    const excess = active.slice(limit);
-    if (excess.length === 0) return 0;
-    await this.prisma.searchProfile.updateMany({ where: { id: { in: excess.map((p) => p.id) }, status: 'ACTIVE' }, data: { status: 'PAUSED' } });
-    const message = `Aboneliğinizin süresi doldu; ${plan.planName} planı en fazla ${limit} aktif profile izin veriyor. ${excess.length} profil duraklatıldı.`;
-    const note = await this.prisma.notification.create({
-      data: {
-        userId, kind: 'SYSTEM_ALERT', channel: 'IN_APP', status: 'SENT', sentAt: now,
-        payload: { type: 'SUBSCRIPTION_EXPIRED', level: 'WARN', message, pausedProfiles: excess.length },
-      },
-    });
-    const event: UserEvent = {
-      type: 'notification',
-      notification: { id: note.id, kind: 'SYSTEM_ALERT', channel: 'IN_APP', status: 'SENT', payload: note.payload, createdAt: note.createdAt.toISOString() },
-    };
-    await this.redis.publish(userEventChannel(userId), JSON.stringify(event)).catch((err: unknown) => this.logger.warn(`Bildirim yayınlanamadı: ${String(err)}`));
-    return excess.length;
   }
 }

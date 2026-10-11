@@ -13,6 +13,9 @@ export const SETTINGS_CHANGED_CHANNEL = 'settings:changed';
 export class AnalysisSettingsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(AnalysisSettingsService.name);
   private cache?: { at: number; value: AnalysisSettings };
+  /** invalidate() her çağrıda artar; uçuştaki bir okuma, bu sırada geçersiz kılındıysa sonucunu önbelleğe yazmaz. */
+  private generation = 0;
+  private subscribed = false;
 
   private subscriber?: Redis;
 
@@ -28,11 +31,22 @@ export class AnalysisSettingsService implements OnModuleInit, OnModuleDestroy {
     sub.on('message', (_channel: string, key: string) => {
       if (key === ANALYSIS_SETTINGS_KEY) this.invalidate();
     });
+    // Bağlantı sonradan (ilk abonelik başarısızsa) hazır olduğunda yeniden abone ol; kaçırılmış mesajlar için önbelleği at.
+    sub.on('ready', () => {
+      if (this.subscribed) return;
+      void this.subscribe(sub);
+    });
     this.subscriber = sub;
+    await this.subscribe(sub);
+  }
+
+  private async subscribe(sub: Redis): Promise<void> {
     try {
       await sub.subscribe(SETTINGS_CHANGED_CHANNEL);
+      this.subscribed = true;
+      this.invalidate();
     } catch (err) {
-      this.logger.warn(`settings:changed aboneliği kurulamadı; yalnızca TTL kullanılacak: ${err instanceof Error ? err.message : String(err)}`);
+      this.logger.warn(`settings:changed aboneliği kurulamadı; 'ready' olunca yeniden denenecek, o zamana dek yalnızca TTL: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -44,6 +58,7 @@ export class AnalysisSettingsService implements OnModuleInit, OnModuleDestroy {
 
   async get(now = Date.now()): Promise<AnalysisSettings> {
     if (this.cache && now - this.cache.at < CACHE_MS) return this.cache.value;
+    const generation = this.generation;
     const row = await this.prisma.systemSetting.findUnique({ where: { key: ANALYSIS_SETTINGS_KEY } });
     let value = DEFAULT_SETTINGS;
     if (row) {
@@ -51,11 +66,12 @@ export class AnalysisSettingsService implements OnModuleInit, OnModuleDestroy {
       if (parsed.success) value = parsed.data;
       else this.logger.warn(`Geçersiz ${ANALYSIS_SETTINGS_KEY}; varsayılanlar kullanılıyor: ${parsed.error.issues.map((i) => i.path.join('.')).join(', ')}`);
     }
-    this.cache = { at: now, value };
+    if (generation === this.generation) this.cache = { at: now, value };
     return value;
   }
 
   invalidate(): void {
+    this.generation += 1;
     this.cache = undefined;
   }
 }

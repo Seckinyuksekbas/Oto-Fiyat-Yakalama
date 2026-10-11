@@ -10,6 +10,7 @@ import { becameMoreMatchable, deriveEvent, isDamaged, isMatchEvent, materiallyCh
 import { MatchDispatcher } from './match-dispatcher.service';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** Kilit yenilenmez: TTL, tek analizin en kötü süresinden uzundur; aşılırsa latestAnalysisId CAS'ı güvenlik ağıdır. */
 const LOCK_TTL_MS = 60_000;
 const MAX_CANDIDATES = 1000;
 /** Kilidi yalnızca sahibi bırakabilir (token eşleşirse sil). */
@@ -47,7 +48,8 @@ export class AnalysisService {
     try {
       return await this.processLocked(listingId, now);
     } finally {
-      await this.redis.eval(RELEASE_LOCK_LUA, 1, lockKey, token);
+      // Bırakma hatası asıl sonucu/hatayı maskelememeli; kilit TTL ile kendiliğinden düşer.
+      await this.redis.eval(RELEASE_LOCK_LUA, 1, lockKey, token).catch((err: unknown) => this.logger.warn(`Analiz kilidi bırakılamadı (${lockKey}): ${err instanceof Error ? err.message : String(err)}`));
     }
   }
 
