@@ -1,6 +1,6 @@
 import type { TestingModule } from '@nestjs/testing';
 import { ADMIN_EVENTS_CHANNEL, adminEventSchema, notifyJobId, parseSettingValue, userEventChannel } from '@oto/shared';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BlockedError, FetchError } from '@oto/collection';
 import { SourceHealthService } from '../src/collection/source-health.service';
 import { AlertService, PERSISTENT_ALERT_TTL_SEC } from '../src/common/alert.service';
@@ -10,7 +10,15 @@ import { NotificationDispatcher } from '../src/notifications/notification-dispat
 import { TELEGRAM_UNAUTHORIZED_FLAG } from '../src/notifications/notify.service';
 import { QueueRegistry } from '../src/queues/queue-registry';
 import { ALERT_THRESHOLDS_KEY, MonitorService } from '../src/scheduler/monitor.service';
+import { ENV } from '../src/config/config.module';
+import type { Env } from '../src/config/env';
+import { AnalysisSweepService } from '../src/scheduler/analysis-sweep.service';
+import { NotificationSweepService } from '../src/scheduler/notification-sweep.service';
+import { RetentionService } from '../src/scheduler/retention.service';
+import { SchedulerLoop } from '../src/scheduler/scheduler-loop.service';
 import { SchedulerModule } from '../src/scheduler/scheduler.module';
+import { SchedulerService } from '../src/scheduler/scheduler.service';
+import { SubscriptionSweepService } from '../src/scheduler/subscription-sweep.service';
 import { createAdmin, createChannel, createContext, createSource, createUser, resetState } from './helpers';
 
 let ref: TestingModule;
@@ -50,7 +58,10 @@ describe('MonitorService conditions', () => {
     await createAdmin(ref);
     const down = await createSource(ref, 'http://demo.invalid', { health: 'DOWN' });
     const paused = await createSource(ref, 'http://demo.invalid', { health: 'PAUSED' });
-    await createSource(ref, 'http://demo.invalid', { health: 'PAUSED', isActive: false }); // admin duraklattı: alarm yok
+    // Yönetici duraklatması yalnız isActive=false yazar (health olduğu gibi kalır): DOWN olsa da alarm yok.
+    await createSource(ref, 'http://demo.invalid', { health: 'DOWN', isActive: false });
+    // Plan 07 öncesi biçim (isActive=false + PAUSED) ve duraklatılmış engelli kaynak: etkin değil, alarm yok.
+    await createSource(ref, 'http://demo.invalid', { health: 'PAUSED', isActive: false });
     await createSource(ref, 'http://demo.invalid', { health: 'HEALTHY' });
 
     const raised = await monitor.check(new Date());
@@ -394,5 +405,38 @@ describe('AlertService delivery (Plan 07)', () => {
     expect(await prisma.notification.count({ where: { channel: 'IN_APP' } })).toBe(1);
     expect(await prisma.notification.count({ where: { channel: 'TELEGRAM' } })).toBe(1);
     expect(await prisma.systemLog.count()).toBe(1);
+  });
+});
+
+describe('SchedulerLoop monitor throttle (Plan 07 test borcu)', () => {
+  it('does not run the monitor twice within MONITOR_INTERVAL_MS, and runs it again once the interval passes', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-10-11T10:00:00Z'));
+      const check = vi.spyOn(monitor, 'check');
+      const env: Env = { ...ref.get<Env>(ENV), MONITOR_INTERVAL_MS: 60_000 };
+      const leader = { isLeader: () => true, start: async () => undefined, onAcquired: () => undefined };
+      const loop = new SchedulerLoop(
+        ref.get(SchedulerService),
+        ref.get(AnalysisSweepService),
+        ref.get(NotificationSweepService),
+        ref.get(SubscriptionSweepService),
+        monitor,
+        ref.get(RetentionService),
+        leader as never,
+        env,
+      );
+      await loop.safeTick();
+      expect(check).toHaveBeenCalledTimes(1);
+      vi.setSystemTime(new Date('2026-10-11T10:00:59Z'));
+      await loop.safeTick();
+      expect(check).toHaveBeenCalledTimes(1);
+      vi.setSystemTime(new Date('2026-10-11T10:01:00Z'));
+      await loop.safeTick();
+      expect(check).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
   });
 });

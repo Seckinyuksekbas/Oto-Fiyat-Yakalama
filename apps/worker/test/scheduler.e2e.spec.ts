@@ -70,6 +70,37 @@ describe('SchedulerService.tick', () => {
     expect(await scheduler.tick(T0)).toBe(0);
   });
 
+  it.each([
+    ['deactivated', { isActive: false }],
+    ['paused', { health: 'PAUSED' as const }],
+  ])('re-reads eligibility under the row lock: a source %s after the candidate list was read gets no job (Plan 07 test borcu)', async (_label, change) => {
+    const source = await createSource(ref, demo.baseUrl);
+    let candidateReads = 0;
+    // Aday listesi okunduktan hemen sonra (satır kilidi alınmadan önce) admin kaynağı değiştirir.
+    // Prisma delegeleri vi.spyOn ile geri yüklenemediğinden ayrı bir SchedulerService'e sarmalanmış istemci verilir.
+    const racing = new Proxy(prisma, {
+      get(target, key) {
+        if (key === 'dataSource') {
+          return {
+            findMany: async (args: Parameters<typeof prisma.dataSource.findMany>[0]) => {
+              const rows = await target.dataSource.findMany(args);
+              candidateReads += 1;
+              await target.dataSource.update({ where: { id: source.id }, data: change });
+              return rows;
+            },
+          };
+        }
+        const value: unknown = Reflect.get(target, key);
+        return typeof value === 'function' ? (value as (...a: unknown[]) => unknown).bind(target) : value;
+      },
+    });
+    const racingScheduler = new SchedulerService(racing, ref.get(QueueRegistry));
+    expect(await racingScheduler.tick(T0)).toBe(0);
+    expect(candidateReads).toBe(1);
+    expect(await prisma.collectionJob.count({ where: { sourceId: source.id } })).toBe(0);
+    expect(await ref.get(QueueRegistry).scrape.count()).toBe(0);
+  });
+
   it('recovers from a crashed worker: stale RUNNING jobs fail and the source is rescheduled (Review Focus #4)', async () => {
     const source = await createSource(ref, demo.baseUrl);
     const stuck = await prisma.collectionJob.create({ data: { sourceId: source.id, trigger: 'SCHEDULED', status: 'RUNNING', createdAt: plus(-31 * 60_000) } });

@@ -28,6 +28,8 @@ export const envSchema = z
   })
   .superRefine((env, ctx) => {
     if (env.NODE_ENV !== 'production') return;
+    const poolProblem = connectionLimitProblem(env);
+    if (poolProblem) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['DATABASE_URL'], message: poolProblem });
     if (!env.TELEGRAM_API_BASE.startsWith('https://')) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['TELEGRAM_API_BASE'], message: 'production ortamında https olmalı' });
     }
@@ -42,8 +44,37 @@ export const envSchema = z
   .transform((env) => ({ ...env, BOT_CONTACT_URL: env.BOT_CONTACT_URL ?? 'http://localhost:3000/bot', PUBLIC_BASE_URL: env.PUBLIC_BASE_URL ?? 'http://localhost:3000' }));
 export type Env = z.infer<typeof envSchema>;
 
-export function parseEnv(source: Record<string, string | undefined>): Env {
+type PoolInputs = Pick<Env, 'DATABASE_URL' | 'SCRAPE_CONCURRENCY' | 'ANALYZE_CONCURRENCY' | 'MATCH_CONCURRENCY' | 'NOTIFY_CONCURRENCY'>;
+
+/** Worker'ın Prisma havuzunda ihtiyaç duyduğu en az bağlantı: her eşzamanlı iş bir bağlantı + scheduler/sweep/heartbeat payı. */
+export function requiredConnectionLimit(env: Omit<PoolInputs, 'DATABASE_URL'>): number {
+  return env.SCRAPE_CONCURRENCY + env.ANALYZE_CONCURRENCY + env.MATCH_CONCURRENCY + env.NOTIFY_CONCURRENCY + 3;
+}
+
+/**
+ * `DATABASE_URL` sorgu dizgisindeki `connection_limit` yetersizse nedenini döndürür (yoksa `null`).
+ * Mesaj URL'yi ya da parolayı asla içermez; yalnız değişken adı, kural ve gereken en az değer.
+ */
+export function connectionLimitProblem(env: PoolInputs): string | null {
+  const min = requiredConnectionLimit(env);
+  const rule = `en az ${min} olmalı (SCRAPE+ANALYZE+MATCH+NOTIFY_CONCURRENCY + 3)`;
+  const raw = URL.canParse(env.DATABASE_URL) ? new URL(env.DATABASE_URL).searchParams.get('connection_limit') : null;
+  if (raw === null) return `connection_limit sorgu parametresi eksik; ${rule}`;
+  if (!/^\d+$/.test(raw)) return `connection_limit pozitif tamsayı olmalı; ${rule}`;
+  if (Number(raw) < min) return `connection_limit ${rule}`;
+  return null;
+}
+
+/**
+ * Production'da eksik/yetersiz `connection_limit` açılışı durdurur (superRefine); development/test'te yalnız uyarır,
+ * çünkü yerel Prisma varsayılan havuzu (num_cpus*2+1) genelde yeterlidir.
+ */
+export function parseEnv(source: Record<string, string | undefined>, warn: (message: string) => void = console.warn): Env {
   const result = envSchema.safeParse(source);
   if (!result.success) throw new Error(formatEnvIssues(result.error.issues));
+  if (result.data.NODE_ENV !== 'production') {
+    const poolProblem = connectionLimitProblem(result.data);
+    if (poolProblem) warn(`Uyarı (DATABASE_URL): ${poolProblem}; production'da worker bu durumda başlamaz`);
+  }
   return result.data;
 }

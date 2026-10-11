@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger, type OnApplicationBootstrap, type OnModuleD
 import { ENV } from '../config/config.module';
 import type { Env } from '../config/env';
 import { AnalysisSweepService } from './analysis-sweep.service';
+import { LeaderLockService } from './leader-lock.service';
 import { MonitorService } from './monitor.service';
 import { NotificationSweepService } from './notification-sweep.service';
 import { RetentionService } from './retention.service';
@@ -10,7 +11,10 @@ import { SchedulerService } from './scheduler.service';
 
 const CLEANUP_EVERY_MS = 24 * 60 * 60 * 1000;
 
-/** Yalnızca ROLE=scheduler süreçlerinde yüklenir; tek instance çalışmalıdır. */
+/**
+ * Yalnızca ROLE=scheduler süreçlerinde yüklenir. Birden çok instance çalışabilir: tick, alarm izleme ve günlük temizlik
+ * yalnız `scheduler:leader` kilidini tutan süreçte yapılır (LeaderLockService); diğerleri beklemede kalır.
+ */
 @Injectable()
 export class SchedulerLoop implements OnApplicationBootstrap, OnModuleDestroy {
   private readonly logger = new Logger(SchedulerLoop.name);
@@ -28,12 +32,15 @@ export class SchedulerLoop implements OnApplicationBootstrap, OnModuleDestroy {
     private readonly subscriptionSweep: SubscriptionSweepService,
     private readonly monitor: MonitorService,
     private readonly retention: RetentionService,
+    private readonly leader: LeaderLockService,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
-  onApplicationBootstrap(): void {
+  async onApplicationBootstrap(): Promise<void> {
+    // Liderliği alan süreç (açılışta ya da yük devrinde) temizliği hemen çalıştırır; sonra 24 saatte bir.
+    this.leader.onAcquired(() => void this.safeCleanup());
+    await this.leader.start();
     void this.safeTick();
-    void this.safeCleanup();
     this.tickTimer = setInterval(() => void this.safeTick(), this.env.SCHEDULER_TICK_MS);
     this.cleanupTimer = setInterval(() => void this.safeCleanup(), CLEANUP_EVERY_MS);
   }
@@ -43,8 +50,9 @@ export class SchedulerLoop implements OnApplicationBootstrap, OnModuleDestroy {
     if (this.cleanupTimer) clearInterval(this.cleanupTimer);
   }
 
-  private async safeTick(): Promise<void> {
-    if (this.ticking) return;
+  /** Lider değilse hiçbir şey yapmaz; liderlik tick ortasında kaybedilirse kalan adımlar atlanır. */
+  async safeTick(): Promise<void> {
+    if (this.ticking || !this.leader.isLeader()) return;
     this.ticking = true;
     try {
       await this.step('Scheduler tick', async () => {
@@ -58,7 +66,7 @@ export class SchedulerLoop implements OnApplicationBootstrap, OnModuleDestroy {
       });
       await this.step('Bildirim yeniden gönderimi', () => this.notifySweep.requeuePending());
       await this.step('Abonelik süresi süpürmesi', () => this.subscriptionSweep.run());
-      if (Date.now() - this.lastMonitorAt >= this.env.MONITOR_INTERVAL_MS) {
+      if (this.leader.isLeader() && Date.now() - this.lastMonitorAt >= this.env.MONITOR_INTERVAL_MS) {
         this.lastMonitorAt = Date.now();
         await this.step('Alarm izleme', () => this.monitor.check(new Date()));
       }
@@ -68,6 +76,7 @@ export class SchedulerLoop implements OnApplicationBootstrap, OnModuleDestroy {
   }
 
   private async step(name: string, fn: () => Promise<unknown>): Promise<void> {
+    if (!this.leader.isLeader()) return;
     try {
       await fn();
     } catch (err) {
@@ -75,8 +84,8 @@ export class SchedulerLoop implements OnApplicationBootstrap, OnModuleDestroy {
     }
   }
 
-  private async safeCleanup(): Promise<void> {
-    if (this.cleaning) return;
+  async safeCleanup(): Promise<void> {
+    if (this.cleaning || !this.leader.isLeader()) return;
     this.cleaning = true;
     try {
       await this.retention.run(); // sonuç (tablo → sayı) RetentionService içinde info log'una yazılır

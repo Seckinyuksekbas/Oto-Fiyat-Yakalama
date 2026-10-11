@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, Optional, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { matchJobSchema, QueueName, type MatchJobData } from '@oto/shared';
 import { UnrecoverableError, Worker } from 'bullmq';
+import { closeWithTimeout } from '../common/close-with-timeout';
 import { ENV } from '../config/config.module';
 import type { Env } from '../config/env';
 import { bullConnection } from '../infra/bull';
@@ -40,7 +41,7 @@ export class MatchWorkerHost implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleDestroy(): Promise<void> {
-    await this.worker?.close();
+    if (this.worker) await closeWithTimeout(this.worker, this.env.SHUTDOWN_TIMEOUT_MS, this.logger);
     this.worker = undefined;
   }
 }
