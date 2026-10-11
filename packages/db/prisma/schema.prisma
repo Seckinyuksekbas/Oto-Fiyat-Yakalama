@@ -328,6 +328,8 @@ model CollectionJob {
 
   @@index([sourceId, createdAt])
   @@index([status])
+  /// İzleme: son 1 saatte biten işler (parse oranı)
+  @@index([finishedAt])
 }
 
 model ScrapeError {
@@ -343,6 +345,10 @@ model ScrapeError {
   createdAt DateTime        @default(now())
 
   @@index([sourceId, createdAt])
+  /// İzleme: iş başına PARSE hatası sayımı
+  @@index([jobId])
+  /// Saklama temizliği (createdAt < sınır)
+  @@index([createdAt])
 }
 
 // ---------- İlan ----------
@@ -526,6 +532,10 @@ model Notification {
   @@index([userId, createdAt])
   @@index([status, channel])
   @@index([status, queuedAt])
+  /// İzleme (son 1 saat hata oranı) ve genel bakış "bugün" sayımları
+  @@index([status, createdAt])
+  /// Genel bakış: bugün gönderilen ve son 24 saat gecikme p50/p95
+  @@index([status, sentAt])
 }
 
 model Favorite {

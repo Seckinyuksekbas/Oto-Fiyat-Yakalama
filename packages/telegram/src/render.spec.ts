@@ -118,7 +118,9 @@ describe('renderAlertMessage', () => {
     const t = renderAlertMessage({ level: 'ERROR', message: '<'.repeat(5000), at: '2026-10-10T11:32:00.000Z' });
     expect(t.length).toBeLessThanOrEqual(4096);
     expect(t).toContain('…');
-    expect(t).not.toMatch(/&l?t?$/m); // yarım kalmış kaçış yok
+    // Mesaj satırı yalnızca tam `&lt;` birimlerinden + kırpma işaretinden oluşur (yarım kalmış kaçış yok)
+    expect(t.split('\n')[1]).toMatch(/^(&lt;)+…$/);
+    expect(t.replace(/&(lt|gt|amp);/g, '')).not.toContain('&');
     expect(t.endsWith('🕒 10.10.2026 14:32')).toBe(true);
   });
 });

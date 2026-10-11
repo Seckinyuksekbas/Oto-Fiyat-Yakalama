@@ -16,6 +16,7 @@ export class SchedulerLoop implements OnApplicationBootstrap, OnModuleDestroy {
   private tickTimer?: NodeJS.Timeout;
   private cleanupTimer?: NodeJS.Timeout;
   private ticking = false;
+  private lastMonitorAt = 0;
 
   constructor(
     private readonly scheduler: SchedulerService,
@@ -53,7 +54,10 @@ export class SchedulerLoop implements OnApplicationBootstrap, OnModuleDestroy {
       });
       await this.step('Bildirim yeniden gönderimi', () => this.notifySweep.requeuePending());
       await this.step('Abonelik süresi süpürmesi', () => this.subscriptionSweep.run());
-      await this.step('Alarm izleme', () => this.monitor.check(new Date()));
+      if (Date.now() - this.lastMonitorAt >= this.env.MONITOR_INTERVAL_MS) {
+        this.lastMonitorAt = Date.now();
+        await this.step('Alarm izleme', () => this.monitor.check(new Date()));
+      }
     } finally {
       this.ticking = false;
     }

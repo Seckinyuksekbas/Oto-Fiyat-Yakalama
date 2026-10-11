@@ -4,9 +4,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AlertService } from '../src/common/alert.service';
 import { PrismaService } from '../src/infra/prisma.service';
 import { RedisService } from '../src/infra/redis.service';
+import { NotificationDispatcher } from '../src/notifications/notification-dispatcher';
 import { TELEGRAM_UNAUTHORIZED_FLAG } from '../src/notifications/notify.service';
 import { QueueRegistry } from '../src/queues/queue-registry';
-import { ALERT_THRESHOLDS_KEY, MonitorService } from '../src/scheduler/monitor.service';
+import { ALERT_THRESHOLDS_KEY, MonitorService, PERSISTENT_ALERT_TTL_SEC } from '../src/scheduler/monitor.service';
 import { SchedulerModule } from '../src/scheduler/scheduler.module';
 import { createAdmin, createChannel, createContext, createSource, createUser, resetState } from './helpers';
 
@@ -43,7 +44,7 @@ async function setThresholds(value: Record<string, unknown>) {
 }
 
 describe('MonitorService conditions', () => {
-  it('source DOWN / PAUSED (active sources only) alert once within 30 minutes; no log spam on repeat ticks', async () => {
+  it('source DOWN / blocked-PAUSED (active sources only) alert once, re-notify after 6 h; no log spam on repeat ticks', async () => {
     await createAdmin(ref);
     const down = await createSource(ref, 'http://demo.invalid', { health: 'DOWN' });
     const paused = await createSource(ref, 'http://demo.invalid', { health: 'PAUSED' });
@@ -51,34 +52,71 @@ describe('MonitorService conditions', () => {
     await createSource(ref, 'http://demo.invalid', { health: 'HEALTHY' });
 
     const raised = await monitor.check(new Date());
-    expect(raised.sort()).toEqual([`source:${down.id}:down`, `source:${paused.id}:paused`].sort());
-    expect(keysOf(await alertNotes())).toEqual([`source:${down.id}:down`, `source:${paused.id}:paused`].sort());
+    expect(raised.sort()).toEqual([`source:${down.id}:down`, `source:${paused.id}:blocked`].sort());
+    expect(keysOf(await alertNotes())).toEqual([`source:${down.id}:down`, `source:${paused.id}:blocked`].sort());
     expect(await prisma.systemLog.count()).toBe(2);
+    // Kalıcı durum: yeniden bildirim 6 saatte bir (varsayılan 30 dk değil)
+    for (const key of [`alert:source:${down.id}:down`, `alert:source:${paused.id}:blocked`]) {
+      const ttl = await redis.ttl(key);
+      expect(ttl).toBeGreaterThan(30 * 60);
+      expect(ttl).toBeLessThanOrEqual(PERSISTENT_ALERT_TTL_SEC);
+    }
 
     await monitor.check(new Date());
     await monitor.check(new Date());
-    expect(await alertNotes()).toHaveLength(2); // 30 dk susturma
+    expect(await alertNotes()).toHaveLength(2); // susturma
     expect(await prisma.systemLog.count()).toBe(2); // koşul sürdükçe her tick'te log yazılmaz
   });
 
-  it('parser error rate (last hour PARSE errors / pages) above threshold', async () => {
+  it('one block, one alarm: SourceHealth blocked alert and the monitor share the dedupe key', async () => {
     await createAdmin(ref);
-    const now = new Date();
-    const old = new Date(now.getTime() - 2 * 3600_000);
-    const bad = await createSource(ref, 'http://demo.invalid');
-    const ok = await createSource(ref, 'http://demo.invalid');
-    const stale = await createSource(ref, 'http://demo.invalid');
-    for (const s of [bad, ok, stale]) {
-      await prisma.collectionJob.create({ data: { sourceId: s.id, trigger: 'SCHEDULED', status: 'PARTIAL', pagesFetched: 10, createdAt: now, finishedAt: now } });
-    }
-    const errs = (sourceId: number, n: number, createdAt: Date, kind: 'PARSE' | 'NETWORK' = 'PARSE') =>
-      prisma.scrapeError.createMany({ data: Array.from({ length: n }, () => ({ sourceId, kind, message: 'x', transient: false, createdAt })) });
-    await errs(bad.id, 3, now); // 0.3 > 0.2
-    await errs(ok.id, 2, now); // 0.2, eşik aşılmadı
-    await errs(ok.id, 5, now, 'NETWORK'); // PARSE değil
-    await errs(stale.id, 9, old); // pencere dışında
+    const src = await createSource(ref, 'http://demo.invalid', { health: 'PAUSED' });
+    // SourceHealthService engelde bu anahtarla alarm verir
+    await ref.get(AlertService).raise({ key: `source:${src.id}:blocked`, level: 'ERROR', component: 'collection', message: 'engellendi' });
+    await monitor.check(new Date());
+    expect(await alertNotes()).toHaveLength(1);
+  });
 
-    expect(await monitor.check(now)).toEqual([`source:${bad.id}:parse-rate`]);
+  describe('parser error rate (PARSE errors / pages over the same finished jobs of the last hour)', () => {
+    const now = new Date();
+    const ago = (ms: number) => new Date(now.getTime() - ms);
+    const job = async (sourceId: number, over: Record<string, unknown> = {}) =>
+      prisma.collectionJob.create({ data: { sourceId, trigger: 'SCHEDULED', status: 'PARTIAL', pagesFetched: 20, createdAt: ago(60_000), finishedAt: now, ...over } });
+    const errs = (sourceId: number, jobId: number, n: number, kind: 'PARSE' | 'NETWORK' = 'PARSE') =>
+      prisma.scrapeError.createMany({ data: Array.from({ length: n }, () => ({ sourceId, jobId, kind, message: 'x', transient: false, createdAt: now })) });
+
+    it('alarms above the threshold only; NETWORK, old jobs, dry-runs and small samples do not count', async () => {
+      await createAdmin(ref);
+      const bad = await createSource(ref, 'http://demo.invalid');
+      const ok = await createSource(ref, 'http://demo.invalid');
+      const stale = await createSource(ref, 'http://demo.invalid');
+      const small = await createSource(ref, 'http://demo.invalid');
+      await errs(bad.id, (await job(bad.id)).id, 5); // 5/20 = 0.25 > 0.2
+      await job(bad.id, { dryRun: true, pagesFetched: 1000 }); // dry-run sayfaları paydaya girmez
+      const okJob = await job(ok.id);
+      await errs(ok.id, okJob.id, 4); // 0.2, eşik aşılmadı
+      await errs(ok.id, okJob.id, 6, 'NETWORK'); // PARSE değil
+      await errs(stale.id, (await job(stale.id, { createdAt: ago(3 * 3600_000), finishedAt: ago(2 * 3600_000) })).id, 15); // pencere dışında
+      await errs(small.id, (await job(small.id, { pagesFetched: 10 })).id, 9); // örnek < 20 sayfa
+      expect(await monitor.check(now)).toEqual([`source:${bad.id}:parse-rate`]);
+    });
+
+    it('a running job (errors written before closeJob) does not alarm', async () => {
+      await createAdmin(ref);
+      const s = await createSource(ref, 'http://demo.invalid');
+      await job(s.id, { pagesFetched: 40 }); // biten, hatasız
+      const running = await job(s.id, { status: 'RUNNING', pagesFetched: 0, finishedAt: null });
+      await errs(s.id, running.id, 30);
+      expect(await monitor.check(now)).toEqual([]);
+    });
+
+    it('a job queued more than 1 h ago that finished recently counts', async () => {
+      await createAdmin(ref);
+      const s = await createSource(ref, 'http://demo.invalid');
+      const j = await job(s.id, { createdAt: ago(3 * 3600_000), startedAt: ago(10 * 60_000), finishedAt: ago(60_000) });
+      await errs(s.id, j.id, 6);
+      expect(await monitor.check(now)).toEqual([`source:${s.id}:parse-rate`]);
+    });
   });
 
   it('notify failure rate over the last hour (USER_INACTIVE and old rows excluded)', async () => {
@@ -96,6 +134,10 @@ describe('MonitorService conditions', () => {
     await rows('FAILED', 30, old);
     expect(await monitor.check(now)).toEqual([]);
 
+    // IN_APP SYSTEM_ALERT (doğrudan SENT) oranı seyreltmez
+    await prisma.notification.createMany({
+      data: Array.from({ length: 100 }, () => ({ userId: u.id, kind: 'SYSTEM_ALERT' as const, channel: 'IN_APP' as const, status: 'SENT' as const, payload: {}, createdAt: now, sentAt: now })),
+    });
     await rows('FAILED', 1, now); // 3/21 > 0.10
     expect(await monitor.check(now)).toEqual(['notify:failure-rate']);
   });
@@ -168,6 +210,36 @@ describe('MonitorService conditions', () => {
 });
 
 describe('AlertService delivery (Plan 07)', () => {
+  it('with zero admins a monitor alarm is logged once, not every tick, and is delivered once an admin exists', async () => {
+    const a = ref.get(AlertService);
+    const alert = { key: 'test:noadmin', level: 'WARN' as const, component: 'test', message: 'x', dedupeLog: true };
+    expect(await a.raise(alert)).toBe(false);
+    expect(await a.raise(alert)).toBe(false);
+    expect(await a.raise(alert)).toBe(false);
+    expect(await prisma.systemLog.count()).toBe(1);
+    await createAdmin(ref);
+    expect(await a.raise(alert)).toBe(true);
+    expect(await alertNotes()).toHaveLength(1);
+    expect(await prisma.systemLog.count()).toBe(1);
+  });
+
+  it('clamps over-long keys/messages so the published admin event is schema-valid', async () => {
+    await createAdmin(ref);
+    const sub = redis.duplicate();
+    const got: string[] = [];
+    sub.on('message', (_ch: string, msg: string) => got.push(msg));
+    await sub.subscribe(ADMIN_EVENTS_CHANNEL);
+    try {
+      await ref.get(AlertService).raise({ key: 'k'.repeat(500), level: 'ERROR', component: 'test', message: 'm'.repeat(5000) });
+      const deadline = Date.now() + 2000;
+      while (got.length < 1 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+      const ev = adminEventSchema.parse(JSON.parse(got[0]));
+      expect(ev.type === 'alert' ? [ev.key.length, ev.message.length] : null).toEqual([200, 4000]);
+    } finally {
+      await sub.quit();
+    }
+  });
+
   it('creates Telegram rows only for ACTIVE admins with a verified+enabled channel and queues them on notify-telegram', async () => {
     const a1 = await createAdmin(ref);
     await createChannel(ref, a1.id);
@@ -224,7 +296,7 @@ describe('AlertService delivery (Plan 07)', () => {
     const admin = await createAdmin(ref);
     await createChannel(ref, admin.id);
     const a = ref.get(AlertService);
-    const b = new AlertService(prisma, redis, ref.get(QueueRegistry));
+    const b = new AlertService(prisma, redis, ref.get(NotificationDispatcher));
     const alert = { key: 'test:race', level: 'ERROR' as const, component: 'test', message: 'x', dedupeLog: true };
     const results = await Promise.all([a.raise(alert), b.raise(alert), a.raise(alert), b.raise(alert)]);
     expect(results.filter(Boolean)).toHaveLength(1);

@@ -11,6 +11,8 @@ export interface SseClient {
   events: SseEvent[];
   status: number;
   waitFor(pred: (e: SseEvent) => boolean, ms?: number): Promise<SseEvent>;
+  /** Sunucu yanıtı bitirdiğinde (akış kapandığında) çözülür. */
+  ended: Promise<void>;
   close(): void;
 }
 
@@ -76,9 +78,14 @@ export async function openSse(
   res.setEncoding('utf8');
   res.on('data', parseChunk);
   res.on('error', () => undefined);
+  const ended = new Promise<void>((resolve) => {
+    res.on('end', () => resolve());
+    res.on('close', () => resolve());
+  });
 
   return {
     events,
+    ended,
     status: res.statusCode ?? 0,
     async waitFor(pred, ms = 3000) {
       const deadline = Date.now() + ms;

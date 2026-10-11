@@ -6,6 +6,7 @@ import { ConfigModule, ENV } from './config/config.module';
 import type { Env } from './config/env';
 import { PrismaService } from './infra/prisma.service';
 import { RedisService } from './infra/redis.service';
+import { NotificationDispatcher } from './notifications/notification-dispatcher';
 import { QueueRegistry } from './queues/queue-registry';
 
 @Global()
@@ -28,8 +29,10 @@ import { QueueRegistry } from './queues/queue-registry';
     RedisService,
     QueueRegistry,
     AlertService,
+    // Global: AlertService (core) ve bildirim/eşleştirme modülleri aynı dağıtıcıyı kullanır; bağımlılıkları yalnızca core.
+    NotificationDispatcher,
     { provide: Encryptor, inject: [ENV], useFactory: (env: Env) => new Encryptor(env.DATA_ENCRYPTION_KEY) },
   ],
-  exports: [PrismaService, RedisService, QueueRegistry, AlertService, Encryptor],
+  exports: [PrismaService, RedisService, QueueRegistry, AlertService, NotificationDispatcher, Encryptor],
 })
 export class CoreModule {}

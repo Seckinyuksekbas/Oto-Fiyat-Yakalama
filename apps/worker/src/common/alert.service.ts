@@ -1,12 +1,13 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { Prisma } from '@oto/db';
-import { ADMIN_EVENTS_CHANNEL, notifyJobId, userEventChannel, type AdminEvent, type SystemAlertPayload, type UserEvent } from '@oto/shared';
+import { ADMIN_EVENTS_CHANNEL, adminAlertEventSchema, userEventChannel, type SystemAlertPayload, type UserEvent } from '@oto/shared';
 import { PrismaService } from '../infra/prisma.service';
 import { RedisService } from '../infra/redis.service';
-import { NOTIFY_JOB_OPTS } from '../queues/job-options';
-import { QueueRegistry } from '../queues/queue-registry';
+import { NotificationDispatcher } from '../notifications/notification-dispatcher';
 
 export const ALERT_SUPPRESS_SEC = 30 * 60;
+const MAX_KEY = 200;
+const MAX_MESSAGE = 4000;
 
 export interface Alert {
   /** Susturma anahtarı, ör. `source:3:blocked` */
@@ -16,19 +17,21 @@ export interface Alert {
   message: string;
   context?: Record<string, unknown>;
   /**
-   * true: SystemLog da susturmaya tabidir (yalnızca teslim edilen alarm loglanır). Her tick'te yeniden değerlendirilen
-   * koşullar (MonitorService) için; olay tabanlı çağıranlar varsayılanı (her olay loglanır) kullanır.
+   * true: SystemLog da (ayrı `alert-log:<key>` anahtarıyla) susturulur — her tick'te yeniden değerlendirilen koşullar
+   * (MonitorService) için; admin yokken bile her tick'te log yazılmaz. Olay tabanlı çağıranlar varsayılanı (her olay loglanır) kullanır.
    */
   dedupeLog?: boolean;
+  /** Yeniden bildirim aralığı (sn); varsayılan 30 dk. Kalıcı durumlar (kaynak DOWN/engel) daha uzun aralık kullanır. */
+  ttlSec?: number;
 }
 
 const ADMIN_ROLES = ['ADMIN', 'SUPER_ADMIN'] as const;
 
 /**
  * Alarm teslimi (spec §9): SystemLog + aktif adminlere IN_APP `SYSTEM_ALERT` (`user:<id>` yayını) + `admin:events` yayını +
- * Telegram kanalı doğrulanmış/etkin aktif adminlere TELEGRAM satırı (PENDING, `notify-telegram` kuyruğu).
- * Aynı anahtar 30 dk'da en fazla bir kez teslim edilir; susturma Redis `SET NX EX` ile atomiktir (birden çok scheduler
- * örneği aynı anda yükseltse de tek teslim).
+ * Telegram kanalı doğrulanmış/etkin aktif adminlere TELEGRAM satırı (PENDING, NotificationDispatcher ile `notify-telegram`).
+ * Aynı anahtar susturma süresi içinde en fazla bir kez teslim edilir; susturma Redis `SET NX EX` ile atomiktir (birden çok
+ * scheduler örneği aynı anda yükseltse de tek teslim).
  */
 @Injectable()
 export class AlertService {
@@ -37,20 +40,23 @@ export class AlertService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
-    private readonly queues: QueueRegistry,
+    private readonly dispatcher: NotificationDispatcher,
   ) {}
 
   /** true: bu çağrı alarmı teslim etti; false: susturuldu ya da teslim edilecek admin yok. */
-  async raise(alert: Alert): Promise<boolean> {
+  async raise(input: Alert): Promise<boolean> {
+    const alert = { ...input, key: input.key.slice(0, MAX_KEY), message: input.message.slice(0, MAX_MESSAGE) };
+    const ttl = alert.ttlSec ?? ALERT_SUPPRESS_SEC;
     if (!alert.dedupeLog) await this.log(alert);
+    else if ((await this.redis.set(`alert-log:${alert.key}`, '1', 'EX', ttl, 'NX')) === 'OK') await this.log(alert);
+
     const suppressKey = `alert:${alert.key}`;
-    const fresh = await this.redis.set(suppressKey, '1', 'EX', ALERT_SUPPRESS_SEC, 'NX');
+    const fresh = await this.redis.set(suppressKey, '1', 'EX', ttl, 'NX');
     if (fresh !== 'OK') return false;
     const at = new Date();
     let inApp: Array<{ id: number; userId: string; payload: Prisma.JsonValue; createdAt: Date }>;
     let telegramIds: number[];
     try {
-      if (alert.dedupeLog) await this.log(alert);
       const admins = await this.prisma.user.findMany({
         where: { role: { in: [...ADMIN_ROLES] }, status: 'ACTIVE' },
         select: { id: true, channels: { where: { type: 'TELEGRAM', isVerified: true, isEnabled: true, config: { not: null } }, select: { id: true } } },
@@ -80,7 +86,11 @@ export class AlertService {
       throw err;
     }
     // Satırlar yazıldı: buradan sonrası en iyi çaba (kuyruğa alınamayan TELEGRAM satırlarını bildirim süpürmesi toplar).
-    await this.enqueueTelegram(telegramIds);
+    if (telegramIds.length > 0) {
+      await this.dispatcher
+        .enqueue(telegramIds.map((id) => ({ id, channel: 'TELEGRAM' })))
+        .catch((err: unknown) => this.logger.warn(`Alarm Telegram bildirimleri kuyruğa alınamadı (süpürme yeniden deneyecek): ${err instanceof Error ? err.message : String(err)}`));
+    }
     await this.publish(alert, at, inApp);
     this.logger.warn(`Alarm (${alert.level}) ${alert.key}: ${alert.message}`);
     return true;
@@ -97,19 +107,11 @@ export class AlertService {
     });
   }
 
-  private async enqueueTelegram(ids: number[]): Promise<void> {
-    if (ids.length === 0) return;
-    try {
-      await this.queues.notifyTelegram.addBulk(ids.map((id) => ({ name: 'notify', data: { notificationId: id }, opts: { jobId: notifyJobId(id), ...NOTIFY_JOB_OPTS } })));
-      await this.prisma.notification.updateMany({ where: { id: { in: ids } }, data: { queuedAt: new Date() } });
-    } catch (err) {
-      this.logger.warn(`Alarm Telegram bildirimleri kuyruğa alınamadı (süpürme yeniden deneyecek): ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-
   private async publish(alert: Alert, at: Date, inApp: Array<{ id: number; userId: string; payload: Prisma.JsonValue; createdAt: Date }>): Promise<void> {
-    const event: AdminEvent = { type: 'alert', key: alert.key, level: alert.level, message: alert.message.slice(0, 4000), at: at.toISOString() };
-    const pipeline = this.redis.pipeline().publish(ADMIN_EVENTS_CHANNEL, JSON.stringify(event));
+    const pipeline = this.redis.pipeline();
+    const event = adminAlertEventSchema.safeParse({ type: 'alert', key: alert.key, level: alert.level, message: alert.message, at: at.toISOString() });
+    if (event.success) pipeline.publish(ADMIN_EVENTS_CHANNEL, JSON.stringify(event.data));
+    else this.logger.warn(`Geçersiz admin alarm olayı yayınlanmadı (${alert.key}): ${event.error.issues.map((i) => i.path.join('.')).join(', ')}`);
     for (const n of inApp) {
       const ue: UserEvent = {
         type: 'notification',

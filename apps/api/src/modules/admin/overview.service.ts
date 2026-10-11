@@ -7,6 +7,8 @@ import { AdminWorkersService } from './workers.service';
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** Fırsat akışının varsayılan ölçütleri (me/opportunities ile aynı): skor ≥ 60, güven ≥ MEDIUM, aktif ilan. */
 const OPPORTUNITY_MIN_SCORE = 60;
+/** KPI özeti bağlantılar arasında bu süre paylaşılır (SSE tick aralığı kadar). */
+export const KPI_CACHE_MS = 30_000;
 
 export interface AdminKpi {
   notifications: { sentToday: number; failedToday: number; skippedLimitToday: number };
@@ -34,6 +36,7 @@ export interface AdminOverview extends AdminKpi {
 @Injectable()
 export class AdminOverviewService {
   private readonly logger = new Logger(AdminOverviewService.name);
+  private kpiCache?: { at: number; value: Promise<AdminKpi> };
 
   constructor(
     private readonly prisma: PrismaService,
@@ -64,7 +67,23 @@ export class AdminOverviewService {
     };
   }
 
-  /** SSE `kpi` olayının hafif alt kümesi (30 sn'de bir). */
+  /**
+   * SSE `kpi` olayı: tüm admin bağlantıları aynı hesaplamayı paylaşır (KPI_CACHE_MS boyunca tek hesaplama; uçuştaki
+   * hesaplama da paylaşılır). Hata önbelleğe alınmaz.
+   */
+  cachedKpi(): Promise<AdminKpi> {
+    const now = Date.now();
+    if (this.kpiCache && now - this.kpiCache.at < KPI_CACHE_MS) return this.kpiCache.value;
+    const value = this.kpi(new Date(now));
+    const entry = { at: now, value };
+    this.kpiCache = entry;
+    value.catch(() => {
+      if (this.kpiCache === entry) this.kpiCache = undefined;
+    });
+    return value;
+  }
+
+  /** SSE `kpi` olayının hafif alt kümesi. */
   async kpi(now: Date = new Date()): Promise<AdminKpi> {
     const dayStart = startOfIstanbulDay(now);
     const [notifications, queues, workers, sources] = await Promise.all([

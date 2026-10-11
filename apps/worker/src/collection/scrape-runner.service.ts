@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { BlockedError, FetchError, getAdapter, LayoutError, normalizeListing, PoliteHttpClient, type ListingProblem, type SourceAdapter } from '@oto/collection';
 import type { JobStatus, Prisma } from '@oto/db';
-import { ADMIN_EVENTS_CHANNEL, type AdminEvent } from '@oto/shared';
+import { ADMIN_EVENTS_CHANNEL, adminJobEventSchema } from '@oto/shared';
 import { Encryptor } from '@oto/server-common';
 import { AlertService } from '../common/alert.service';
 import { ENV } from '../config/config.module';
@@ -67,8 +67,12 @@ export class ScrapeRunner {
 
   /** Admin canlı akışı için iş durumu değişimi (`admin:events`); en iyi çaba, taramayı asla bozmaz. */
   private async publishJob(job: { id: number; sourceId: number }, status: JobStatus): Promise<void> {
-    const event: AdminEvent = { type: 'job', jobId: job.id, sourceId: job.sourceId, status, at: new Date().toISOString() };
-    await this.redis.publish(ADMIN_EVENTS_CHANNEL, JSON.stringify(event)).catch((err: unknown) => this.logger.warn(`İş olayı yayınlanamadı: ${message(err)}`));
+    const event = adminJobEventSchema.safeParse({ type: 'job', jobId: job.id, sourceId: job.sourceId, status, at: new Date().toISOString() });
+    if (!event.success) {
+      this.logger.warn(`Geçersiz iş olayı yayınlanmadı (iş ${job.id})`);
+      return;
+    }
+    await this.redis.publish(ADMIN_EVENTS_CHANNEL, JSON.stringify(event.data)).catch((err: unknown) => this.logger.warn(`İş olayı yayınlanamadı: ${message(err)}`));
   }
 
   /** Bir CollectionJob'u uçtan uca yürütür. Yalnızca QUEUED işleri çalıştırır (yeniden teslimde güvenli). */

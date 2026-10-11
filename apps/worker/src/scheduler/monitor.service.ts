@@ -11,6 +11,10 @@ const HOUR_MS = 60 * 60 * 1000;
 /** Bildirim hata oranı en az bu kadar sonuçlanmış (SENT+FAILED) bildirimle değerlendirilir; tek hata %100 sayılmasın. */
 export const NOTIFY_FAILURE_MIN_SAMPLE = 10;
 const SCAN_COUNT = 200;
+/** Parse oranı en az bu kadar sayfalık (biten işlerin) örnekle değerlendirilir. */
+export const PARSE_RATE_MIN_PAGES = 20;
+/** Kalıcı kaynak durumları (DOWN / engel) için yeniden bildirim aralığı. */
+export const PERSISTENT_ALERT_TTL_SEC = 6 * 60 * 60;
 /** Kayıp worker alarmı (worker + son nabız anı başına) bir kez verilir; seen kaydının ömrü kadar hatırlanır. */
 const WORKER_LOST_FLAG_PREFIX = 'monitor:worker-lost:';
 const WORKER_LOST_FLAG_SEC = 24 * 60 * 60;
@@ -64,12 +68,15 @@ export class MonitorService {
     return raised;
   }
 
-  private async raise(raised: string[], key: string, level: 'WARN' | 'ERROR', message: string, context?: Record<string, unknown>): Promise<boolean> {
+  private async raise(raised: string[], key: string, level: 'WARN' | 'ERROR', message: string, context?: Record<string, unknown>, ttlSec?: number): Promise<boolean> {
     raised.push(key);
-    return this.alerts.raise({ key, level, component: 'monitor', message, context, dedupeLog: true });
+    return this.alerts.raise({ key, level, component: 'monitor', message, context, dedupeLog: true, ttlSec });
   }
 
-  /** Etkin (admin tarafından duraklatılmamış) ama DOWN ya da engel nedeniyle PAUSED kaynaklar. */
+  /**
+   * Etkin (admin tarafından duraklatılmamış) ama DOWN ya da engel nedeniyle PAUSED kaynaklar. Anahtarlar SourceHealthService
+   * ile aynıdır (`source:<id>:down`, `source:<id>:blocked`): tek engel tek alarm; sürerse 6 saatte bir hatırlatılır.
+   */
   private async checkSources(raised: string[]): Promise<void> {
     const rows = await this.prisma.dataSource.findMany({
       where: { isActive: true, health: { in: ['DOWN', 'PAUSED'] } },
@@ -78,25 +85,30 @@ export class MonitorService {
     });
     for (const s of rows) {
       if (s.health === 'DOWN') {
-        await this.raise(raised, `source:${s.id}:down`, 'ERROR', `${s.name} kaynağı DOWN (${s.consecutiveFailures} ardışık hata).`, { sourceId: s.id });
+        await this.raise(raised, `source:${s.id}:down`, 'ERROR', `${s.name} kaynağı DOWN (${s.consecutiveFailures} ardışık hata).`, { sourceId: s.id }, PERSISTENT_ALERT_TTL_SEC);
       } else {
-        await this.raise(raised, `source:${s.id}:paused`, 'ERROR', `${s.name} kaynağı engel sinyali nedeniyle duraklatıldı; inceleme bekliyor.`, { sourceId: s.id });
+        await this.raise(raised, `source:${s.id}:blocked`, 'ERROR', `${s.name} kaynağı engel sinyali nedeniyle duraklatıldı; inceleme bekliyor.`, { sourceId: s.id }, PERSISTENT_ALERT_TTL_SEC);
       }
     }
   }
 
-  /** Son 1 saatte kaynak başına PARSE hatası / çekilen sayfa > eşik. */
+  /**
+   * Son 1 saatte BİTEN (RUNNING olmayan, dry-run olmayan) işler üzerinden kaynak başına PARSE hatası / çekilen sayfa > eşik.
+   * Hata ve sayfa aynı iş kümesinden sayılır (hatalar `ScrapeError.jobId` ile); en az PARSE_RATE_MIN_PAGES sayfa gerekir.
+   */
   private async checkParseRate(now: Date, t: AlertThresholds, raised: string[]): Promise<void> {
     const since = new Date(now.getTime() - HOUR_MS);
     const rows = await this.prisma.$queryRaw<Array<{ id: number; name: string; errors: number; pages: number }>>`
-      SELECT s.id, s.name, e.errors::int AS errors, COALESCE(j.pages, 0)::int AS pages
-      FROM (SELECT "sourceId", count(*) AS errors FROM "ScrapeError" WHERE kind = 'PARSE' AND "createdAt" >= ${since} GROUP BY "sourceId") e
-      JOIN "DataSource" s ON s.id = e."sourceId"
-      LEFT JOIN (SELECT "sourceId", sum("pagesFetched") AS pages FROM "CollectionJob" WHERE "createdAt" >= ${since} AND "dryRun" = false GROUP BY "sourceId") j
-        ON j."sourceId" = e."sourceId"
+      SELECT s.id, s.name, COALESCE(sum(e.errors), 0)::int AS errors, sum(j."pagesFetched")::int AS pages
+      FROM "CollectionJob" j
+      JOIN "DataSource" s ON s.id = j."sourceId"
+      LEFT JOIN LATERAL (SELECT count(*) AS errors FROM "ScrapeError" se WHERE se."jobId" = j.id AND se.kind = 'PARSE') e ON true
+      WHERE j."finishedAt" >= ${since} AND j.status <> 'RUNNING' AND j."dryRun" = false
+      GROUP BY s.id, s.name
+      HAVING sum(j."pagesFetched") >= ${PARSE_RATE_MIN_PAGES}
       ORDER BY s.id`;
     for (const r of rows) {
-      const rate = r.errors / Math.max(r.pages, 1);
+      const rate = r.errors / r.pages;
       if (rate > t.parserErrorRate) {
         await this.raise(raised, `source:${r.id}:parse-rate`, 'WARN', `${r.name}: son 1 saatte ayrıştırma hata oranı %${Math.round(rate * 100)} (${r.errors} hata / ${r.pages} sayfa).`, {
           sourceId: r.id, errors: r.errors, pages: r.pages, threshold: t.parserErrorRate,
@@ -114,13 +126,19 @@ export class MonitorService {
     }
   }
 
-  /** Son 1 saatte FAILED / (SENT + FAILED) > eşik; askıya alma kaynaklı (USER_INACTIVE) iptaller teslim hatası sayılmaz. */
+  /**
+   * Son 1 saatte FAILED / (SENT + FAILED) > eşik. Kullanıcı bildirimleri (MATCH) ve dış kanal (TELEGRAM) alarm teslimleri
+   * sayılır; IN_APP SYSTEM_ALERT (doğrudan SENT) ve SECURITY oranı şişirmesin diye dışarıda. Askıya alma kaynaklı (USER_INACTIVE)
+   * iptaller teslim hatası sayılmaz.
+   */
   private async checkNotifyFailure(now: Date, t: AlertThresholds, raised: string[]): Promise<void> {
     const since = new Date(now.getTime() - HOUR_MS);
     const [row] = await this.prisma.$queryRaw<Array<{ sent: number; failed: number }>>`
       SELECT count(*) FILTER (WHERE status = 'SENT')::int AS sent,
              count(*) FILTER (WHERE status = 'FAILED' AND "lastError" IS DISTINCT FROM 'USER_INACTIVE')::int AS failed
-      FROM "Notification" WHERE "createdAt" >= ${since} AND status IN ('SENT', 'FAILED')`;
+      FROM "Notification"
+      WHERE "createdAt" >= ${since} AND status IN ('SENT', 'FAILED')
+        AND (kind = 'MATCH' OR (kind = 'SYSTEM_ALERT' AND channel <> 'IN_APP'))`;
     const total = row.sent + row.failed;
     if (total < NOTIFY_FAILURE_MIN_SAMPLE) return;
     const rate = row.failed / total;

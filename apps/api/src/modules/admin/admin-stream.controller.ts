@@ -1,12 +1,15 @@
 import { Controller, type MessageEvent, Sse } from '@nestjs/common';
+import type { Role } from '@oto/db';
 import { interval, Observable, takeUntil, timer } from 'rxjs';
+import { CurrentUser } from '../../common/decorators/current-user';
 import { Roles } from '../../common/decorators/roles';
+import { StreamSessionService } from '../../infra/stream-session.service';
+import type { AuthUser } from '../auth/auth-user';
 import { SSE_MAX_LIFETIME_MS, SSE_PING_MS } from '../me/notifications.controller';
 import { AdminEventsService } from './admin-events.service';
 import { AdminOverviewService } from './overview.service';
 
-/** Sunucu tarafında hesaplanan KPI özeti bu aralıkla gönderilir. */
-export const ADMIN_KPI_INTERVAL_MS = 30_000;
+const ADMIN_ROLES: readonly Role[] = ['ADMIN', 'SUPER_ADMIN'];
 
 @Roles('ADMIN', 'SUPER_ADMIN')
 @Controller('admin')
@@ -14,15 +17,17 @@ export class AdminStreamController {
   constructor(
     private readonly events: AdminEventsService,
     private readonly overview: AdminOverviewService,
+    private readonly session: StreamSessionService,
   ) {}
 
   /**
-   * Admin canlı akışı: `ready` (genel bakış), `alert`, `job` (Redis `admin:events`), 30 sn'de bir `kpi`, `ping`; 15 dk ömür.
+   * Admin canlı akışı: `ready` (genel bakış), `alert`, `job` (Redis `admin:events`), `kpi` (30 sn; paylaşılan önbellekten),
+   * `ping`; 15 dk ömür. Her KPI tick'inde oturum + rol (ADMIN/SUPER_ADMIN) + ACTIVE yeniden doğrulanır; geçersizse akış biter.
    * Kullanıcı akışıyla aynı desen: canlı olaylara önce abone olunur, `ready` gönderilene kadar tamponlanır; bağlantı
    * kapanınca dinleyici ve zamanlayıcılar bırakılır (Redis aboneliği uygulama başına tektir).
    */
   @Sse('stream')
-  stream(): Observable<MessageEvent> {
+  stream(@CurrentUser() user: AuthUser): Observable<MessageEvent> {
     return new Observable<MessageEvent>((subscriber) => {
       const buffer: MessageEvent[] = [];
       let isReady = false;
@@ -32,18 +37,21 @@ export class AdminStreamController {
         else buffer.push(m);
       });
       const ping = interval(SSE_PING_MS).subscribe(() => subscriber.next({ type: 'ping', data: {} } as MessageEvent));
-      let kpiBusy = false;
-      const kpi = interval(ADMIN_KPI_INTERVAL_MS).subscribe(() => {
-        if (kpiBusy || !isReady) return;
-        kpiBusy = true;
-        this.overview
-          .kpi()
-          .then((data) => {
-            if (!subscriber.closed) subscriber.next({ type: 'kpi', data } as MessageEvent);
-          })
+      let tickBusy = false;
+      const tick = interval(this.session.recheckMs).subscribe(() => {
+        if (tickBusy || !isReady) return;
+        tickBusy = true;
+        void (async () => {
+          if (!(await this.session.isValid(user, ADMIN_ROLES))) {
+            subscriber.complete();
+            return;
+          }
+          const data = await this.overview.cachedKpi();
+          if (!subscriber.closed) subscriber.next({ type: 'kpi', data } as MessageEvent);
+        })()
           .catch(() => undefined)
           .finally(() => {
-            kpiBusy = false;
+            tickBusy = false;
           });
       });
       void (async () => {
@@ -57,7 +65,7 @@ export class AdminStreamController {
       return () => {
         live.unsubscribe();
         ping.unsubscribe();
-        kpi.unsubscribe();
+        tick.unsubscribe();
       };
     }).pipe(takeUntil(timer(SSE_MAX_LIFETIME_MS)));
   }
