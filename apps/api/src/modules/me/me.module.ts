@@ -5,6 +5,10 @@ import { ChannelsController } from './channels.controller';
 import { ChannelsRepository } from './channels.repository';
 import { ChannelsService } from './channels.service';
 import { LimitsService } from './limits.service';
+import { ListingsController } from './listings.controller';
+import { ListingsRepository } from './listings.repository';
+import { OpportunitiesController } from './opportunities.controller';
+import { OpportunitiesRepository } from './opportunities.repository';
 import { MatchesController } from './matches.controller';
 import { MatchesRepository } from './matches.repository';
 import { NotificationsController } from './notifications.controller';
@@ -18,7 +22,7 @@ import { SearchProfilesService } from './search-profiles.service';
 
 @Module({
   imports: [AuthModule, TelegramModule],
-  controllers: [MeController, SearchProfilesController, MatchesController, NotificationsController, ChannelsController],
-  providers: [ChannelsRepository, ChannelsService, MatchesRepository, NotificationsRepository, MeRepository, MeService, LimitsService, SearchProfilesRepository, SearchProfilesService],
+  controllers: [MeController, SearchProfilesController, MatchesController, NotificationsController, ChannelsController, OpportunitiesController, ListingsController],
+  providers: [OpportunitiesRepository, ListingsRepository,ChannelsRepository, ChannelsService, MatchesRepository, NotificationsRepository, MeRepository, MeService, LimitsService, SearchProfilesRepository, SearchProfilesService],
 })
 export class MeModule {}
