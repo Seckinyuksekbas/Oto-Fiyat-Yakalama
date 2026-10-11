@@ -269,6 +269,15 @@ services:
       dockerfile: docker/backup.Dockerfile
     restart: unless-stopped
     init: true # tini: crond PID 1 olmaz, SIGTERM iletilir
+    # crond root çalışır (busybox crond kimlik değiştirmek için root ister); yetkileri en aza indirilir:
+    # SETUID/SETGID: crond + su-exec ile postgres'e düşme; CHOWN: açılışta /backups sahipliği. DAC_OVERRIDE YOK:
+    # yedek dizinine yalnız postgres erişir (healthcheck de postgres'e düşer). no-new-privileges: setuid ikililerle
+    # yetki kazanımı yok (su-exec setuid değildir; root'tan düşer).
+    cap_drop: [ALL]
+    cap_add: [SETUID, SETGID, CHOWN]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /run/backup:size=1m,mode=0755 # cron env dosyası (0600 root) diske yazılmaz
     environment:
       TZ: ${BACKUP_TZ:-Europe/Istanbul}
       BACKUP_CRON: ${BACKUP_CRON:-0 3 * * *}

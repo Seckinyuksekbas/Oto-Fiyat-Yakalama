@@ -15,7 +15,9 @@ COPY --chmod=755 docker/backup/backup.sh /usr/local/bin/backup.sh
 COPY --chmod=755 docker/backup/entrypoint.sh /usr/local/bin/backup-entrypoint.sh
 COPY --chmod=755 docker/backup/healthcheck.sh /usr/local/bin/healthcheck.sh
 COPY --chmod=755 scripts/restore-test.sh /usr/local/bin/restore-test.sh
-COPY --chmod=644 docker/backup/crontab /etc/backup/crontab
+# --chmod yok: BuildKit, COPY ile oluşan üst dizine de aynı kipi verir (644 → x biti yok); DAC yetkisi olmayan root
+# /etc/backup içine giremezdi. Kaynak dosya zaten 0644.
+COPY docker/backup/crontab /etc/backup/crontab
 
 # /backups volume'ü ilk bağlandığında bu sahipliği devralır: dump'ları yalnız postgres kullanıcısı yazar/okur.
 RUN mkdir -p /backups/daily /backups/weekly /run/backup \
