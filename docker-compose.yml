@@ -289,6 +289,8 @@ services:
       PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD zorunlu}
       PGDATABASE: ${POSTGRES_DB:-oto}
       # İsteğe bağlı (değersiz): env dosyasında yoksa aktarılmaz
+      BACKUP_WEEKLY_DAY: # 1=Pzt..7=Paz (varsayılan 7)
+      BACKUP_MAX_AGE_MIN: # healthcheck: en yeni dump'ın en fazla yaşı, dakika (varsayılan 1560 = 26 sa)
       BACKUP_S3_URI:
       AWS_ACCESS_KEY_ID:
       AWS_SECRET_ACCESS_KEY:
