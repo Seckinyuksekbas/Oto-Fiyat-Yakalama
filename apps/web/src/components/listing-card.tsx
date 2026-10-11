@@ -1,4 +1,5 @@
 'use client';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { motion, useReducedMotion } from 'motion/react';
 import { Car, ExternalLink } from 'lucide-react';
@@ -16,10 +17,18 @@ export function listingTitle(c: Pick<ListingCard, 'make' | 'model' | 'trim' | 'y
 }
 
 export function ListingThumb({ card, className }: { card: ListingCard; className?: string }) {
+  const [failed, setFailed] = useState(false);
   return (
     <div className={cn('relative overflow-hidden rounded-md bg-surface-2', className)}>
-      {card.imageUrl ? (
-        <img src={card.imageUrl} alt="" loading="lazy" referrerPolicy="no-referrer" className="size-full object-cover" />
+      {card.imageUrl && !failed ? (
+        <img
+          src={card.imageUrl}
+          alt=""
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          onError={() => setFailed(true)}
+          className="size-full object-cover"
+        />
       ) : (
         <span className="grid size-full place-items-center text-border-strong">
           <Car aria-hidden className="size-6" />
@@ -29,13 +38,20 @@ export function ListingThumb({ card, className }: { card: ListingCard; className
   );
 }
 
-export function ExternalListingLink({ url, className }: { url: string; className?: string }) {
+/** İndirim: piyasanın altı pozitif (yeşil), üstü nötr; yeşil yalnızca avantajı gösterir. */
+export function DiscountText({ pct, className }: { pct: number | null | undefined; className?: string }) {
+  const text = formatDiscount(pct ?? null);
+  if (!text) return null;
+  return <span className={cn('text-xs font-medium', (pct ?? 0) > 0 ? 'text-positive-text' : 'text-muted', className)}>{text}</span>;
+}
+
+export function ExternalListingLink({ url, title, className }: { url: string; title?: string; className?: string }) {
   return (
     <a
       href={url}
       target="_blank"
       rel="noopener noreferrer nofollow"
-      aria-label="İlana git (yeni sekmede açılır)"
+      aria-label={`İlana git${title ? `: ${title}` : ''} (yeni sekmede açılır)`}
       className={cn(
         'relative z-10 inline-grid size-9 place-items-center rounded-md text-muted transition-colors hover:bg-surface-2 hover:text-text',
         className,
@@ -57,14 +73,26 @@ export function ListingCardView({ card, highlight, onToggleFavorite }: ListingCa
   const reduce = useReducedMotion();
   const a = card.analysis;
   const removed = card.status === 'REMOVED';
-  const discount = formatDiscount(a?.discountPct ?? null);
   const meta = [formatKm(card.km), FUEL_LABEL[card.fuel] ?? card.fuel, GEAR_LABEL[card.transmission] ?? card.transmission];
-  const glow = highlight && !reduce;
+  // Sunucu/istemci HTML'i aynı kalsın diye parıltı bağlandıktan sonra başlar.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  const glow = Boolean(highlight) && mounted && !reduce;
+  const title = listingTitle(card);
 
   return (
     <motion.article
-      initial={glow ? { boxShadow: '0 0 0 1px color-mix(in oklab, var(--color-accent) 70%, transparent), 0 0 28px 2px color-mix(in oklab, var(--color-accent) 45%, transparent)' } : false}
-      animate={glow ? { boxShadow: '0 0 0 1px transparent, 0 0 0 0 transparent' } : undefined}
+      initial={false}
+      animate={
+        glow
+          ? {
+              boxShadow: [
+                '0 0 0 1px color-mix(in oklab, var(--color-accent) 70%, transparent), 0 0 28px 2px color-mix(in oklab, var(--color-accent) 45%, transparent)',
+                '0 0 0 1px transparent, 0 0 0 0 transparent',
+              ],
+            }
+          : undefined
+      }
       transition={{ duration: 1.2, ease: 'easeOut' }}
       className={cn(
         'group relative flex flex-col gap-3 rounded-lg border border-border bg-surface p-3 transition-colors hover:border-border-strong focus-within:border-border-strong',
@@ -80,7 +108,7 @@ export function ListingCardView({ card, highlight, onToggleFavorite }: ListingCa
                 href={`/app/ilan/${card.id}`}
                 className="outline-offset-4 after:absolute after:inset-0 after:content-[''] hover:text-accent focus-visible:text-accent"
               >
-                {listingTitle(card)}
+                {title}
               </Link>
             </h3>
             {a && <ScoreRing score={a.opportunityScore} size={44} />}
@@ -88,7 +116,7 @@ export function ListingCardView({ card, highlight, onToggleFavorite }: ListingCa
           <p className="num mt-0.5 text-xs text-muted">{meta.join(' · ')}</p>
           <div className="mt-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-1">
             <span className="num text-lg font-semibold leading-none">{formatTl(card.price)}</span>
-            {discount && <span className="text-xs font-medium text-positive-text">{discount}</span>}
+            <DiscountText pct={a?.discountPct} />
             {removed && <Badge tone="danger">Yayından kalktı</Badge>}
           </div>
           {a && a.confidence !== 'INSUFFICIENT' && (
@@ -109,8 +137,8 @@ export function ListingCardView({ card, highlight, onToggleFavorite }: ListingCa
           {[a ? `${a.comparableCount} emsal` : null, formatRelative(card.firstSeenAt), card.city].filter(Boolean).join(' · ')}
         </p>
         <div className="relative z-10 flex shrink-0 items-center">
-          <FavoriteButton listingId={card.id} isFavorite={card.isFavorite} onChange={onToggleFavorite} />
-          <ExternalListingLink url={card.url} />
+          <FavoriteButton listingId={card.id} isFavorite={card.isFavorite} title={title} onChange={onToggleFavorite} />
+          <ExternalListingLink url={card.url} title={title} />
         </div>
       </div>
     </motion.article>

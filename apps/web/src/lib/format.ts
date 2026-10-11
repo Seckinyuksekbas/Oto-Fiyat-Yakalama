@@ -6,19 +6,22 @@ function groupThousands(digits: string): string {
 
 export function formatTl(v: string | bigint | number): string {
   let s: string;
-  if (typeof v === 'number') s = Number.isFinite(v) ? String(Math.round(v)) : '0';
-  else s = String(v);
-  const neg = s.startsWith('-');
-  const digits = s.replace(/[^\d]/g, '') || '0';
-  return `${neg ? '-' : ''}${groupThousands(digits)} ₺`;
+  if (typeof v === 'number') s = Number.isFinite(v) ? String(Math.trunc(v)) : '0';
+  else s = String(v).split(/[.,]/)[0] ?? '0'; // kuruş/ondalık kısım atılır
+  const neg = s.trim().startsWith('-');
+  const digits = s.replace(/[^\d]/g, '').replace(/^0+(?=\d)/, '') || '0';
+  return `${neg && digits !== '0' ? '-' : ''}${groupThousands(digits)}\u00A0₺`;
 }
 
 /** Bant etiketi için kısa biçim: `1,2 Mn ₺`, `960 B ₺`. */
 export function formatShortTl(n: number): string {
+  if (!Number.isFinite(n)) return '—';
   const trim = (x: number) => String(Math.round(x * 10) / 10).replace('.', ',');
-  if (Math.abs(n) >= 1_000_000) return `${trim(n / 1_000_000)} Mn ₺`;
-  if (Math.abs(n) >= 1_000) return `${trim(n / 1_000)} B ₺`;
-  return `${Math.round(n)} ₺`;
+  const abs = Math.abs(n);
+  const sign = n < 0 ? '-' : '';
+  if (abs >= 1_000_000 || Math.round((abs / 1_000) * 10) / 10 >= 1000) return `${sign}${trim(abs / 1_000_000)}\u00A0Mn\u00A0₺`;
+  if (abs >= 1_000) return `${sign}${trim(abs / 1_000)}\u00A0B\u00A0₺`;
+  return `${sign}${Math.round(abs)}\u00A0₺`;
 }
 
 export function formatKm(n: number): string {
@@ -34,13 +37,19 @@ export function formatDiscount(p: number | null): string | null {
 }
 
 export function formatRelative(iso: string, now: Date = new Date()): string {
-  const diff = Math.max(0, now.getTime() - new Date(iso).getTime());
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return '—';
+  const diff = Math.max(0, now.getTime() - t);
   const min = Math.floor(diff / 60_000);
   if (min < 1) return 'az önce';
   if (min < 60) return `${min} dk önce`;
   const hours = Math.floor(min / 60);
   if (hours < 24) return `${hours} sa önce`;
-  return `${Math.floor(hours / 24)} gün önce`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days} gün önce`;
+  if (days < 30) return `${Math.floor(days / 7)} hf önce`;
+  if (days < 365) return `${Math.floor(days / 30)} ay önce`;
+  return `${Math.floor(days / 365)} yıl önce`;
 }
 
 const ISTANBUL = new Intl.DateTimeFormat('en-GB', {
@@ -54,6 +63,7 @@ const ISTANBUL = new Intl.DateTimeFormat('en-GB', {
 });
 
 export function formatDateTime(iso: string): string {
+  if (!Number.isFinite(new Date(iso).getTime())) return '—';
   const p = Object.fromEntries(ISTANBUL.formatToParts(new Date(iso)).map((x) => [x.type, x.value]));
   return `${p.day}.${p.month}.${p.year} ${p.hour}:${p.minute}`;
 }

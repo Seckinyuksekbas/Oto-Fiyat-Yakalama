@@ -26,7 +26,7 @@ export function ConfidenceMeter({ confidence, comparableCount, compact, classNam
   const full = CONFIDENCE_LABEL[confidence];
   const text = compact ? full.replace(' güven', '') : `${full} · ${comparableCount} emsal`;
   return (
-    <span className={cn('inline-flex items-center gap-2 text-xs', className)} title={compact ? `${full} · ${comparableCount} emsal` : undefined}>
+    <span className={cn('inline-flex items-center gap-2 text-xs', className)}>
       <span aria-hidden className={cn('inline-flex items-end gap-[2px]', TONE[confidence])}>
         {[0, 1, 2, 3].map((i) => (
           <span

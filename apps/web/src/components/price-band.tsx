@@ -18,12 +18,9 @@ const toNum = (v: string | null): number | null => {
   return Number.isFinite(n) ? n : null;
 };
 
-/** Ekranda taşmaması için etiketi sınırlara yakınken hizalar. */
-function labelShift(p: number): string {
-  if (p < 14) return 'translateX(-6px)';
-  if (p > 86) return 'translateX(calc(-100% + 6px))';
-  return 'translateX(-50%)';
-}
+/** Etiket merkezde konumlanır; kapsayıcı kenarlarına piksel olarak yaklaşamaz (CSS clamp). */
+const LABEL_HALF = 54;
+const labelLeft = (p: number) => `clamp(${LABEL_HALF}px, ${p}%, calc(100% - ${LABEL_HALF}px))`;
 
 /**
  * Fiyat bandı: emsallerin alt–üst çeyrek aralığı (dolu bölge), medyan çizgisi ve ilan fiyatı işaretçisi.
@@ -37,7 +34,9 @@ export function PriceBand({ band, price, confidence, insufficientReason, size = 
   const geo = confidence === 'INSUFFICIENT' ? null : bandGeometry({ q1, median, q3, price: priceN });
 
   if (!geo || q1 === null || q3 === null) {
-    const reason = INSUFFICIENT_REASON_LABEL[insufficientReason] ?? INSUFFICIENT_REASON_LABEL.NONE;
+    const reason = !Number.isFinite(priceN)
+      ? 'geçersiz fiyat'
+      : (INSUFFICIENT_REASON_LABEL[insufficientReason] ?? INSUFFICIENT_REASON_LABEL.NONE);
     return (
       <div
         className={cn(
@@ -63,8 +62,9 @@ export function PriceBand({ band, price, confidence, insufficientReason, size = 
   const above = priceN > q3;
   const markerTone = below ? 'text-positive-text' : above ? 'text-danger-text' : 'text-text';
 
+  const position = below ? 'bandın altında' : above ? 'bandın üstünde' : 'bandın içinde';
   const label = [
-    `Fiyat bandı: ilan ${formatTl(price)}`,
+    `Fiyat bandı: ilan ${formatTl(price)} (${position})`,
     median !== null ? `medyan ${formatTl(median)}` : null,
     `alt çeyrek ${formatTl(q1)}`,
     `üst çeyrek ${formatTl(q3)}`,
@@ -83,7 +83,7 @@ export function PriceBand({ band, price, confidence, insufficientReason, size = 
         {pMed !== null && median !== null && (
           <span
             className="num absolute top-0 whitespace-nowrap text-[11px] leading-none text-muted"
-            style={{ left: `${pMed}%`, transform: labelShift(pMed) }}
+            style={{ left: labelLeft(pMed), transform: 'translateX(-50%)' }}
           >
             {`medyan ${formatShortTl(median)}`}
           </span>
@@ -130,7 +130,7 @@ export function PriceBand({ band, price, confidence, insufficientReason, size = 
         </svg>
         <span
           className={cn('absolute whitespace-nowrap text-[11px] font-medium leading-none', markerTone)}
-          style={{ left: `${pPrice}%`, top: trackTop + trackH + 14, transform: labelShift(pPrice) }}
+          style={{ left: labelLeft(pPrice), top: trackTop + trackH + 14, transform: 'translateX(-50%)' }}
         >
           {geo.markerClamped ? 'bu ilan · bant dışı' : 'bu ilan'}
         </span>

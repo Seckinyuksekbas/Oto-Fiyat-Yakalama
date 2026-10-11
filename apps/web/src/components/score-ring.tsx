@@ -8,11 +8,12 @@ export interface ScoreRingProps {
 
 /** 60 ve üzeri fırsat eşiğidir; halka amber, altı sessiz gri. Eşik 60'ta ince bir çentikle gösterilir. */
 export function ScoreRing({ score, size = 52, className }: ScoreRingProps) {
-  const value = Math.min(100, Math.max(0, Math.round(score)));
+  const valid = Number.isFinite(score);
+  const value = valid ? Math.min(100, Math.max(0, Math.round(score))) : 0;
   const stroke = Math.max(3, Math.round(size / 11));
   const r = (size - stroke) / 2;
   const c = 2 * Math.PI * r;
-  const hot = value >= 60;
+  const hot = valid && value >= 60;
   const cx = size / 2;
   // 60. nokta: -90° başlangıçtan saat yönünde 0,6 tur
   const a = (0.6 * 360 - 90) * (Math.PI / 180);
@@ -23,7 +24,7 @@ export function ScoreRing({ score, size = 52, className }: ScoreRingProps) {
   return (
     <div
       role="img"
-      aria-label={`Fırsat skoru ${value}/100`}
+      aria-label={valid ? `Fırsat skoru ${value}/100` : 'Fırsat skoru yok'}
       className={cn('relative inline-grid shrink-0 place-items-center', hot ? 'text-accent' : 'text-muted', className)}
       style={{ width: size, height: size }}
     >
@@ -48,7 +49,7 @@ export function ScoreRing({ score, size = 52, className }: ScoreRingProps) {
         className={cn('num font-semibold leading-none', hot ? 'text-text' : 'text-muted')}
         style={{ fontSize: Math.round(size * 0.34) }}
       >
-        {value}
+        {valid ? value : '—'}
       </span>
     </div>
   );

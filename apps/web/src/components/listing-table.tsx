@@ -1,27 +1,54 @@
 'use client';
+import { useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import type { ListingCard } from '@oto/shared';
 import { Badge } from '@/components/ui/badge';
-import { formatDiscount, formatKm, formatRelative, formatTl } from '@/lib/format';
+import { formatKm, formatRelative, formatTl } from '@/lib/format';
 import { ConfidenceMeter } from './confidence-meter';
 import { FavoriteButton } from './favorite-button';
-import { ExternalListingLink, ListingCardView, ListingThumb, listingTitle } from './listing-card';
+import { DiscountText, ExternalListingLink, ListingCardView, ListingThumb, listingTitle } from './listing-card';
 import { PriceBand } from './price-band';
 import { ScoreRing } from './score-ring';
 
-/** Masaüstünde tablo; `md` altında kart listesi. */
-export function ListingTable({ rows }: { rows: ListingCard[] }) {
-  return (
-    <>
-      <ul className="grid gap-3 md:hidden">
+const MD = '(min-width: 768px)';
+
+/** Sunucuda ve ilk istemci boyamasında `false` (kart listesi); tarayıcıda `matchMedia` ile güncellenir. */
+function useMediaQuery(query: string): boolean {
+  return useSyncExternalStore(
+    (cb) => {
+      const mql = window.matchMedia(query);
+      mql.addEventListener('change', cb);
+      return () => mql.removeEventListener('change', cb);
+    },
+    () => window.matchMedia(query).matches,
+    () => false,
+  );
+}
+
+/** Masaüstünde tablo; `md` altında kart listesi (yalnızca biri bağlanır). */
+export function ListingTable({ rows, onToggleFavorite }: { rows: ListingCard[]; onToggleFavorite?: (id: number, next: boolean) => void }) {
+  const wide = useMediaQuery(MD);
+
+  if (!wide) {
+    return (
+      <ul className="grid gap-3">
         {rows.map((c) => (
           <li key={c.id}>
-            <ListingCardView card={c} />
+            <ListingCardView card={c} onToggleFavorite={onToggleFavorite && ((next) => onToggleFavorite(c.id, next))} />
           </li>
         ))}
       </ul>
+    );
+  }
 
-      <div className="hidden overflow-x-auto rounded-lg border border-border md:block">
+  return (
+    <>
+      <div
+        role="region"
+        aria-label="İlan tablosu"
+        tabIndex={0}
+        className="overflow-x-auto rounded-lg border border-border"
+      >
         <table className="w-full min-w-[860px] border-collapse text-sm">
           <caption className="sr-only">İlan listesi</caption>
           <thead className="bg-surface-2 text-left text-xs text-muted">
@@ -38,7 +65,6 @@ export function ListingTable({ rows }: { rows: ListingCard[] }) {
           <tbody>
             {rows.map((c) => {
               const a = c.analysis;
-              const discount = formatDiscount(a?.discountPct ?? null);
               return (
                 <tr key={c.id} className="border-t border-border bg-surface align-middle hover:bg-surface-2/60">
                   <td className="px-3 py-2">
@@ -55,7 +81,7 @@ export function ListingTable({ rows }: { rows: ListingCard[] }) {
                   </td>
                   <td className="px-3 py-2">
                     <div className="num font-semibold">{formatTl(c.price)}</div>
-                    {discount && <div className="text-xs font-medium text-positive-text">{discount}</div>}
+                    <DiscountText pct={a?.discountPct} className="block" />
                   </td>
                   <td className="w-56 px-3 py-2">
                     <PriceBand
@@ -72,8 +98,8 @@ export function ListingTable({ rows }: { rows: ListingCard[] }) {
                   <td className="num px-3 py-2 text-xs text-muted">{formatRelative(c.firstSeenAt)}</td>
                   <td className="px-3 py-2">
                     <div className="flex items-center justify-end">
-                      <FavoriteButton listingId={c.id} isFavorite={c.isFavorite} />
-                      <ExternalListingLink url={c.url} />
+                      <FavoriteButton listingId={c.id} isFavorite={c.isFavorite} title={listingTitle(c)} onChange={onToggleFavorite && ((next) => onToggleFavorite(c.id, next))} />
+                      <ExternalListingLink url={c.url} title={listingTitle(c)} />
                     </div>
                   </td>
                 </tr>

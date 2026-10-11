@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
@@ -59,8 +60,8 @@ describe('PriceBand', () => {
   it('labels price and median accessibly', () => {
     render(<PriceBand band={band} price="960000" confidence="HIGH" insufficientReason="NONE" />);
     const img = screen.getByRole('img');
-    expect(img.getAttribute('aria-label')).toContain('ilan 960.000 ₺');
-    expect(img.getAttribute('aria-label')).toContain('medyan 1.200.000 ₺');
+    expect(img.getAttribute('aria-label')).toContain('ilan 960.000 ₺');
+    expect(img.getAttribute('aria-label')).toContain('medyan 1.200.000 ₺');
   });
   it('shows the weak-estimate text when stats are missing', () => {
     render(
@@ -89,10 +90,40 @@ describe('PriceBand', () => {
   });
 });
 
+describe('PriceBand edges', () => {
+  it('states where the price sits relative to the band', () => {
+    const { rerender } = render(<PriceBand band={band} price="960000" confidence="HIGH" insufficientReason="NONE" />);
+    expect(screen.getByRole('img').getAttribute('aria-label')).toContain('bandın altında');
+    rerender(<PriceBand band={band} price="1100000" confidence="HIGH" insufficientReason="NONE" />);
+    expect(screen.getByRole('img').getAttribute('aria-label')).toContain('bandın içinde');
+    rerender(<PriceBand band={band} price="1600000" confidence="HIGH" insufficientReason="NONE" />);
+    expect(screen.getByRole('img').getAttribute('aria-label')).toContain('bandın üstünde');
+  });
+  it('handles Q1 equal to Q3', () => {
+    render(
+      <PriceBand
+        band={{ q1: '1000000', median: '1000000', q3: '1000000' }}
+        price="900000"
+        confidence="MEDIUM"
+        insufficientReason="NONE"
+      />,
+    );
+    expect(screen.getByRole('img')).toBeInTheDocument();
+  });
+  it('reports an invalid price', () => {
+    render(<PriceBand band={band} price="abc" confidence="HIGH" insufficientReason="NONE" />);
+    expect(screen.getByText('Zayıf tahmin — geçersiz fiyat')).toBeInTheDocument();
+  });
+});
+
 describe('ScoreRing and ConfidenceMeter', () => {
   it('exposes the score', () => {
     render(<ScoreRing score={77} />);
     expect(screen.getByLabelText('Fırsat skoru 77/100')).toBeInTheDocument();
+  });
+  it('renders a dash for a NaN score', () => {
+    render(<ScoreRing score={Number.NaN} />);
+    expect(screen.getByLabelText('Fırsat skoru yok')).toHaveTextContent('—');
   });
   it('fills 3 of 4 segments for MEDIUM', () => {
     const { container } = render(<ConfidenceMeter confidence="MEDIUM" comparableCount={6} />);
@@ -104,7 +135,7 @@ describe('ScoreRing and ConfidenceMeter', () => {
 
 describe('ListingCardView', () => {
   it('renders the spec layout', () => {
-    render(<ListingCardView card={card} />);
+    renderWithClient(<ListingCardView card={card} />);
     expect(screen.getByText('BMW 3 Serisi 320i · 2019')).toBeInTheDocument();
     expect(screen.getByText('960.000 ₺')).toBeInTheDocument();
     expect(screen.getByText('%20 altında')).toBeInTheDocument();
@@ -112,41 +143,147 @@ describe('ListingCardView', () => {
     const ext = screen.getByRole('link', { name: /lana git/i });
     expect(ext).toHaveAttribute('rel', 'noopener noreferrer nofollow');
     expect(ext).toHaveAttribute('target', '_blank');
-    expect(screen.getByRole('link', { name: /BMW 3 Serisi 320i/ })).toHaveAttribute('href', '/app/ilan/7');
+    expect(screen.getByRole('link', { name: 'BMW 3 Serisi 320i · 2019' })).toHaveAttribute('href', '/app/ilan/7');
   });
   it('shows REMOVED badge and weak estimate for analysis-less cards', () => {
-    render(<ListingCardView card={{ ...card, status: 'REMOVED', analysis: null }} />);
+    renderWithClient(<ListingCardView card={{ ...card, status: 'REMOVED', analysis: null }} />);
     expect(screen.getByText('Yayından kalktı')).toBeInTheDocument();
     expect(screen.getByText(/Zayıf tahmin/)).toBeInTheDocument();
   });
 });
 
-describe('ListingTable', () => {
-  it('renders rows with detail links', () => {
-    render(<ListingTable rows={[card]} />);
-    expect(screen.getAllByText('960.000 ₺').length).toBeGreaterThan(0);
+describe('discount color', () => {
+  it('is green below market and neutral above market', () => {
+    const { client, rerender } = renderWithClient(<ListingCardView card={card} />);
+    const show = (c: ListingCard) =>
+      rerender(
+        <QueryClientProvider client={client}>
+          <ListingCardView card={c} />
+        </QueryClientProvider>,
+      );
+    expect(screen.getByText('%20 altında').className).toContain('text-positive-text');
+    show({ ...card, analysis: { ...card.analysis!, discountPct: -0.05 } });
+    expect(screen.getByText('%5 üstünde').className).not.toContain('text-positive-text');
+    expect(screen.getByText('%5 üstünde').className).toContain('text-muted');
+    show({ ...card, analysis: { ...card.analysis!, discountPct: null } });
+    expect(screen.queryByText(/altında|üstünde/)).toBeNull();
   });
 });
 
+describe('ListingTable', () => {
+  const original = window.matchMedia;
+  const setWide = (wide: boolean) => {
+    window.matchMedia = ((q: string) => ({
+      matches: wide,
+      media: q,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    })) as unknown as typeof window.matchMedia;
+  };
+  afterEach(() => {
+    window.matchMedia = original;
+  });
+
+  it('renders an accessible table on wide screens', () => {
+    setWide(true);
+    renderWithClient(<ListingTable rows={[card]} />);
+    expect(screen.getByRole('region', { name: 'İlan tablosu' })).toHaveAttribute('tabindex', '0');
+    expect(screen.getByRole('table')).toBeInTheDocument();
+    expect(screen.getByText('İlan listesi').tagName).toBe('CAPTION');
+    for (const th of screen.getAllByRole('columnheader')) expect(th).toHaveAttribute('scope', 'col');
+    expect(screen.getByRole('link', { name: 'BMW 3 Serisi 320i · 2019' })).toHaveAttribute('href', '/app/ilan/7');
+    const ext = screen.getByRole('link', { name: /lana git: BMW 3 Serisi 320i/ });
+    expect(ext).toHaveAttribute('rel', 'noopener noreferrer nofollow');
+    expect(screen.getAllByText('960.000 ₺')).toHaveLength(1);
+  });
+  it('renders only the card list on narrow screens', () => {
+    setWide(false);
+    renderWithClient(<ListingTable rows={[card]} />);
+    expect(screen.queryByRole('table')).toBeNull();
+    expect(screen.getAllByRole('article')).toHaveLength(1);
+    expect(screen.getAllByText('960.000 ₺')).toHaveLength(1);
+  });
+});
+
+function gated() {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  return { gate, release };
+}
+
 describe('FavoriteButton', () => {
-  it('toggles optimistically', async () => {
-    server.use(http.put('*/api/v1/me/favorites/7', () => new HttpResponse(null, { status: 204 })));
+  it('toggles optimistically before the response arrives and ignores double clicks', async () => {
+    let calls = 0;
+    const { gate, release } = gated();
+    server.use(
+      http.put('*/api/v1/me/favorites/7', async () => {
+        calls++;
+        await gate;
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
     renderWithClient(<FavoriteButton listingId={7} isFavorite={false} />);
-    const btn = screen.getByRole('button', { name: 'Favorilere ekle' });
+    const btn = screen.getByRole('button', { name: 'Favori' });
     expect(btn).toHaveAttribute('aria-pressed', 'false');
     await userEvent.click(btn);
-    expect(screen.getByRole('button', { name: 'Favorilerden çıkar' })).toHaveAttribute('aria-pressed', 'true');
+    await userEvent.click(btn);
+    expect(btn).toHaveAttribute('aria-pressed', 'true');
+    release();
+    await waitFor(() => expect(btn).not.toHaveAttribute('aria-busy'));
+    expect(calls).toBe(1);
+    expect(btn).toHaveAttribute('aria-pressed', 'true');
   });
-  it('rolls back and toasts on failure', async () => {
+  it('rolls back state and cache and toasts on failure', async () => {
     server.use(
       http.put('*/api/v1/me/favorites/7', () =>
         HttpResponse.json({ error: { code: 'INTERNAL', message: 'x' } }, { status: 500 }),
       ),
     );
-    renderWithClient(<FavoriteButton listingId={7} isFavorite={false} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Favorilere ekle' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Favorilere ekle' })).toHaveAttribute('aria-pressed', 'false'));
+    const { client } = renderWithClient(<FavoriteButton listingId={7} isFavorite={false} />);
+    client.setQueryData(['opportunities', {}], { items: [card] });
+    await userEvent.click(screen.getByRole('button', { name: 'Favori' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Favori' })).toHaveAttribute('aria-pressed', 'false'));
     expect(toastError).toHaveBeenCalled();
+    expect((client.getQueryData(['opportunities', {}]) as { items: ListingCard[] }).items[0]!.isFavorite).toBe(false);
+  });
+  it('patches caches optimistically and invalidates related queries on success', async () => {
+    const { gate, release } = gated();
+    server.use(
+      http.put('*/api/v1/me/favorites/7', async () => {
+        await gate;
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    const { client } = renderWithClient(<FavoriteButton listingId={7} isFavorite={false} />);
+    client.setQueryData(['opportunities', {}], { items: [card, { ...card, id: 8 }] });
+    client.setQueryData(['listing', 7], { ...card });
+    const spy = vi.spyOn(client, 'invalidateQueries');
+    await userEvent.click(screen.getByRole('button', { name: 'Favori' }));
+    const opp = client.getQueryData(['opportunities', {}]) as { items: ListingCard[] };
+    expect(opp.items.map((x) => x.isFavorite)).toEqual([true, false]);
+    expect((client.getQueryData(['listing', 7]) as ListingCard).isFavorite).toBe(true);
+    release();
+    await waitFor(() => expect(spy).toHaveBeenCalled());
+    const roots = spy.mock.calls.map((c) => (c[0]?.queryKey as string[])[0]);
+    expect(roots).toEqual(expect.arrayContaining(['favorites', 'opportunities', 'listing', 'dashboard']));
+  });
+  it('does not snap back to the stale prop while a request is in flight', async () => {
+    const { gate, release } = gated();
+    server.use(
+      http.put('*/api/v1/me/favorites/7', async () => {
+        await gate;
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    const { rerender, client } = renderWithClient(<FavoriteButton listingId={7} isFavorite={false} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Favori' }));
+    rerender(
+      <QueryClientProvider client={client}>
+        <FavoriteButton listingId={7} isFavorite={false} title="x" />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByRole('button', { name: 'x favori' })).toHaveAttribute('aria-pressed', 'true');
+    release();
   });
   it('uses DELETE when removing', async () => {
     let deleted = false;
@@ -157,7 +294,11 @@ describe('FavoriteButton', () => {
       }),
     );
     renderWithClient(<FavoriteButton listingId={7} isFavorite />);
-    await userEvent.click(screen.getByRole('button', { name: 'Favorilerden çıkar' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Favori' }));
     await waitFor(() => expect(deleted).toBe(true));
+  });
+  it('includes the listing title in the accessible name', () => {
+    renderWithClient(<FavoriteButton listingId={7} isFavorite={false} title="BMW 320i" />);
+    expect(screen.getByRole('button', { name: 'BMW 320i favori' })).toBeInTheDocument();
   });
 });
