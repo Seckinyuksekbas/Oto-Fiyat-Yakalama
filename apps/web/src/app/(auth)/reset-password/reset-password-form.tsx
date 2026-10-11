@@ -51,13 +51,11 @@ export function ResetPasswordForm() {
   return (
     <>
       <Heading title="Yeni şifre belirleyin" lead="Güvenliğiniz için tüm açık oturumlar kapatılabilir." />
+      <FormNotice>{done ? 'Şifreniz güncellendi. Yeni şifrenizle giriş yapabilirsiniz.' : null}</FormNotice>
       {done ? (
-        <>
-          <FormNotice>Şifreniz güncellendi. Yeni şifrenizle giriş yapabilirsiniz.</FormNotice>
-          <Button asChild size="lg" className="mt-5 w-full">
-            <Link href="/giris">Giriş yap</Link>
-          </Button>
-        </>
+        <Button asChild size="lg" className="mt-5 w-full">
+          <Link href="/giris">Giriş yap</Link>
+        </Button>
       ) : (
         <form noValidate onSubmit={handleSubmit((v) => reset.mutate(v))} className="space-y-4">
           <Field

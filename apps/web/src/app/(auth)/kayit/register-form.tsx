@@ -3,19 +3,17 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation } from '@tanstack/react-query';
 import { registerSchema, type RegisterInput } from '@oto/shared';
 import { Button } from '@/components/ui/button';
 import { apiFetch } from '@/lib/api';
 import { apiErrorMessage, trErrorMap } from '@/lib/messages';
-import { queryKeys } from '@/lib/queries';
 import { safeNextPath } from '@/lib/session';
 import { authLinkClass, Field, FormError, Heading } from '../_components/form-bits';
 
 export function RegisterForm() {
   const router = useRouter();
   const params = useSearchParams();
-  const qc = useQueryClient();
   const next = safeNextPath(params.get('next'));
 
   const {
@@ -30,10 +28,7 @@ export function RegisterForm() {
 
   const signUp = useMutation({
     mutationFn: (input: RegisterInput) => apiFetch('/auth/register', { method: 'POST', json: input }),
-    onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: queryKeys.me });
-      router.push(next);
-    },
+    onSuccess: () => router.push(next),
   });
 
   const qs = next === '/app' ? '' : `?next=${encodeURIComponent(next)}`;
@@ -67,13 +62,21 @@ export function RegisterForm() {
             <input
               type="checkbox"
               aria-invalid={errors.kvkkAccepted ? true : undefined}
+              aria-describedby={errors.kvkkAccepted ? 'kvkk-error' : undefined}
               className="mt-0.5 size-4 shrink-0 cursor-pointer accent-[var(--color-accent)]"
               {...register('kvkkAccepted')}
             />
-            <span>KVKK aydınlatma metnini okudum, kişisel verilerimin işlenmesini kabul ediyorum.</span>
+            <span>
+              <Link href="/kvkk" target="_blank" className={authLinkClass}>
+                KVKK aydınlatma metnini
+              </Link>{' '}
+              okudum, kişisel verilerimin işlenmesini kabul ediyorum.
+            </span>
           </label>
           {errors.kvkkAccepted ? (
-            <p className="text-[13px] text-[var(--color-danger)]">{errors.kvkkAccepted.message}</p>
+            <p id="kvkk-error" className="text-[13px] text-[var(--color-danger)]">
+              {errors.kvkkAccepted.message}
+            </p>
           ) : null}
         </div>
 

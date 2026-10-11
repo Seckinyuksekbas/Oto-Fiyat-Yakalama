@@ -8,11 +8,16 @@ import { NextResponse, type NextRequest } from 'next/server';
 export function middleware(req: NextRequest) {
   if (req.cookies.has('access_token')) return NextResponse.next();
   const url = req.nextUrl.clone();
-  const next = req.nextUrl.pathname + req.nextUrl.search;
+  // `_r=1`: giriş sayfası zaten bir kez yenileme yaptı ama çerez oturmadı → döngüyü kır.
+  const retried = req.nextUrl.searchParams.has('_r');
+  const back = req.nextUrl.clone();
+  back.searchParams.delete('_r');
+  const next = back.pathname + back.search;
   url.pathname = '/giris';
   url.search = '';
   url.searchParams.set('next', next);
-  url.searchParams.set('try_refresh', '1');
+  if (retried) url.searchParams.set('reason', 'failed');
+  else url.searchParams.set('try_refresh', '1');
   return NextResponse.redirect(url, 307);
 }
 

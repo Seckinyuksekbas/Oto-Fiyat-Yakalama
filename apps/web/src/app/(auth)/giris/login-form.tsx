@@ -4,28 +4,46 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { loginSchema, type LoginInput } from '@oto/shared';
 import { Button } from '@/components/ui/button';
 import { apiFetch, refreshSession } from '@/lib/api';
 import { apiErrorMessage, trErrorMap } from '@/lib/messages';
 import { queryKeys } from '@/lib/queries';
-import { safeNextPath } from '@/lib/session';
+import { safeNextPath, withRetryFlag } from '@/lib/session';
 import { authLinkClass, Field, FormError, Heading } from '../_components/form-bits';
 
 export function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
-  const qc = useQueryClient();
   const next = safeNextPath(params.get('next'));
   const [checking, setChecking] = useState(params.get('try_refresh') === '1');
+  const reason = params.get('reason');
+  const reasonMessage =
+    reason === 'reused'
+      ? 'Oturumunuz güvenlik nedeniyle sonlandırıldı. Lütfen tekrar giriş yapın.'
+      : reason === 'failed'
+        ? 'Oturum açılamadı, lütfen tekrar giriş yapın.'
+        : null;
+
+  // Zaten girişli kullanıcı: yalnızca /me başarılı olunca yönlendir (yenileme denenmez).
+  const session = useQuery({
+    queryKey: queryKeys.me,
+    queryFn: () => apiFetch('/me', { noRefresh: true }),
+    enabled: !checking,
+    retry: false,
+  });
+  useEffect(() => {
+    if (session.isSuccess) router.replace(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.isSuccess]);
 
   useEffect(() => {
     if (!checking) return;
     let cancelled = false;
     void refreshSession().then((ok) => {
       if (cancelled) return;
-      if (ok) router.replace(next);
+      if (ok) router.replace(withRetryFlag(next));
       else setChecking(false);
     });
     return () => {
@@ -46,10 +64,7 @@ export function LoginForm() {
 
   const login = useMutation({
     mutationFn: (input: LoginInput) => apiFetch('/auth/login', { method: 'POST', json: input }),
-    onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: queryKeys.me });
-      router.push(next);
-    },
+    onSuccess: () => router.push(next),
   });
 
   if (checking) {
@@ -80,7 +95,7 @@ export function LoginForm() {
           error={errors.password?.message}
           {...register('password')}
         />
-        <FormError>{login.isError ? apiErrorMessage(login.error) : null}</FormError>
+        <FormError>{login.isError ? apiErrorMessage(login.error) : reasonMessage}</FormError>
         <Button type="submit" size="lg" className="w-full" disabled={login.isPending}>
           {login.isPending ? 'Giriş yapılıyor…' : 'Giriş yap'}
         </Button>

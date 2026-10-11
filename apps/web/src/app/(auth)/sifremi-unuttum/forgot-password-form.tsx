@@ -7,13 +7,14 @@ import { forgotPasswordSchema } from '@oto/shared';
 import type { z } from 'zod';
 import { Button } from '@/components/ui/button';
 import { apiFetch } from '@/lib/api';
-import { trErrorMap } from '@/lib/messages';
-import { authLinkClass, Field, FormNotice, Heading } from '../_components/form-bits';
+import { leakSafeFailure, trErrorMap } from '@/lib/messages';
+import { authLinkClass, Field, FormError, FormNotice, Heading } from '../_components/form-bits';
 
 type Input = z.infer<typeof forgotPasswordSchema>;
 
 export function ForgotPasswordForm() {
   const [sent, setSent] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
   const {
     register,
     handleSubmit,
@@ -23,12 +24,17 @@ export function ForgotPasswordForm() {
     defaultValues: { email: '' },
   });
 
-  // Hesap var mı yok mu sızdırılmaz: sonuç ne olursa olsun aynı mesaj gösterilir.
+  // Hesap var mı yok mu sızdırılmaz: yalnızca hız sınırı ve ağ hatası ayrı gösterilir.
   const onSubmit = async (values: Input) => {
+    setFailure(null);
     try {
       await apiFetch('/auth/forgot-password', { method: 'POST', json: values });
-    } catch {
-      /* bilinçli olarak yutulur */
+    } catch (e) {
+      const msg = leakSafeFailure(e);
+      if (msg) {
+        setFailure(msg);
+        return;
+      }
     }
     setSent(true);
   };
@@ -36,12 +42,12 @@ export function ForgotPasswordForm() {
   return (
     <>
       <Heading title="Şifrenizi mi unuttunuz?" lead="E-posta adresinizi yazın, şifre yenileme bağlantısı gönderelim." />
-      {sent ? (
-        <FormNotice>
-          Bu adresle kayıtlı bir hesap varsa şifre yenileme bağlantısı gönderdik. Gelen kutunuzu ve istenmeyen
-          klasörünü kontrol edin.
-        </FormNotice>
-      ) : (
+      <FormNotice>
+        {sent
+          ? 'Bu adresle kayıtlı bir hesap varsa şifre yenileme bağlantısı gönderdik. Gelen kutunuzu ve istenmeyen klasörünü kontrol edin.'
+          : null}
+      </FormNotice>
+      {sent ? null : (
         <form noValidate onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           <Field
             label="E-posta"
@@ -50,6 +56,7 @@ export function ForgotPasswordForm() {
             error={errors.email?.message}
             {...register('email')}
           />
+          <FormError>{failure}</FormError>
           <Button type="submit" size="lg" className="w-full" disabled={isSubmitting}>
             {isSubmitting ? 'Gönderiliyor…' : 'Bağlantı gönder'}
           </Button>

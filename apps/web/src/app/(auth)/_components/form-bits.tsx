@@ -49,27 +49,29 @@ export const Field = React.forwardRef<HTMLInputElement, FieldProps>(
 );
 Field.displayName = 'Field';
 
+/** Canlı bölge içerikten önce DOM'da olur; ekran okuyucular sonradan eklenen metni duyurur. */
 export function FormError({ children }: { children?: React.ReactNode }) {
-  if (!children) return null;
   return (
-    <div
-      role="alert"
-      className="flex items-start gap-2 rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--color-danger)_40%,transparent)] bg-[color-mix(in_oklab,var(--color-danger)_10%,transparent)] px-3 py-2.5 text-sm text-[var(--color-text)]"
-    >
-      <AlertCircle className="mt-0.5 size-4 shrink-0 text-[var(--color-danger)]" aria-hidden="true" />
-      <span>{children}</span>
+    <div role="alert">
+      {children ? (
+        <div className="flex items-start gap-2 rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--color-danger)_40%,transparent)] bg-[color-mix(in_oklab,var(--color-danger)_10%,transparent)] px-3 py-2.5 text-sm text-[var(--color-text)]">
+          <AlertCircle className="mt-0.5 size-4 shrink-0 text-[var(--color-danger)]" aria-hidden="true" />
+          <span>{children}</span>
+        </div>
+      ) : null}
     </div>
   );
 }
 
-export function FormNotice({ children }: { children: React.ReactNode }) {
+export function FormNotice({ children }: { children?: React.ReactNode }) {
   return (
-    <div
-      role="status"
-      className="flex items-start gap-2 rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--color-positive)_40%,transparent)] bg-[color-mix(in_oklab,var(--color-positive)_10%,transparent)] px-3 py-2.5 text-sm text-[var(--color-text)]"
-    >
-      <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-[var(--color-positive)]" aria-hidden="true" />
-      <span>{children}</span>
+    <div role="status" aria-live="polite">
+      {children ? (
+        <div className="flex items-start gap-2 rounded-[var(--radius-md)] border border-[color-mix(in_oklab,var(--color-positive)_40%,transparent)] bg-[color-mix(in_oklab,var(--color-positive)_10%,transparent)] px-3 py-2.5 text-sm text-[var(--color-text)]">
+          <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-[var(--color-positive)]" aria-hidden="true" />
+          <span>{children}</span>
+        </div>
+      ) : null}
     </div>
   );
 }

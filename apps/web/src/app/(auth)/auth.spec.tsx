@@ -33,6 +33,12 @@ beforeEach(() => {
   push.mockReset();
   replace.mockReset();
   search = new URLSearchParams();
+  // Giriş sayfası oturum kontrolü için /me'ye bakar; varsayılan: oturum yok.
+  server.use(
+    http.get('/api/v1/me', () =>
+      HttpResponse.json({ error: { code: 'UNAUTHENTICATED', message: '' } }, { status: 401 }),
+    ),
+  );
 });
 
 describe('LoginForm', () => {
@@ -57,7 +63,7 @@ describe('LoginForm', () => {
     await userEvent.type(screen.getByLabelText('E-posta'), 'a@b.co');
     await userEvent.type(screen.getByLabelText('Şifre'), 'yanlis-sifre');
     await userEvent.click(screen.getByRole('button', { name: 'Giriş yap' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('E-posta veya şifre hatalı');
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('E-posta veya şifre hatalı'));
   });
 
   it('shows lock message on LOGIN_LOCKED', async () => {
@@ -66,7 +72,7 @@ describe('LoginForm', () => {
     await userEvent.type(screen.getByLabelText('E-posta'), 'a@b.co');
     await userEvent.type(screen.getByLabelText('Şifre'), 'yanlis-sifre');
     await userEvent.click(screen.getByRole('button', { name: 'Giriş yap' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent(/geçici olarak kilitlendi/i);
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/geçici olarak kilitlendi/i));
   });
 
   it.each([
@@ -87,7 +93,7 @@ describe('LoginForm', () => {
     search = new URLSearchParams({ next: '/app/favoriler', try_refresh: '1' });
     server.use(http.post('/api/v1/auth/refresh', () => new HttpResponse(null, { status: 204 })));
     renderWithClient(<LoginForm />);
-    await waitFor(() => expect(replace).toHaveBeenCalledWith('/app/favoriler'));
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/app/favoriler?_r=1'));
   });
 
   it('with try_refresh=1 falls back to the form when refresh fails', async () => {
@@ -95,6 +101,39 @@ describe('LoginForm', () => {
     server.use(http.post('/api/v1/auth/refresh', () => apiError('TOKEN_INVALID', 401)));
     renderWithClient(<LoginForm />);
     expect(await screen.findByLabelText('E-posta')).toBeInTheDocument();
+    expect(replace).not.toHaveBeenCalled();
+  });
+});
+
+describe('LoginForm session hints', () => {
+  it('shows the reused-session message', async () => {
+    search = new URLSearchParams({ reason: 'reused' });
+    renderWithClient(<LoginForm />);
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent('Oturumunuz güvenlik nedeniyle sonlandırıldı'),
+    );
+  });
+
+  it('shows the failed-session message and the form, without refreshing again', async () => {
+    search = new URLSearchParams({ reason: 'failed', next: '/app' });
+    renderWithClient(<LoginForm />);
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent('Oturum açılamadı, lütfen tekrar giriş yapın'),
+    );
+    expect(screen.getByLabelText('E-posta')).toBeInTheDocument();
+  });
+
+  it('redirects an already signed-in user to next, only after /me succeeds', async () => {
+    search = new URLSearchParams({ next: '/app/favoriler' });
+    server.use(http.get('/api/v1/me', () => HttpResponse.json({ user: { id: 'u1' } })));
+    renderWithClient(<LoginForm />);
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/app/favoriler'));
+  });
+
+  it('does not redirect when /me is unauthenticated', async () => {
+    renderWithClient(<LoginForm />);
+    await screen.findByLabelText('E-posta');
+    await new Promise((r) => setTimeout(r, 50));
     expect(replace).not.toHaveBeenCalled();
   });
 });
@@ -121,6 +160,16 @@ describe('RegisterForm', () => {
     expect(called).toBe(false);
   });
 
+  it('links the KVKK text and describes the checkbox by its error', async () => {
+    renderWithClient(<RegisterForm />);
+    expect(screen.getByRole('link', { name: /KVKK aydınlatma metni/i })).toHaveAttribute('href', '/kvkk');
+    await userEvent.click(screen.getByRole('button', { name: 'Hesap oluştur' }));
+    const box = screen.getByRole('checkbox');
+    await waitFor(() => expect(box).toHaveAttribute('aria-invalid', 'true'));
+    const id = box.getAttribute('aria-describedby')!;
+    expect(document.getElementById(id)).toHaveTextContent('Devam etmek için onay vermeniz gerekir');
+  });
+
   it('requires a password of at least 10 characters', async () => {
     renderWithClient(<RegisterForm />);
     await userEvent.type(screen.getByLabelText('Ad'), 'Ayşe');
@@ -137,7 +186,7 @@ describe('RegisterForm', () => {
     await fill();
     await userEvent.click(screen.getByRole('checkbox'));
     await userEvent.click(screen.getByRole('button', { name: 'Hesap oluştur' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Bu e-posta adresiyle bir hesap zaten var');
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Bu e-posta adresiyle bir hesap zaten var'));
   });
 
   it('maps WEAK_PASSWORD', async () => {
@@ -146,7 +195,7 @@ describe('RegisterForm', () => {
     await fill();
     await userEvent.click(screen.getByRole('checkbox'));
     await userEvent.click(screen.getByRole('button', { name: 'Hesap oluştur' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent(/çok kolay tahmin/i);
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/çok kolay tahmin/i));
   });
 
   it('sends the payload and goes to next on success', async () => {
@@ -175,15 +224,35 @@ describe('ForgotPasswordForm', () => {
     renderWithClient(<ForgotPasswordForm />);
     await userEvent.type(screen.getByLabelText('E-posta'), 'var@example.com');
     await userEvent.click(screen.getByRole('button', { name: 'Bağlantı gönder' }));
-    expect(await screen.findByRole('status')).toHaveTextContent(MESSAGE);
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(MESSAGE));
   });
 
-  it('shows the same message even when the API fails', async () => {
+  it('shows the same message for server errors (no account leak)', async () => {
+    server.use(http.post('/api/v1/auth/forgot-password', () => apiError('INTERNAL', 500)));
+    renderWithClient(<ForgotPasswordForm />);
+    await userEvent.type(screen.getByLabelText('E-posta'), 'yok@example.com');
+    await userEvent.click(screen.getByRole('button', { name: 'Bağlantı gönder' }));
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(MESSAGE));
+  });
+
+  it('shows a distinct message on rate limiting and keeps the form', async () => {
     server.use(http.post('/api/v1/auth/forgot-password', () => apiError('RATE_LIMITED', 429)));
     renderWithClient(<ForgotPasswordForm />);
     await userEvent.type(screen.getByLabelText('E-posta'), 'yok@example.com');
     await userEvent.click(screen.getByRole('button', { name: 'Bağlantı gönder' }));
-    expect(await screen.findByRole('status')).toHaveTextContent(MESSAGE);
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent('Çok fazla deneme. Lütfen biraz sonra tekrar deneyin.'),
+    );
+    expect(screen.getByRole('status')).toBeEmptyDOMElement();
+    expect(screen.getByLabelText('E-posta')).toHaveValue('yok@example.com');
+  });
+
+  it('shows a connection message on network errors', async () => {
+    server.use(http.post('/api/v1/auth/forgot-password', () => HttpResponse.error()));
+    renderWithClient(<ForgotPasswordForm />);
+    await userEvent.type(screen.getByLabelText('E-posta'), 'yok@example.com');
+    await userEvent.click(screen.getByRole('button', { name: 'Bağlantı gönder' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/Bağlantı hatası/));
   });
 });
 
@@ -207,7 +276,7 @@ describe('ResetPasswordForm', () => {
     renderWithClient(<ResetPasswordForm />);
     await userEvent.type(screen.getByLabelText('Yeni şifre'), 'yepyeni-sifre-1');
     await userEvent.click(screen.getByRole('button', { name: 'Şifreyi güncelle' }));
-    expect(await screen.findByRole('status')).toHaveTextContent(/şifreniz güncellendi/i);
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/şifreniz güncellendi/i));
     expect(body).toEqual({ token, newPassword: 'yepyeni-sifre-1' });
   });
 
@@ -217,15 +286,16 @@ describe('ResetPasswordForm', () => {
     renderWithClient(<ResetPasswordForm />);
     await userEvent.type(screen.getByLabelText('Yeni şifre'), 'yepyeni-sifre-1');
     await userEvent.click(screen.getByRole('button', { name: 'Şifreyi güncelle' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent(/geçersiz veya süresi dolmuş/i);
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/geçersiz veya süresi dolmuş/i));
   });
 });
 
 describe('VerifyEmail', () => {
   const token = 'v'.repeat(32);
 
-  it('posts the token once and shows success', async () => {
+  it('posts the token once, strips it from the URL and shows success', async () => {
     search = new URLSearchParams({ token });
+    window.history.replaceState(null, '', `/verify-email?token=${token}`);
     let calls = 0;
     server.use(
       http.post('/api/v1/auth/verify-email', () => {
@@ -234,8 +304,15 @@ describe('VerifyEmail', () => {
       }),
     );
     renderWithClient(<VerifyEmail />);
-    expect(await screen.findByText(/e-posta adresiniz doğrulandı/i)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/e-posta adresiniz doğrulandı/i));
     expect(calls).toBe(1);
+    expect(window.location.search).toBe('');
+  });
+
+  it('treats a malformed token as an invalid link without calling the API', async () => {
+    search = new URLSearchParams({ token: 'kisa' });
+    renderWithClient(<VerifyEmail />);
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/geçersiz|eksik/i));
   });
 
   it('shows the failure state and a resend form for an invalid token', async () => {
@@ -245,9 +322,25 @@ describe('VerifyEmail', () => {
       http.post('/api/v1/auth/resend-verification', () => new HttpResponse(null, { status: 204 })),
     );
     renderWithClient(<VerifyEmail />);
-    expect(await screen.findByRole('alert')).toHaveTextContent(/geçersiz veya süresi dolmuş/i);
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/geçersiz veya süresi dolmuş/i));
     await userEvent.type(screen.getByLabelText('E-posta'), 'a@b.co');
     await userEvent.click(screen.getByRole('button', { name: 'Yeniden gönder' }));
-    expect(await screen.findByRole('status')).toHaveTextContent(/gönderdik/i);
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/gönderdik/i));
+  });
+
+  it('offers a retry after a network failure and keeps the token', async () => {
+    search = new URLSearchParams({ token });
+    let calls = 0;
+    server.use(
+      http.post('/api/v1/auth/verify-email', () => {
+        calls += 1;
+        return calls === 1 ? HttpResponse.error() : new HttpResponse(null, { status: 204 });
+      }),
+    );
+    renderWithClient(<VerifyEmail />);
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/Bağlantı hatası/));
+    await userEvent.click(screen.getByRole('button', { name: 'Tekrar dene' }));
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/e-posta adresiniz doğrulandı/i));
+    expect(calls).toBe(2);
   });
 });

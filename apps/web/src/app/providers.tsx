@@ -1,9 +1,10 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { ApiError } from '@/lib/api';
+import { stripRetryFlagFromLocation } from '@/lib/session';
 
 export function makeQueryClient() {
   return new QueryClient({
@@ -16,14 +17,31 @@ export function makeQueryClient() {
   });
 }
 
+/** `<html data-theme>` değerini izler; kullanıcı temayı değiştirince toast teması da değişir. */
+function useDocumentTheme(): 'dark' | 'light' {
+  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  useEffect(() => {
+    const read = () => setTheme(document.documentElement.dataset.theme === 'light' ? 'light' : 'dark');
+    read();
+    const obs = new MutationObserver(read);
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    return () => obs.disconnect();
+  }, []);
+  return theme;
+}
+
 export function Providers({ children }: { children: React.ReactNode }) {
   const [client] = useState(makeQueryClient);
+  const theme = useDocumentTheme();
+  useEffect(() => {
+    stripRetryFlagFromLocation();
+  }, []);
   return (
     <QueryClientProvider client={client}>
       <TooltipProvider delayDuration={200}>
         {children}
         <Toaster
-          theme="system"
+          theme={theme}
           position="bottom-right"
           toastOptions={{
             style: {
