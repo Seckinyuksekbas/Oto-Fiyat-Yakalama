@@ -28,7 +28,8 @@ export const systemLogsQuery = adminSystemLogsQuerySchema
   .superRefine(orderedRange);
 export type SystemLogsQuery = z.infer<typeof systemLogsQuery>;
 
-const SECRET_KEY = /(token|secret|password|passwd|authorization|cookie|chatid|api[-_]?key|credential|encrypted|session)/i;
+/** Gizli görünümlü anahtarlar (geniş tutulur: `passengerCount`, `author` gibi fazladan maskeleme kabul edilebilir). */
+const SECRET_KEY = /(token|secret|pass(wd|word)?|auth|cookie|chat_?id|^key$|api[-_]?key|private|signature|dsn|credential|encrypted|session)/i;
 const MAX_DEPTH = 8;
 
 /** SystemLog.context için: gizli görünümlü anahtarları `[gizli]` yapar, metinlerdeki URL sorgularını maskeler. */

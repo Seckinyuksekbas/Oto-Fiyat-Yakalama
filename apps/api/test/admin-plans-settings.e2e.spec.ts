@@ -138,6 +138,38 @@ describe('admin plans', () => {
     expect((await sa.agent.patch(`${api}/plans/nope`).send({ name: 'Z' })).status).toBe(404);
   });
 
+  it('PATCH reports usersOverProfileLimit (FREE counts fallback users; unverified rule applies); profiles are not paused', async () => {
+    const sa = await actor('SUPER_ADMIN');
+    const free = await plan('FREE');
+    const pro = await plan('PRO');
+    const mkProfiles = async (userId: string, n: number) => {
+      for (let i = 0; i < n; i++) await prisma.searchProfile.create({ data: { userId, name: `P${i}`, channels: ['IN_APP'], fuels: [], transmissions: [], cities: [], minDiscountPct: 0 } });
+    };
+    const verified = await registerUser(app);
+    await prisma.user.update({ where: { id: verified.user.id }, data: { emailVerifiedAt: new Date() } });
+    await mkProfiles(verified.user.id, 2);
+    const unverified = await registerUser(app); // doğrulanmamış: en fazla 1 aktif profil
+    await mkProfiles(unverified.user.id, 2);
+    const fallback = await registerUser(app); // aboneliği yok → örtük FREE
+    await prisma.user.update({ where: { id: fallback.user.id }, data: { emailVerifiedAt: new Date() } });
+    await prisma.userSubscription.deleteMany({ where: { userId: fallback.user.id } });
+    await mkProfiles(fallback.user.id, 3);
+    const proUser = await registerUser(app);
+    await prisma.userSubscription.updateMany({ where: { userId: proUser.user.id }, data: { status: 'CANCELED' } });
+    await prisma.userSubscription.create({ data: { userId: proUser.user.id, planId: pro.id } });
+    await prisma.user.update({ where: { id: proUser.user.id }, data: { emailVerifiedAt: new Date() } });
+    await mkProfiles(proUser.user.id, 5);
+
+    const r3 = await sa.agent.patch(`${api}/plans/${free.id}`).send({ limits: limits({ maxSearchProfiles: 3, channels: ['IN_APP'] }) });
+    expect(r3.status).toBe(200);
+    expect(r3.body.plan.usersOverProfileLimit).toBe(1); // yalnızca doğrulanmamış (2 > 1)
+    const r1 = await sa.agent.patch(`${api}/plans/${free.id}`).send({ limits: limits({ maxSearchProfiles: 1, channels: ['IN_APP'] }) });
+    expect(r1.body.plan.usersOverProfileLimit).toBe(3); // PRO kullanıcısı sayılmaz
+    expect(await prisma.searchProfile.count({ where: { status: 'ACTIVE' } })).toBe(12);
+    const rp = await sa.agent.patch(`${api}/plans/${pro.id}`).send({ limits: limits({ maxSearchProfiles: 4 }) });
+    expect(rp.body.plan.usersOverProfileLimit).toBe(1);
+  });
+
   it('deactivating a plan with active subscribers is allowed: existing subs keep it, new assignment -> 409', async () => {
     const sa = await actor('SUPER_ADMIN');
     const pro = await plan('PRO');
@@ -261,6 +293,34 @@ describe('admin settings', () => {
     expect(await auditCount('settings.update')).toBe(0);
   });
 
+  it('prototype keys (__proto__, constructor) in the patch are rejected with 400 and never merged', async () => {
+    const sa = await actor('SUPER_ADMIN');
+    await prisma.systemSetting.create({ data: { key: 'alerts.thresholds', value: { notifyQueueDepth: 700 } } });
+    for (const raw of ['{"key":"alerts.thresholds","value":{"__proto__":{"notifyQueueDepth":1}}}', '{"key":"alerts.thresholds","value":{"constructor":{"prototype":{"x":1}}}}']) {
+      const r = await sa.agent.patch(`${api}/settings`).set('Content-Type', 'application/json').send(raw);
+      expect({ raw, status: r.status, code: r.body.error?.code }).toEqual({ raw, status: 400, code: 'VALIDATION_FAILED' });
+    }
+    expect(await stored('alerts.thresholds')).toEqual({ notifyQueueDepth: 700 });
+    expect(({} as Record<string, unknown>).notifyQueueDepth).toBeUndefined();
+    expect(await auditCount('settings.update')).toBe(0);
+  });
+
+  it('an invalid stored value is not silently discarded: unrelated patch -> 400, fixing patch (null or valid value) succeeds', async () => {
+    const sa = await actor('SUPER_ADMIN');
+    const bad = { notifyFailureRate: 5, parserErrorRate: 'x', notifyQueueDepth: 700 };
+    await prisma.systemSetting.create({ data: { key: 'alerts.thresholds', value: bad } });
+    const unrelated = await sa.agent.patch(`${api}/settings`).send({ key: 'alerts.thresholds', value: { heartbeatMissSec: 90 } });
+    expect(unrelated.status).toBe(400);
+    const paths = JSON.stringify(unrelated.body.error.details);
+    expect(paths).toContain('value.notifyFailureRate');
+    expect(paths).toContain('value.parserErrorRate');
+    expect(await stored('alerts.thresholds')).toEqual(bad);
+    const fix = await sa.agent.patch(`${api}/settings`).send({ key: 'alerts.thresholds', value: { notifyFailureRate: null, parserErrorRate: 0.3 } });
+    expect(fix.status).toBe(200);
+    expect(await stored('alerts.thresholds')).toEqual({ notifyQueueDepth: 700, parserErrorRate: 0.3 });
+    expect(fix.body.setting.effective).toEqual({ ...DEFAULT_ALERT_THRESHOLDS, notifyQueueDepth: 700, parserErrorRate: 0.3 });
+  });
+
   it('no-op PATCH writes no audit and publishes nothing', async () => {
     const sa = await actor('SUPER_ADMIN');
     await prisma.systemSetting.create({ data: { key: 'alerts.thresholds', value: { notifyQueueDepth: 700 } } });
@@ -296,6 +356,7 @@ describe('admin audit and system logs', () => {
   it('audit-logs: newest first with actor email, filters and pagination', async () => {
     const admin = await actor('ADMIN', 'auditor@test.com');
     const other = await actor('SUPER_ADMIN', 'boss_1@test.com');
+    const lookalike = await actor('ADMIN', 'bossX1@test.com');
     const t0 = new Date('2026-10-01T10:00:00Z');
     await prisma.auditLog.createMany({
       data: [
@@ -303,12 +364,13 @@ describe('admin audit and system logs', () => {
         { actorId: other.user.id, action: 'plan.update', targetType: 'SubscriptionPlan', targetId: 'p1', createdAt: new Date(t0.getTime() + 60_000) },
         { actorId: other.user.id, action: 'settings.update', targetType: 'SystemSetting', targetId: 'analysis.settings', createdAt: new Date(t0.getTime() + 120_000) },
         { actorId: null, action: 'auth.login_failed', createdAt: new Date(t0.getTime() + 180_000) },
+        { actorId: lookalike.user.id, action: 'proxy.check', targetType: 'ProxyConfig', targetId: '9', createdAt: new Date(t0.getTime() - 60_000) },
       ],
     });
     const all = await admin.agent.get(`${api}/audit-logs`);
     expect(all.status).toBe(200);
-    expect(all.body.total).toBe(4);
-    expect(all.body.items.map((i: { action: string }) => i.action)).toEqual(['auth.login_failed', 'settings.update', 'plan.update', 'user.suspend']);
+    expect(all.body.total).toBe(5);
+    expect(all.body.items.map((i: { action: string }) => i.action)).toEqual(['auth.login_failed', 'settings.update', 'plan.update', 'user.suspend', 'proxy.check']);
     expect(all.body.items[0].actor).toBeNull();
     expect(all.body.items[3]).toMatchObject({ actor: { id: admin.user.id, email: 'auditor@test.com' }, before: { status: 'ACTIVE' }, after: { status: 'SUSPENDED' } });
     expect(all.body.items[3].actor.passwordHash).toBeUndefined();
@@ -317,15 +379,18 @@ describe('admin audit and system logs', () => {
     expect((await q({ actorId: other.user.id })).body.total).toBe(2);
     expect((await q({ actor: 'boss_1' })).body.total).toBe(2);
     expect((await q({ actor: 'boss%' })).body.total).toBe(0); // % kaçışlı
-    expect((await q({ actor: 'boss_' })).body.total).toBe(2); // _ gerçek karakter olarak eşleşir
-    expect((await q({ actor: 'bossX1' })).body.total).toBe(0);
+    // `_` kaçışlı: yalnızca boss_1 eşleşir; kaçışsız olsaydı bossX1 de (tek karakter joker) eşleşirdi.
+    const us = await q({ actor: 'boss_' });
+    expect(us.body.total).toBe(2);
+    expect([...new Set(us.body.items.map((i: { actor: { email: string } }) => i.actor.email))]).toEqual(['boss_1@test.com']);
+    expect((await q({ actor: 'bossX1' })).body.total).toBe(1);
     expect((await q({ action: 'plan.update' })).body.total).toBe(1);
     expect((await q({ targetType: 'User' })).body.total).toBe(1);
     expect((await q({ targetId: 'analysis.settings' })).body.total).toBe(1);
     expect((await q({ from: new Date(t0.getTime() + 60_000).toISOString(), to: new Date(t0.getTime() + 120_000).toISOString() })).body.total).toBe(2);
     const p2 = await q({ page: 2, pageSize: 3 });
-    expect(p2.body).toMatchObject({ total: 4 });
-    expect(p2.body.items.map((i: { action: string }) => i.action)).toEqual(['user.suspend']);
+    expect(p2.body).toMatchObject({ total: 5 });
+    expect(p2.body.items.map((i: { action: string }) => i.action)).toEqual(['user.suspend', 'proxy.check']);
   });
 
   it('audit-logs: strict query validation', async () => {

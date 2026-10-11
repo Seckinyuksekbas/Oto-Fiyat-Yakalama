@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma, type SubscriptionPlan } from '@oto/db';
-import { ErrorCode, type AdminPlanCreate, type AdminPlanUpdate } from '@oto/shared';
+import { maxSearchProfilesFor, Prisma, type SubscriptionPlan } from '@oto/db';
+import { ErrorCode, planLimitsSchema, type AdminPlanCreate, type AdminPlanUpdate } from '@oto/shared';
 import type { AuditCtx } from '../../common/audit/audit-ctx.decorator';
 import { AuditService } from '../../common/audit/audit.service';
 import { AppError, Errors } from '../../common/errors/app-error';
@@ -79,7 +79,37 @@ export class AdminPlansService {
    * Kod değiştirilemez (gövde şeması `code` kabul etmez). FREE pasifleştirilemez.
    * Aktif abonesi olan bir paket pasifleştirilebilir: mevcut abonelikler sürer, yeni atama 409 (kullanıcı aboneliği servisi).
    */
-  async update(ctx: AuditCtx, id: string, body: AdminPlanUpdate): Promise<{ plan: AdminPlanView }> {
+  /**
+   * Canlı paketi bu olan (FREE için aboneliksiz geri düşüş kullanıcıları dahil) ve ACTIVE profil sayısı paket limitini
+   * (doğrulanmamış e-posta kuralıyla, `maxSearchProfilesFor`) aşan kullanıcı sayısı. Limit düşürmek mevcut profilleri
+   * duraklatmaz; fazlalık bir sonraki abonelik değişiminde/süpürmede uygulanır — bu sayı yöneticiye etkisini gösterir.
+   */
+  private async usersOverProfileLimit(plan: SubscriptionPlan): Promise<number> {
+    const parsed = planLimitsSchema.safeParse(plan.limits);
+    if (!parsed.success) return 0;
+    const now = new Date();
+    const live: Prisma.UserSubscriptionWhereInput = { status: 'ACTIVE', OR: [{ endsAt: null }, { endsAt: { gt: now } }] };
+    const onPlan: Prisma.UserWhereInput =
+      plan.code === FREE_PLAN_CODE
+        ? { OR: [{ subscriptions: { some: { ...live, planId: plan.id } } }, { subscriptions: { none: live } }] }
+        : { subscriptions: { some: { ...live, planId: plan.id } } };
+    const floor = maxSearchProfilesFor(parsed.data, false); // her kullanıcı için en düşük olası limit
+    const groups = await this.prisma.searchProfile.groupBy({
+      by: ['userId'],
+      where: { status: 'ACTIVE', user: { status: { not: 'DELETED' }, ...onPlan } },
+      _count: { _all: true },
+    });
+    const candidates = groups.filter((g) => g._count._all > floor);
+    if (candidates.length === 0) return 0;
+    const users = await this.prisma.user.findMany({
+      where: { id: { in: candidates.map((g) => g.userId) } },
+      select: { id: true, emailVerifiedAt: true },
+    });
+    const verified = new Map(users.map((u) => [u.id, u.emailVerifiedAt !== null]));
+    return candidates.filter((g) => g._count._all > maxSearchProfilesFor(parsed.data, verified.get(g.userId) ?? false)).length;
+  }
+
+  async update(ctx: AuditCtx, id: string, body: AdminPlanUpdate): Promise<{ plan: AdminPlanView & { usersOverProfileLimit: number } }> {
     const plan = await this.prisma.$transaction(async (tx) => {
       const locked = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM "SubscriptionPlan" WHERE id = ${id} FOR UPDATE`;
       if (locked.length === 0) throw Errors.notFound();
@@ -96,6 +126,6 @@ export class AdminPlansService {
       return after;
     });
     const counts = await this.counts(this.prisma, [plan.id]);
-    return { plan: this.view(plan, counts.get(plan.id) ?? 0) };
+    return { plan: { ...this.view(plan, counts.get(plan.id) ?? 0), usersOverProfileLimit: await this.usersOverProfileLimit(plan) } };
   }
 }

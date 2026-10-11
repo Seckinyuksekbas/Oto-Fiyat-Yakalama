@@ -33,6 +33,11 @@ const DEFAULTS: Record<SettingKey, Record<string, unknown>> = {
   'alerts.thresholds': DEFAULT_ALERT_THRESHOLDS,
 };
 
+const SHAPES: Record<SettingKey, Record<string, unknown>> = {
+  'analysis.settings': analysisSettingsSchema.shape,
+  'alerts.thresholds': alertThresholdsSchema.shape,
+};
+
 const isPlainObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 
 function sameJson(a: unknown, b: unknown): boolean {
@@ -76,21 +81,25 @@ export class AdminSettingsService {
    */
   async update(ctx: AuditCtx, key: SettingKey, patch: unknown): Promise<{ setting: AdminSettingView }> {
     if (!isPlainObject(patch)) throw Errors.validation([{ path: 'value', message: 'value bir nesne olmalı' }]);
+    // Yalnızca şemadaki alanlar: `__proto__`/`constructor` gibi anahtarlar birleştirmeye hiç girmez.
+    const allowed = new Set(Object.keys(SHAPES[key]));
+    const unknown = Object.keys(patch).filter((k) => !allowed.has(k));
+    if (unknown.length > 0) throw Errors.validation(unknown.map((k) => ({ path: `value.${k}`, message: 'Bilinmeyen alan' })));
     const out = await this.prisma.$transaction(async (tx) => {
       // Okuma-birleştirme-yazma yarışını (eşzamanlı iki PATCH) anahtar başına danışma kilidiyle sıralar.
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`system-setting:${key}`}))`;
       const row = await tx.systemSetting.findUnique({ where: { key } });
-      let base: Record<string, unknown> = {};
-      if (row) {
-        if (isPlainObject(row.value) && parseSettingValue(key, row.value).ok) base = row.value;
-        else this.logger.warn(`Kayıtlı ${key} geçersiz; yama varsayılanlar üzerine uygulanacak`);
+      // Kayıtlı değer geçersizse sessizce atılmaz: yama ham kayıt üzerine uygulanır, birleşim doğrulanır (hata → 400);
+      // yönetici bozuk alanları `null` göndererek düzeltebilir. Bilinmeyen kayıtlı alanlar düşürülür.
+      const merged = new Map<string, unknown>();
+      if (row && isPlainObject(row.value)) {
+        for (const [k, v] of Object.entries(row.value)) if (allowed.has(k)) merged.set(k, v);
       }
-      const merged: Record<string, unknown> = { ...base };
       for (const [k, v] of Object.entries(patch)) {
-        if (v === null) delete merged[k];
-        else merged[k] = v;
+        if (v === null) merged.delete(k);
+        else merged.set(k, v);
       }
-      const parsed = parseSettingValue(key, merged);
+      const parsed = parseSettingValue(key, Object.fromEntries(merged));
       if (!parsed.ok) throw Errors.validation(parsed.issues.map((i) => ({ path: ['value', ...i.path].join('.'), message: i.message })));
       const next = parsed.value as Record<string, unknown>;
       if (row ? sameJson(row.value, next) : Object.keys(next).length === 0) return { row, changed: false };
