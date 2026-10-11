@@ -23,8 +23,12 @@ export class ChannelsRepository {
     return res.count;
   }
 
+  /** Kanalı siler ve kullanılmamış bağlama kodlarını geçersiz kılar; silinen kanal sayısını döndürür. */
   async deleteTelegram(userId: string): Promise<number> {
-    const res = await this.prisma.notificationChannel.deleteMany({ where: { userId, type: 'TELEGRAM' } });
+    const [res] = await this.prisma.$transaction([
+      this.prisma.notificationChannel.deleteMany({ where: { userId, type: 'TELEGRAM' } }),
+      this.prisma.telegramLinkToken.updateMany({ where: { userId, usedAt: null }, data: { usedAt: new Date() } }),
+    ]);
     return res.count;
   }
 

@@ -10,6 +10,7 @@ type Listener = (e: UserEvent) => void;
 export class UserEventsService implements OnModuleDestroy {
   private readonly logger = new Logger(UserEventsService.name);
   private sub?: Redis;
+  private subscribing?: Promise<void>;
   private readonly listeners = new Map<string, Set<Listener>>();
 
   constructor(private readonly redis: RedisService) {}
@@ -20,7 +21,7 @@ export class UserEventsService implements OnModuleDestroy {
 
   stream(userId: string): Observable<UserEvent> {
     return new Observable<UserEvent>((subscriber) => {
-      this.ensureSubscribed();
+      this.subscribed().catch(() => undefined);
       const fn: Listener = (e) => subscriber.next(e);
       const set = this.listeners.get(userId) ?? new Set<Listener>();
       set.add(fn);
@@ -40,13 +41,16 @@ export class UserEventsService implements OnModuleDestroy {
     return n;
   }
 
-  private ensureSubscribed(): void {
-    if (this.sub) return;
-    this.sub = this.redis.duplicate();
-    void this.sub
-      .psubscribe(userEventChannel('*'))
-      .catch((err: unknown) => this.logger.error(`Abonelik başarısız: ${String(err)}`));
-    this.sub.on('pmessage', (_pattern: string, channel: string, message: string) => {
+  /**
+   * Redis aboneliğinin kurulduğunu garanti eder. Başarısız olursa bağlantı kapatılır ve
+   * bir sonraki çağrı yeniden dener.
+   */
+  subscribed(): Promise<void> {
+    if (this.subscribing) return this.subscribing;
+    const sub = this.redis.duplicate();
+    this.sub = sub;
+    sub.on('error', (err: unknown) => this.logger.warn(`Abonelik bağlantı hatası: ${String(err)}`));
+    sub.on('pmessage', (_pattern: string, channel: string, message: string) => {
       const userId = channel.slice(userEventChannel('').length);
       const set = this.listeners.get(userId);
       if (!set?.size) return;
@@ -59,6 +63,20 @@ export class UserEventsService implements OnModuleDestroy {
       }
       for (const fn of [...set]) fn(parsed);
     });
+    const p = sub
+      .psubscribe(userEventChannel('*'))
+      .then(() => undefined)
+      .catch((err: unknown) => {
+        this.logger.error(`Abonelik başarısız: ${String(err)}`);
+        if (this.sub === sub) {
+          this.sub = undefined;
+          this.subscribing = undefined;
+        }
+        sub.disconnect();
+        throw err;
+      });
+    this.subscribing = p;
+    return p;
   }
 
   async onModuleDestroy(): Promise<void> {

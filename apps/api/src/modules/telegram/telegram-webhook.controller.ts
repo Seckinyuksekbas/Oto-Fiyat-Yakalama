@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { Body, Controller, Headers, HttpCode, Inject, Logger, Post } from '@nestjs/common';
 import { SkipThrottle } from '@nestjs/throttler';
 import type { TelegramUpdate } from '@oto/telegram';
@@ -10,9 +10,9 @@ import type { Env } from '../../config/env';
 import { TelegramUpdateHandler } from './telegram-update.handler';
 
 function safeEqual(a: string, b: string): boolean {
-  const ab = Buffer.from(a);
-  const bb = Buffer.from(b);
-  return ab.length === bb.length && timingSafeEqual(ab, bb);
+  const ha = createHash('sha256').update(a).digest();
+  const hb = createHash('sha256').update(b).digest();
+  return timingSafeEqual(ha, hb);
 }
 
 @Public()

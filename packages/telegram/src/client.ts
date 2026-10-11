@@ -3,7 +3,7 @@ export type InlineKeyboard = { inline_keyboard: InlineButton[][] };
 
 export interface TelegramUpdate {
   update_id: number;
-  message?: { chat: { id: number }; text?: string };
+  message?: { chat: { id: number; type?: string }; from?: { id: number }; text?: string };
   callback_query?: { id: string; data?: string; message?: { chat: { id: number } } };
   my_chat_member?: { chat: { id: number }; new_chat_member: { status: string } };
 }

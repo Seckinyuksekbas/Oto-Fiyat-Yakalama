@@ -7,6 +7,7 @@ import { TelegramUpdateHandler } from './telegram-update.handler';
 
 export const POLL_ERROR_WAIT_MS = 5_000;
 export const POLL_CONFLICT_WAIT_MS = 30_000;
+export const POLL_UNAUTHORIZED_WAIT_MS = 60_000;
 
 @Injectable()
 export class TelegramPollingService implements OnApplicationBootstrap, OnModuleDestroy {
@@ -17,6 +18,7 @@ export class TelegramPollingService implements OnApplicationBootstrap, OnModuleD
   /** Testlerde bekleme sürelerini kısaltmak için. */
   errorWaitMs = POLL_ERROR_WAIT_MS;
   conflictWaitMs = POLL_CONFLICT_WAIT_MS;
+  unauthorizedWaitMs = POLL_UNAUTHORIZED_WAIT_MS;
 
   constructor(
     @Inject(TELEGRAM_API) private readonly bot: TelegramClient | null,
@@ -57,13 +59,20 @@ export class TelegramPollingService implements OnApplicationBootstrap, OnModuleD
         }
       } catch (err) {
         if (signal.aborted) return;
-        const conflict = err instanceof TelegramApiError && err.status === 409;
-        this.logger.warn(
-          conflict
-            ? 'getUpdates 409: webhook tanımlı veya başka bir yoklayıcı çalışıyor; bekleniyor'
-            : `getUpdates başarısız: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        await this.sleep(conflict ? this.conflictWaitMs : this.errorWaitMs, signal);
+        let wait = this.errorWaitMs;
+        if (err instanceof TelegramApiError && err.status === 409) {
+          wait = this.conflictWaitMs;
+          this.logger.warn('getUpdates 409: webhook tanımlı veya başka bir yoklayıcı çalışıyor; bekleniyor');
+        } else if (err instanceof TelegramApiError && err.status === 401) {
+          wait = this.unauthorizedWaitMs;
+          this.logger.error('getUpdates 401: bot token geçersiz');
+        } else if (err instanceof TelegramApiError && err.status === 429) {
+          wait = Math.max(this.errorWaitMs, (err.retryAfterSec ?? 0) * 1000);
+          this.logger.warn(`getUpdates 429: ${wait} ms bekleniyor`);
+        } else {
+          this.logger.warn(`getUpdates başarısız: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        await this.sleep(wait, signal);
       }
     }
   }

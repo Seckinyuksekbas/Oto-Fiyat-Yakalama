@@ -40,7 +40,7 @@ const hook = (body: object, secret = SECRET) =>
   newAgent(app).post('/api/v1/telegram/webhook').set('X-Telegram-Bot-Api-Secret-Token', secret).send(body);
 
 const start = (chatId: number, code: string, updateId = 1) =>
-  hook({ update_id: updateId, message: { chat: { id: chatId }, text: `/start ${code}` } });
+  hook({ update_id: updateId, message: { chat: { id: chatId, type: 'private' }, text: `/start ${code}` } });
 
 async function verifiedUser() {
   const u = await registerUser(app);
@@ -223,7 +223,7 @@ describe('Telegram link flow', () => {
   it('webhook rejects a wrong or missing secret with 401 and does nothing', async () => {
     const A = await verifiedUser();
     const code = await newCode(A);
-    const body = { update_id: 1, message: { chat: { id: 555 }, text: `/start ${code}` } };
+    const body = { update_id: 1, message: { chat: { id: 555, type: 'private' }, text: `/start ${code}` } };
     expect((await hook(body, 'x'.repeat(40))).status).toBe(401);
     expect((await hook(body, 'short')).status).toBe(401);
     expect((await newAgent(app).post('/api/v1/telegram/webhook').send(body)).status).toBe(401);
@@ -239,7 +239,7 @@ describe('Telegram link flow', () => {
     expect(junk.status).toBe(200);
     expect(junk.body).toEqual({ ok: true });
     // callback with an out-of-range listing id must not surface as an error
-    const res = await hook({ update_id: 3, callback_query: { id: 'x', data: 'fav:99999999999', message: { chat: { id: 1 } } } });
+    const res = await hook({ update_id: 3, callback_query: { id: 'x', data: 'fav:9999999999', message: { chat: { id: 1 } } } });
     expect(res.status).toBe(200);
   });
 });
@@ -248,7 +248,7 @@ describe('Telegram polling loop', () => {
   it('processes a queued update when started manually and stops on destroy', async () => {
     const A = await verifiedUser();
     const code = await newCode(A);
-    fake.queueUpdates([{ update_id: 41, message: { chat: { id: 888 }, text: `/start ${code}` } }]);
+    fake.queueUpdates([{ update_id: 41, message: { chat: { id: 888, type: 'private' }, text: `/start ${code}` } }]);
 
     const polling = app.get(TelegramPollingService);
     polling.start();
@@ -284,5 +284,120 @@ describe('Telegram polling loop', () => {
     expect(polls()).toBeGreaterThanOrEqual(2); // resumed
     await polling.stop();
     polling.conflictWaitMs = 30_000;
+  });
+});
+
+describe('Telegram hardening', () => {
+  it('one chat belongs to one user: relinking moves it and notifies the previous owner', async () => {
+    const A = await verifiedUser();
+    const B = await verifiedUser();
+    await start(555, await newCode(A), 1);
+    expect(lastMessage().text).toContain('***@');
+    expect(lastMessage().text).toContain('hesabı bağlandı');
+    const { listingId } = await seedListing(app);
+    await start(555, await newCode(B), 2);
+
+    const rows = await prisma.notificationChannel.findMany({ where: { type: 'TELEGRAM' } });
+    expect(rows.map((r) => r.userId)).toEqual([B.user.id]);
+    const aNotes = (await A.agent.get('/api/v1/me/notifications')).body.items;
+    expect(aNotes.some((n: { payload: { type: string } }) => n.payload.type === 'TELEGRAM_UNLINKED')).toBe(true);
+    expect((await A.agent.get('/api/v1/me/channels')).body.items[1].linked).toBe(false);
+    expect((await B.agent.get('/api/v1/me/channels')).body.items[1].linked).toBe(true);
+
+    await hook({ update_id: 3, callback_query: { id: 'c', data: `fav:${listingId}`, message: { chat: { id: 555 } } } });
+    expect(await prisma.favorite.findMany({ select: { userId: true } })).toEqual([{ userId: B.user.id }]);
+  });
+
+  it('the database refuses two TELEGRAM rows for the same chat', async () => {
+    const A = await verifiedUser();
+    const B = await verifiedUser();
+    const row = (userId: string) => ({ userId, type: 'TELEGRAM' as const, externalIdHash: 'same', isVerified: true });
+    await prisma.notificationChannel.create({ data: row(A.user.id) });
+    await expect(prisma.notificationChannel.create({ data: row(B.user.id) })).rejects.toThrow();
+  });
+
+  it('rejects /start from non-private chats with an explanation', async () => {
+    const A = await verifiedUser();
+    const code = await newCode(A);
+    await hook({ update_id: 1, message: { chat: { id: -100, type: 'group' }, text: `/start ${code}` } });
+    expect(lastMessage().text).toContain('özel sohbet');
+    expect(await prisma.notificationChannel.count({ where: { type: 'TELEGRAM' } })).toBe(0);
+    // code is still usable in a private chat
+    await start(555, code, 2);
+    expect(await prisma.notificationChannel.count({ where: { type: 'TELEGRAM', isVerified: true } })).toBe(1);
+  });
+
+  it('ignores a replayed update_id', async () => {
+    const A = await verifiedUser();
+    const code = await newCode(A);
+    await start(555, code, 77);
+    const count = fake.requests.length;
+    await start(555, code, 77);
+    expect(fake.requests.length).toBe(count);
+    expect(await prisma.notificationChannel.count({ where: { type: 'TELEGRAM' } })).toBe(1);
+  });
+
+  it('concurrent double redemption of one code links exactly once', async () => {
+    const A = await verifiedUser();
+    const code = await newCode(A);
+    await Promise.all([start(601, code, 1), start(602, code, 2)]);
+    expect(await prisma.notificationChannel.count({ where: { type: 'TELEGRAM', isVerified: true } })).toBe(1);
+    const linkedNotes = await prisma.notification.count({ where: { userId: A.user.id, kind: 'SECURITY' } });
+    expect(linkedNotes).toBe(1);
+  });
+
+  it('kicked creates a TELEGRAM_DISABLED notification only when a row was actually disabled', async () => {
+    const A = await verifiedUser();
+    await start(555, await newCode(A), 1);
+    const kicked = (id: number) => hook({ update_id: id, my_chat_member: { chat: { id: 555 }, new_chat_member: { status: 'kicked' } } });
+    await kicked(2);
+    await kicked(3);
+    await hook({ update_id: 4, my_chat_member: { chat: { id: 999 }, new_chat_member: { status: 'kicked' } } });
+    const notes = await prisma.notification.findMany({ where: { userId: A.user.id, kind: 'SECURITY' } });
+    expect(notes.filter((n) => (n.payload as { type: string }).type === 'TELEGRAM_DISABLED')).toHaveLength(1);
+  });
+
+  it('DELETE /me/channels/telegram invalidates unused link codes', async () => {
+    const A = await verifiedUser();
+    await start(555, await newCode(A), 1);
+    const pending = await newCode(A);
+    expect((await A.agent.delete('/api/v1/me/channels/telegram')).status).toBe(204);
+    fake.reset();
+    await start(555, pending, 2);
+    expect(lastMessage().text).toContain('geçersiz');
+    expect(await prisma.notificationChannel.count({ where: { type: 'TELEGRAM' } })).toBe(0);
+  });
+});
+
+describe('Telegram polling backoff', () => {
+  const polls = () => fake.requests.filter((r) => r.method === 'getUpdates').length;
+  const waitPolls = async (n: number, ms: number) => {
+    const end = Date.now() + ms;
+    while (Date.now() < end && polls() < n) await new Promise((r) => setTimeout(r, 25));
+  };
+
+  it('401 backs off on the unauthorized interval; 429 honours retry_after', async () => {
+    const polling = app.get(TelegramPollingService);
+    polling.unauthorizedWaitMs = 300;
+    polling.errorWaitMs = 50;
+    fake.respondNext('getUpdates', { status: 401, body: { ok: false, error_code: 401, description: 'Unauthorized' } });
+    polling.start();
+    await new Promise((r) => setTimeout(r, 150));
+    expect(polls()).toBe(1);
+    await waitPolls(2, 2000);
+    expect(polls()).toBeGreaterThanOrEqual(2);
+    await polling.stop();
+    await new Promise((r) => setTimeout(r, 300)); // let an aborted in-flight request reach the fake before reset
+
+    fake.reset();
+    fake.respondNext('getUpdates', { status: 429, body: { ok: false, error_code: 429, description: 'Too Many Requests', parameters: { retry_after: 1 } } });
+    polling.start();
+    await new Promise((r) => setTimeout(r, 500));
+    expect(polls()).toBe(1); // 50 ms error wait would already have retried
+    await waitPolls(2, 3000);
+    expect(polls()).toBeGreaterThanOrEqual(2);
+    await polling.stop();
+    polling.unauthorizedWaitMs = 60_000;
+    polling.errorWaitMs = 5_000;
   });
 });

@@ -22,7 +22,7 @@ export const matchNotificationPayloadSchema = z.object({
 export type MatchNotificationPayload = z.infer<typeof matchNotificationPayloadSchema>;
 
 export const securityNotificationPayloadSchema = z.object({
-  type: z.enum(['TELEGRAM_LINKED', 'TELEGRAM_DISABLED', 'REFRESH_REUSED']),
+  type: z.enum(['TELEGRAM_LINKED', 'TELEGRAM_UNLINKED', 'TELEGRAM_DISABLED', 'REFRESH_REUSED']),
   reason: z.string().optional(),
   familyId: z.string().optional(),
 });

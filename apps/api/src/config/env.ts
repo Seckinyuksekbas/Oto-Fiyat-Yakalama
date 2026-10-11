@@ -38,6 +38,14 @@ export const envSchema = baseSchema.superRefine((env, ctx) => {
   if (env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_MODE === 'webhook' && !env.TELEGRAM_WEBHOOK_SECRET) {
     ctx.addIssue({ code: 'custom', path: ['TELEGRAM_WEBHOOK_SECRET'], message: 'webhook modunda zorunlu (32-256 karakter)' });
   }
+  if (env.NODE_ENV === 'production' && env.TELEGRAM_BOT_TOKEN) {
+    if (env.TELEGRAM_MODE !== 'webhook') {
+      ctx.addIssue({ code: 'custom', path: ['TELEGRAM_MODE'], message: "production ortamında 'webhook' olmalı" });
+    }
+    if (!env.TELEGRAM_API_BASE.startsWith('https://')) {
+      ctx.addIssue({ code: 'custom', path: ['TELEGRAM_API_BASE'], message: 'production ortamında https olmalı' });
+    }
+  }
 });
 export type Env = z.infer<typeof envSchema>;
 

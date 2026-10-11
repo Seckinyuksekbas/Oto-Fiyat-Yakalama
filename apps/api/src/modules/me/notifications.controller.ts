@@ -5,7 +5,7 @@ import {
   type ListNotificationsQuery,
   type MarkNotificationsReadInput,
 } from '@oto/shared';
-import { concat, defer, from, interval, map, merge, takeUntil, timer, type Observable } from 'rxjs';
+import { interval, Observable, takeUntil, timer } from 'rxjs';
 import { CurrentUser } from '../../common/decorators/current-user';
 import { ZodPipe } from '../../common/zod.pipe';
 import { UserEventsService } from '../../infra/user-events.service';
@@ -68,11 +68,28 @@ export class NotificationsController {
 
   @Sse('stream')
   stream(@CurrentUser() user: AuthUser): Observable<MessageEvent> {
-    const ready$ = defer(() => from(this.repo.unreadCount(user.id))).pipe(
-      map((unreadCount) => ({ type: 'ready', data: { unreadCount } }) as MessageEvent),
-    );
-    const live$ = this.events.stream(user.id).pipe(map((e) => ({ type: 'notification', data: e.notification }) as MessageEvent));
-    const ping$ = interval(SSE_PING_MS).pipe(map(() => ({ type: 'ping', data: {} }) as MessageEvent));
-    return concat(ready$, merge(live$, ping$)).pipe(takeUntil(timer(SSE_MAX_LIFETIME_MS)));
+    return new Observable<MessageEvent>((subscriber) => {
+      // Canlı olaylara önce abone olunur; "ready" gönderilene kadar tamponlanır (başlangıç boşluğu olmasın).
+      const buffer: MessageEvent[] = [];
+      let isReady = false;
+      const live = this.events.stream(user.id).subscribe((e) => {
+        const m = { type: 'notification', data: e.notification } as MessageEvent;
+        if (isReady) subscriber.next(m);
+        else buffer.push(m);
+      });
+      const ping = interval(SSE_PING_MS).subscribe(() => subscriber.next({ type: 'ping', data: {} } as MessageEvent));
+      void (async () => {
+        await this.events.subscribed();
+        const unreadCount = await this.repo.unreadCount(user.id);
+        if (subscriber.closed) return;
+        subscriber.next({ type: 'ready', data: { unreadCount } } as MessageEvent);
+        isReady = true;
+        for (const m of buffer.splice(0)) subscriber.next(m);
+      })().catch((err: unknown) => subscriber.error(err));
+      return () => {
+        live.unsubscribe();
+        ping.unsubscribe();
+      };
+    }).pipe(takeUntil(timer(SSE_MAX_LIFETIME_MS)));
   }
 }

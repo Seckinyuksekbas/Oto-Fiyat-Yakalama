@@ -1,5 +1,7 @@
 import type { NestExpressApplication } from '@nestjs/platform-express';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import Redis from 'ioredis';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { RedisService } from '../src/infra/redis.service';
 import { PrismaService } from '../src/infra/prisma.service';
 import { UserEventsService } from '../src/infra/user-events.service';
 import { SSE_MAX_LIFETIME_MS, SSE_PING_MS } from '../src/modules/me/notifications.controller';
@@ -122,6 +124,43 @@ describe('/me/notifications', () => {
     expect(events.listenerCount(A.user.id)).toBe(0);
   });
 
+
+  it('SSE: an event published right after connect is not lost (subscribe before ready)', async () => {
+    const A = await registerUser(app);
+    const sse = await openSse(app, await loginCookie(app, A.email, A.password));
+    open.push(sse);
+    const n = await seedNotification(app, A.user.id);
+    await app.get(UserEventsService).publish(A.user.id, {
+      type: 'notification',
+      notification: { id: n.id, kind: 'SECURITY', channel: 'IN_APP', status: 'SENT', payload: n.payload, createdAt: n.createdAt.toISOString() },
+    });
+    const ev = await sse.waitFor((e) => e.event === 'notification');
+    expect(ev.data.id).toBe(n.id);
+    const names = sse.events.map((e) => e.event);
+    expect(names.indexOf('ready')).toBeLessThan(names.indexOf('notification'));
+  });
+
+  it('UserEventsService retries the Redis subscription after a failed psubscribe', async () => {
+    const svc = new UserEventsService(app.get(RedisService));
+    const spy = vi.spyOn(Redis.prototype, 'psubscribe').mockRejectedValueOnce(new Error('boom'));
+    try {
+      await expect(svc.subscribed()).rejects.toThrow('boom');
+      expect(spy).toHaveBeenCalledTimes(1);
+      const got: number[] = [];
+      const sub = svc.stream('u-retry').subscribe((e) => got.push(e.notification.id));
+      await svc.subscribed();
+      await app.get(UserEventsService).publish('u-retry', {
+        type: 'notification',
+        notification: { id: 7, kind: 'SECURITY', channel: 'IN_APP', status: 'SENT', payload: {}, createdAt: new Date().toISOString() },
+      });
+      await until(() => got.length === 1);
+      expect(got).toEqual([7]);
+      sub.unsubscribe();
+    } finally {
+      spy.mockRestore();
+      await svc.onModuleDestroy();
+    }
+  });
   it('SSE requires authentication', async () => {
     expect((await newAgent(app).get('/api/v1/me/notifications/stream')).status).toBe(401);
   });

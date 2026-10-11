@@ -121,4 +121,9 @@ describe('/me/channels', () => {
     expect(res.body.error.details).toEqual({ channel: 'TELEGRAM' });
     expect((await A.agent.patch('/api/v1/me/channels/TELEGRAM').send({ isEnabled: false })).status).toBe(200);
   });
+
+  it('webhook returns 401 when Telegram is not configured / not in webhook mode', async () => {
+    const res = await newAgent(app).post('/api/v1/telegram/webhook').set('X-Telegram-Bot-Api-Secret-Token', 's'.repeat(40)).send({ update_id: 1 });
+    expect(res.status).toBe(401);
+  });
 });
