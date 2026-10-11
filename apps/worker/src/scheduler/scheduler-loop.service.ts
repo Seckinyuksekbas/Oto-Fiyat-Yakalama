@@ -4,6 +4,7 @@ import type { Env } from '../config/env';
 import { AnalysisSweepService } from './analysis-sweep.service';
 import { MonitorService } from './monitor.service';
 import { NotificationSweepService } from './notification-sweep.service';
+import { RetentionService } from './retention.service';
 import { SubscriptionSweepService } from './subscription-sweep.service';
 import { SchedulerService } from './scheduler.service';
 
@@ -24,6 +25,7 @@ export class SchedulerLoop implements OnApplicationBootstrap, OnModuleDestroy {
     private readonly notifySweep: NotificationSweepService,
     private readonly subscriptionSweep: SubscriptionSweepService,
     private readonly monitor: MonitorService,
+    private readonly retention: RetentionService,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
@@ -73,8 +75,7 @@ export class SchedulerLoop implements OnApplicationBootstrap, OnModuleDestroy {
 
   private async safeCleanup(): Promise<void> {
     try {
-      const r = await this.scheduler.cleanup();
-      this.logger.log(`Temizlik: ${r.systemLogs} log, ${r.scrapeErrors} tarama hatası, ${r.listingIssues} ilan sorunu silindi`);
+      await this.retention.run(); // sonuç (tablo → sayı) RetentionService içinde info log'una yazılır
     } catch (err) {
       this.logger.error(`Temizlik başarısız: ${err instanceof Error ? err.message : String(err)}`);
     }

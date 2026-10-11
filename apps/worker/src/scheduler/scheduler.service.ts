@@ -5,7 +5,6 @@ import { PrismaService } from '../infra/prisma.service';
 import { QueueRegistry } from '../queues/queue-registry';
 
 export const STALE_AFTER_MS = 30 * 60 * 1000;
-export const RETENTION_DAYS = 30;
 
 export { scrapeQueueJobId };
 
@@ -69,15 +68,5 @@ export class SchedulerService {
     });
     if (count > 0) this.logger.warn(`${count} eski tarama işi FAILED olarak kapatıldı`);
     return count;
-  }
-
-  async cleanup(now: Date = new Date()): Promise<{ systemLogs: number; scrapeErrors: number; listingIssues: number }> {
-    const before = new Date(now.getTime() - RETENTION_DAYS * 24 * 60 * 60 * 1000);
-    const [systemLogs, scrapeErrors, listingIssues] = await Promise.all([
-      this.prisma.systemLog.deleteMany({ where: { createdAt: { lt: before } } }),
-      this.prisma.scrapeError.deleteMany({ where: { createdAt: { lt: before } } }),
-      this.prisma.listingIssue.deleteMany({ where: { createdAt: { lt: before } } }),
-    ]);
-    return { systemLogs: systemLogs.count, scrapeErrors: scrapeErrors.count, listingIssues: listingIssues.count };
   }
 }

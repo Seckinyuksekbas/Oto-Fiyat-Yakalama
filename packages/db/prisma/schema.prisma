@@ -183,6 +183,9 @@ model Session {
 
   @@index([userId])
   @@index([familyId])
+  /// Saklama temizliği: süresi dolmuş/iptal oturumlar (expiresAt OR revokedAt → BitmapOr)
+  @@index([expiresAt])
+  @@index([revokedAt])
 }
 
 model EmailVerificationToken {
@@ -508,6 +511,8 @@ model ListingMatch {
   @@unique([searchProfileId, listingId, reason, matchedPrice])
   @@index([userId, createdAt])
   @@index([userId, id])
+  /// ListingAnalysis silinirken FK (ON DELETE CASCADE) kontrolü ve saklama NOT EXISTS sorgusu
+  @@index([analysisId])
 }
 
 model Notification {

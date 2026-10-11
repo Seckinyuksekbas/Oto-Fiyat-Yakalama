@@ -111,18 +111,6 @@ describe('SchedulerService.tick', () => {
   });
 });
 
-describe('SchedulerService.cleanup', () => {
-  it('deletes logs, scrape errors and listing issues older than 30 days', async () => {
-    const source = await createSource(ref, demo.baseUrl);
-    const old = plus(-31 * 24 * 3600_000);
-    await prisma.systemLog.createMany({ data: [{ level: 'WARN', component: 'x', message: 'old', createdAt: old }, { level: 'WARN', component: 'x', message: 'new', createdAt: plus(-24 * 3600_000) }] });
-    await prisma.scrapeError.createMany({ data: [{ sourceId: source.id, kind: 'NETWORK', message: 'old', transient: true, createdAt: old }, { sourceId: source.id, kind: 'NETWORK', message: 'new', transient: true, createdAt: plus(-24 * 3600_000) }] });
-    await prisma.listingIssue.createMany({ data: [{ sourceId: source.id, field: 'price', problem: 'old', createdAt: old }, { sourceId: source.id, field: 'price', problem: 'new', createdAt: plus(-24 * 3600_000) }] });
-    expect(await scheduler.cleanup(T0)).toEqual({ systemLogs: 1, scrapeErrors: 1, listingIssues: 1 });
-    expect(await prisma.systemLog.count()).toBe(1);
-  });
-});
-
 describe('ScrapeWorkerHost', () => {
   it('processes scheduled scrape jobs from the queue end to end', async () => {
     const host = ref.get(ScrapeWorkerHost);
