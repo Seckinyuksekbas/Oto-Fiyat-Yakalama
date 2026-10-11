@@ -14,6 +14,11 @@ describe('maskUrlsInText', () => {
     expect(out).toContain('http://y.test/b?…');
   });
 
+  it('masks query strings of non-http schemes', () => {
+    expect(maskUrlsInText('hata postgres://db/app?password=x ve')).toBe('hata postgres://db/app?… ve');
+    expect(maskUrlsInText('redis://cache:6379/0?auth=abc')).toBe('redis://cache:6379/0?…');
+  });
+
   it('leaves plain text and null untouched', () => {
     expect(maskUrlsInText('düz metin a@b')).toBe('düz metin a@b');
     expect(maskUrlsInText(null)).toBeNull();

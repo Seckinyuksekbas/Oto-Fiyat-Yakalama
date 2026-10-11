@@ -28,7 +28,10 @@ export class SchedulerService {
     for (const source of sources) {
       // Kaynak satır kilidi: admin test taramasıyla iş oluşturma sıralanır (aynı anda iki iş oluşmaz).
       const job = await this.prisma.$transaction(async (tx) => {
-        await tx.$queryRaw`SELECT id FROM "DataSource" WHERE id = ${source.id} FOR UPDATE`;
+        // Kilit altında uygunluğu yeniden oku: bu arada duraklatılmış/izni kalkmış kaynağa iş oluşturulmaz.
+        const [fresh] = await tx.$queryRaw<{ isActive: boolean; health: string; permissionVerifiedAt: Date | null }[]>`
+          SELECT "isActive", health::text AS health, "permissionVerifiedAt" FROM "DataSource" WHERE id = ${source.id} FOR NO KEY UPDATE`;
+        if (!fresh || !fresh.isActive || fresh.health === 'PAUSED' || !fresh.permissionVerifiedAt) return null;
         // Uçuştaki herhangi bir iş (dry-run dahil) yeni zamanlanmış işi engeller.
         const inFlight = await tx.collectionJob.findFirst({ where: { sourceId: source.id, status: { in: ['QUEUED', 'RUNNING'] } }, select: { id: true } });
         if (inFlight) return null;

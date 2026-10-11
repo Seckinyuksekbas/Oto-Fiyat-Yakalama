@@ -253,6 +253,24 @@ describe('blockPrivateAddresses', () => {
     expect(hits).toHaveLength(0);
   });
 
+  it('guards the PROXY host too: a proxy name resolving to a private address is rejected at connect time', async () => {
+    const asked: string[] = [];
+    const err = await client({
+      blockPrivateAddresses: true,
+      proxyUrl: 'http://proxy.example:3128',
+      lookup: async (host) => {
+        asked.push(host);
+        return [{ address: '10.0.0.5', family: 4 }];
+      },
+    })
+      .getText('http://93.184.216.34/p')
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(FetchError);
+    expect(err).toMatchObject({ transient: false });
+    expect(asked).toContain('proxy.example');
+    expect(hits).toHaveLength(0);
+  });
+
   it('rejects a redirect hop that points at a private IP', async () => {
     const mock = new MockAgent();
     mock.disableNetConnect();

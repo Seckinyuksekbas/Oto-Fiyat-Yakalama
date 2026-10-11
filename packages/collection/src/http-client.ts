@@ -92,7 +92,7 @@ export class PoliteHttpClient implements HttpFetcher {
     };
     const agentOptions = { connect, headersTimeout: timeout, bodyTimeout: timeout };
     this.dispatcher =
-      opts.dispatcher ?? (opts.proxyUrl ? new ProxyAgent({ uri: opts.proxyUrl, ...agentOptions }) : new Agent(agentOptions));
+      opts.dispatcher ?? (opts.proxyUrl ? new ProxyAgent({ uri: opts.proxyUrl, ...agentOptions, proxyTls: connect }) : new Agent(agentOptions));
     this.sleep = opts.sleep ?? defaultSleep;
     this.maxAttempts = opts.maxAttempts ?? 3;
     this.limiter = new SourceRateLimiter(opts.redis, opts.sourceId, opts.minRequestGapMs, this.sleep);

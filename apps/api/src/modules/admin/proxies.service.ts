@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { ProxyConfig } from '@oto/db';
-import { Encryptor, guardedLookup, type HostLookup } from '@oto/server-common';
+import { Encryptor, guardedLookup, PRIVATE_ADDRESS_CODE, type HostLookup } from '@oto/server-common';
 import { ErrorCode, type AdminProxyCreate, type AdminProxyUpdate } from '@oto/shared';
 import { ProxyAgent, request } from 'undici';
 import type { AuditCtx } from '../../common/audit/audit-ctx.decorator';
@@ -25,8 +25,9 @@ export const proxyCheckKey = (id: number) => `proxy-check:${id}`;
 export function proxyAgentOptions(uri: string, allowPrivate: boolean, resolver?: HostLookup) {
   return {
     uri,
+    // undici ProxyAgent proxy'ye bağlanırken yalnızca `proxyTls` ile kurulan bağlayıcıyı kullanır (`connect` etkisizdir).
+    proxyTls: { timeout: PROXY_CHECK_TIMEOUT_MS, ...(allowPrivate ? {} : ({ lookup: guardedLookup(resolver) } as object)) },
     requestTls: { timeout: PROXY_CHECK_TIMEOUT_MS },
-    connect: { timeout: PROXY_CHECK_TIMEOUT_MS, ...(allowPrivate ? {} : ({ lookup: guardedLookup(resolver) } as object)) },
   };
 }
 
@@ -116,7 +117,9 @@ export class AdminProxiesService {
     const proxy = await this.prisma.proxyConfig.findUnique({ where: { id } });
     if (!proxy) throw Errors.notFound();
     const url = this.encryptor.decrypt(proxy.urlEncrypted);
-    const acquired = await this.redis.set(proxyCheckKey(id), '1', 'EX', PROXY_CHECK_THROTTLE_SEC, 'NX');
+    const acquired = await this.redis.set(proxyCheckKey(id), '1', 'EX', PROXY_CHECK_THROTTLE_SEC, 'NX').catch(() => {
+      throw new AppError(ErrorCode.INTERNAL, 503, 'Proxy kontrolü şu anda yapılamıyor');
+    });
     if (acquired !== 'OK') throw new AppError(ErrorCode.RATE_LIMITED, 429, `Proxy kontrolü ${PROXY_CHECK_THROTTLE_SEC} saniyede en fazla 1 kez yapılabilir`);
     let latencyMs: number | null = null;
     let error: string | null = null;
@@ -162,6 +165,7 @@ export class AdminProxiesService {
     if (name === 'TimeoutError' || name === 'AbortError') return `Zaman aşımı (${PROXY_CHECK_TIMEOUT_MS / 1000} sn)`;
     const e = err as { code?: string; cause?: { code?: string }; message?: string };
     const code = e.code ?? e.cause?.code;
+    if (code === PRIVATE_ADDRESS_CODE) return 'Proxy özel/iç ağ adresine çözümleniyor';
     let msg = String(e.message ?? err);
     try {
       const u = new URL(proxyUrl);

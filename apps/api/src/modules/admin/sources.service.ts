@@ -159,7 +159,7 @@ export class AdminSourcesService {
     await this.requireSource(id);
     await this.validateRefs(input);
     return this.prisma.$transaction(async (tx) => {
-      const [locked] = await tx.$queryRaw<{ id: number }[]>`SELECT id FROM "DataSource" WHERE id = ${id} FOR UPDATE`;
+      const [locked] = await tx.$queryRaw<{ id: number }[]>`SELECT id FROM "DataSource" WHERE id = ${id} FOR NO KEY UPDATE`;
       if (!locked) throw Errors.notFound();
       const before = await tx.dataSource.findUniqueOrThrow({ where: { id } });
       const { permissionVerified, ...rest } = input;
@@ -191,7 +191,7 @@ export class AdminSourcesService {
 
   async activate(ctx: AuditCtx, id: number) {
     return this.prisma.$transaction(async (tx) => {
-      const [locked] = await tx.$queryRaw<{ id: number }[]>`SELECT id FROM "DataSource" WHERE id = ${id} FOR UPDATE`;
+      const [locked] = await tx.$queryRaw<{ id: number }[]>`SELECT id FROM "DataSource" WHERE id = ${id} FOR NO KEY UPDATE`;
       if (!locked) throw Errors.notFound();
       const before = await tx.dataSource.findUniqueOrThrow({ where: { id } });
       if (!before.permissionVerifiedAt) throw conflict('İzin doğrulanmadan kaynak etkinleştirilemez');
@@ -212,7 +212,7 @@ export class AdminSourcesService {
 
   async pause(ctx: AuditCtx, id: number) {
     return this.prisma.$transaction(async (tx) => {
-      const [locked] = await tx.$queryRaw<{ id: number }[]>`SELECT id FROM "DataSource" WHERE id = ${id} FOR UPDATE`;
+      const [locked] = await tx.$queryRaw<{ id: number }[]>`SELECT id FROM "DataSource" WHERE id = ${id} FOR NO KEY UPDATE`;
       if (!locked) throw Errors.notFound();
       const before = await tx.dataSource.findUniqueOrThrow({ where: { id } });
       if (!before.isActive && before.health === 'PAUSED') return { source: toSourceView(before) };
@@ -241,7 +241,7 @@ export class AdminSourcesService {
     try {
       jobId = await this.prisma.$transaction(async (tx) => {
         // Zamanlayıcı da aynı satır kilidini alır: iş oluşturma sıralanır.
-        const [locked] = await tx.$queryRaw<{ id: number }[]>`SELECT id FROM "DataSource" WHERE id = ${id} FOR UPDATE`;
+        const [locked] = await tx.$queryRaw<{ id: number }[]>`SELECT id FROM "DataSource" WHERE id = ${id} FOR NO KEY UPDATE`;
         if (!locked) throw Errors.notFound();
         const busy = await tx.collectionJob.findFirst({ where: { sourceId: id, status: { in: ['QUEUED', 'RUNNING'] } }, select: { id: true } });
         if (busy) throw conflict('Bu kaynak için devam eden bir iş var');
