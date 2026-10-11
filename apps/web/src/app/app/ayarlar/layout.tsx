@@ -13,6 +13,7 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
   const pathname = usePathname() ?? '';
   return (
     <div className="mx-auto max-w-3xl space-y-6">
+      <h1 className="sr-only">Ayarlar</h1>
       <nav aria-label="Ayarlar bölümleri" className="flex gap-1 overflow-x-auto border-b border-border">
         {TABS.map((t) => {
           const active = t.exact ? pathname === t.href : pathname.startsWith(t.href);

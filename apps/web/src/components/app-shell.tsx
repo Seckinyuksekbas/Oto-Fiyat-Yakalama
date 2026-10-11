@@ -169,9 +169,9 @@ export function AppShell({ children, bellSlot }: { children: ReactNode; bellSlot
             </SheetContent>
           </Sheet>
 
-          <h1 className="min-w-0 flex-1 truncate font-display text-[17px] font-semibold tracking-tight">
+          <p className="min-w-0 flex-1 truncate font-display text-[17px] font-semibold tracking-tight">
             {pageTitle(pathname)}
-          </h1>
+          </p>
 
           <div className="flex items-center gap-1">
             {bellSlot ?? <NotificationBellSlot />}

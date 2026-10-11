@@ -43,6 +43,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
         <Toaster
           theme={theme}
           position="bottom-right"
+          visibleToasts={3}
+          expand
+          gap={10}
           toastOptions={{
             style: {
               background: 'var(--color-surface-2)',

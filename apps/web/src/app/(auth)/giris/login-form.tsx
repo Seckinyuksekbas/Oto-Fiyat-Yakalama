@@ -9,7 +9,6 @@ import { loginSchema, type LoginInput } from '@oto/shared';
 import { Button } from '@/components/ui/button';
 import { apiFetch, refreshSession } from '@/lib/api';
 import { apiErrorMessage, trErrorMap } from '@/lib/messages';
-import { queryKeys } from '@/lib/queries';
 import { safeNextPath, withRetryFlag } from '@/lib/session';
 import { authLinkClass, Field, FormError, Heading } from '../_components/form-bits';
 
@@ -27,23 +26,30 @@ export function LoginForm() {
         : null;
 
   // Zaten girişli kullanıcı: yalnızca /me başarılı olunca yönlendir (yenileme denenmez).
+  // Kendi anahtarı ve gcTime 0: ortak ['me'] önbelleğindeki bayat başarı (ör. çıkıştan hemen sonra) yönlendirmez;
+  // yalnızca bu bileşen bağlandıktan sonra yapılan taze istek başarılıysa yönlendirilir.
   const session = useQuery({
-    queryKey: queryKeys.me,
+    queryKey: ['session-check'],
     queryFn: () => apiFetch('/me', { noRefresh: true }),
     enabled: !checking,
     retry: false,
+    gcTime: 0,
+    staleTime: 0,
+    refetchOnMount: 'always',
   });
+  const signedIn = session.isFetchedAfterMount && session.isSuccess;
   useEffect(() => {
-    if (session.isSuccess) router.replace(next);
+    if (signedIn) router.replace(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.isSuccess]);
+  }, [signedIn]);
 
   useEffect(() => {
     if (!checking) return;
     let cancelled = false;
     void refreshSession().then((ok) => {
       if (cancelled) return;
-      if (ok) router.replace(withRetryFlag(next));
+      // Sert gezinme: `_r` yalnızca bu tek yüklemede bulunur, istemci yönlendirmeleriyle kalıcı olmaz.
+      if (ok) window.location.replace(withRetryFlag(next));
       else setChecking(false);
     });
     return () => {

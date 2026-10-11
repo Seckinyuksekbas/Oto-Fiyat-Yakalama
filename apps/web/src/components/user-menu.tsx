@@ -10,7 +10,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { useLogout, useMe } from '@/lib/queries';
+import { useQueryClient } from '@tanstack/react-query';
+import { purgeUserCache, useLogout, useMe } from '@/lib/queries';
 
 function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -24,7 +25,10 @@ export function UserMenu() {
   const router = useRouter();
   const user = me.data?.user;
 
+  const qc = useQueryClient();
   const signOut = () => {
+    // Önce eşzamanlı temizlik: giriş sayfası bayat /me önbelleğini görüp /app'e geri atmasın.
+    purgeUserCache(qc);
     router.replace('/giris');
     logout.mutate();
   };

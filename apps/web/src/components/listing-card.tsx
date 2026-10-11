@@ -6,6 +6,7 @@ import { Car, ExternalLink } from 'lucide-react';
 import type { ListingCard } from '@oto/shared';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/cn';
+import { isHttpUrl } from '@/lib/panel-queries';
 import { FUEL_LABEL, GEAR_LABEL, formatDiscount, formatKm, formatRelative, formatTl } from '@/lib/format';
 import { ConfidenceMeter } from './confidence-meter';
 import { FavoriteButton } from './favorite-button';
@@ -46,6 +47,7 @@ export function DiscountText({ pct, className }: { pct: number | null | undefine
 }
 
 export function ExternalListingLink({ url, title, className }: { url: string; title?: string; className?: string }) {
+  if (!isHttpUrl(url)) return null;
   return (
     <a
       href={url}

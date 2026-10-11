@@ -1,5 +1,6 @@
 'use client';
 import { useEffect } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
 /**
  * `next` yalnızca iç yol olabilir: "/" ile başlar, "//" ya da "/\" ile başlamaz.
@@ -39,6 +40,23 @@ export function stripRetryFlagFromLocation(): void {
   const cur = window.location.pathname + window.location.search + window.location.hash;
   if (!new URLSearchParams(window.location.search).has(RETRY_FLAG)) return;
   window.history.replaceState(window.history.state, '', stripRetryFlag(cur));
+}
+
+/** Panel düzeninde: adres çubuğundaki `_r` işaretini (gezinme sonrası da) siler. */
+export function RetryFlagStripper(): null {
+  const params = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const has = params.has(RETRY_FLAG);
+  useEffect(() => {
+    if (!has) return;
+    const next = new URLSearchParams(params.toString());
+    next.delete(RETRY_FLAG);
+    const qs = next.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [has, pathname]);
+  return null;
 }
 
 type Listener = () => void;

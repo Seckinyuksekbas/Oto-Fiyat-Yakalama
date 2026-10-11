@@ -91,9 +91,12 @@ describe('LoginForm', () => {
 
   it('with try_refresh=1 refreshes the session first and returns to next', async () => {
     search = new URLSearchParams({ next: '/app/favoriler', try_refresh: '1' });
+    const hard = vi.fn();
+    vi.stubGlobal('location', { ...window.location, replace: hard });
     server.use(http.post('/api/v1/auth/refresh', () => new HttpResponse(null, { status: 204 })));
     renderWithClient(<LoginForm />);
-    await waitFor(() => expect(replace).toHaveBeenCalledWith('/app/favoriler?_r=1'));
+    await waitFor(() => expect(hard).toHaveBeenCalledWith('/app/favoriler?_r=1'));
+    vi.unstubAllGlobals();
   });
 
   it('with try_refresh=1 falls back to the form when refresh fails', async () => {

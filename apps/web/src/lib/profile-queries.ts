@@ -10,6 +10,7 @@ import {
   type Transmission,
 } from '@oto/shared';
 import { ApiError, apiFetch } from './api';
+import { CHANNELS_KEY, type ChannelsResponse } from './channels';
 import { queryKeys, useMe, type MeResponse } from './queries';
 
 /* ------------------------------------------------------------------ */
@@ -66,11 +67,6 @@ export interface PreviewResult {
   estimatedDailyMatches: number;
 }
 
-export interface ChannelsResponse {
-  items: Array<{ type: 'IN_APP' | 'TELEGRAM'; linked?: boolean; isVerified: boolean; isEnabled: boolean }>;
-  telegramAvailable: boolean;
-}
-
 /** /me yanıtı; abonelik limitleri profil formu için gerekli. */
 export interface ProfileLimits {
   maxProfiles: number;
@@ -87,7 +83,7 @@ export const profileKeys = {
   list: ['profiles', 'list'] as const,
   detail: (id: string) => ['profiles', 'detail', id] as const,
   preview: (hash: string) => ['profiles', 'preview', hash] as const,
-  channels: ['channels'] as const,
+  channels: CHANNELS_KEY,
 };
 
 /* ------------------------------------------------------------------ */
@@ -347,6 +343,8 @@ function useInvalidateProfiles() {
     void qc.invalidateQueries({ queryKey: ['search-profiles'] });
     void qc.invalidateQueries({ queryKey: queryKeys.me });
     void qc.invalidateQueries({ queryKey: queryKeys.dashboard });
+    void qc.invalidateQueries({ queryKey: ['subscription'] });
+    void qc.invalidateQueries({ queryKey: ['matches'] });
   };
 }
 

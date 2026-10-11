@@ -2,8 +2,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { SubscriptionView } from '@oto/shared';
 import { apiFetch } from './api';
+import { CHANNELS_KEY, type ChannelsResponse } from './channels';
 import { queryKeys } from './queries';
 import { emitLoggedOut } from './session';
+
+export type { ChannelItem, ChannelsResponse } from './channels';
 
 export interface SessionItem {
   id: string;
@@ -11,18 +14,6 @@ export interface SessionItem {
   userAgent: string | null;
   lastUsedAt: string;
   current: boolean;
-}
-
-export interface ChannelItem {
-  type: 'IN_APP' | 'TELEGRAM';
-  linked?: boolean;
-  isVerified: boolean;
-  isEnabled: boolean;
-}
-
-export interface ChannelsResponse {
-  items: ChannelItem[];
-  telegramAvailable: boolean;
 }
 
 export interface TelegramLink {
@@ -33,7 +24,7 @@ export interface TelegramLink {
 export const settingsKeys = {
   subscription: ['subscription'] as const,
   sessions: ['sessions'] as const,
-  channels: ['channels'] as const,
+  channels: CHANNELS_KEY,
 };
 
 export function useSubscription() {

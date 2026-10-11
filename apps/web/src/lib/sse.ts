@@ -200,6 +200,12 @@ function showOverflowToast(count: number): void {
   toast(`+${count} yeni eşleşme`, { id: 'notif-overflow' });
 }
 
+let lastReadyAt = 0;
+/** Akışın `ready` olayıyla sayacı en son yazdığı an (ms). */
+export function getLastReadyAt(): number {
+  return lastReadyAt;
+}
+
 export const NOTIFICATION_KEYS = {
   unread: ['notifications', 'unread'] as const,
   list: ['notifications', 'list'] as const,
@@ -224,6 +230,7 @@ export function useNotificationStream(): void {
     const stream = createNotificationStream({
       refresh: refreshSessionDetailed,
       onReady: ({ unreadCount }) => {
+        lastReadyAt = Date.now();
         qc.setQueryData<number>(NOTIFICATION_KEYS.unread, unreadCount);
         void qc.invalidateQueries({ queryKey: NOTIFICATION_KEYS.list });
       },

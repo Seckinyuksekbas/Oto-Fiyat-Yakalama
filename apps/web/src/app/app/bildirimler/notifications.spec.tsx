@@ -136,10 +136,12 @@ describe('notifications page', () => {
 
   it('"Tümünü okundu yap" posts {all:true} and resets the counter', async () => {
     let body: unknown;
+    let read = false;
     server.use(
-      http.get('*/api/v1/me/notifications', () => page([row(1), row(2)])),
+      http.get('*/api/v1/me/notifications', () => (read ? HttpResponse.json({ items: [], nextCursor: null, unreadCount: 0 }) : page([row(1), row(2)]))),
       http.post('*/api/v1/me/notifications/read', async ({ request }) => {
         body = await request.json();
+        read = true;
         return HttpResponse.json({ updated: 2 });
       }),
     );

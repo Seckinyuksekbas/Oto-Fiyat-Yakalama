@@ -1,5 +1,5 @@
 'use client';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import type { Dashboard } from '@oto/shared';
 import { apiFetch } from './api';
 import { emitLoggedOut } from './session';
@@ -25,6 +25,12 @@ export interface MeResponse {
 
 export function useMe() {
   return useQuery({ queryKey: queryKeys.me, queryFn: () => apiFetch<MeResponse>('/me') });
+}
+
+/** Çıkışta oturuma özgü tüm önbelleği (katalog hariç) eşzamanlı olarak atar; bayat /me girişe sızmasın. */
+export function purgeUserCache(qc: QueryClient): void {
+  void qc.cancelQueries();
+  qc.removeQueries({ predicate: (q) => q.queryKey[0] !== 'catalog' });
 }
 
 export function useLogout() {

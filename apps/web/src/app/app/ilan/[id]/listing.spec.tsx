@@ -318,3 +318,19 @@ describe('İlan detayı', () => {
     await vi.waitFor(() => expect(method).toBe('PUT'));
   });
 });
+
+describe('Emsal tablosu Durum sütunu', () => {
+  it('hiçbir satırda rozet yoksa Durum sütunu gizlenir', async () => {
+    mockDetail(detail({ comparables: [comp(101), comp(102)] }));
+    renderWithClient(<ListingPage />);
+    await screen.findByRole('heading', { level: 1 });
+    expect(screen.queryByRole('columnheader', { name: 'Durum' })).not.toBeInTheDocument();
+  });
+
+  it('en az bir satırda rozet varsa Durum sütunu görünür', async () => {
+    mockDetail(detail());
+    renderWithClient(<ListingPage />);
+    await screen.findByRole('heading', { level: 1 });
+    expect(screen.getByRole('columnheader', { name: 'Durum' })).toBeInTheDocument();
+  });
+});

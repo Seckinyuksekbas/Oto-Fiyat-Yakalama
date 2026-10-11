@@ -3,7 +3,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { toast } from 'sonner';
 import { apiFetch } from './api';
 import type { NotificationView } from './notification-text';
-import { NOTIFICATION_KEYS } from './sse';
+import { NOTIFICATION_KEYS, getLastReadyAt } from './sse';
 
 export interface NotificationsPage {
   items: NotificationView[];
@@ -27,9 +27,11 @@ export function useUnreadCount() {
   return useQuery({
     queryKey: NOTIFICATION_KEYS.unread,
     queryFn: async () => {
+      const startedAt = Date.now();
       const fetched = (await apiFetch<NotificationsPage>('/me/notifications', { query: { limit: 1 } })).unreadCount;
-      // Akış bu arada `ready` ile daha taze bir değer yazdıysa onu ezme.
-      return qc.getQueryData<number>(NOTIFICATION_KEYS.unread) ?? fetched;
+      // Sunucu değeri esastır; yalnızca akış istek başladıktan SONRA `ready` yazdıysa o daha tazedir.
+      if (getLastReadyAt() > startedAt) return qc.getQueryData<number>(NOTIFICATION_KEYS.unread) ?? fetched;
+      return fetched;
     },
     staleTime: Infinity,
     refetchOnWindowFocus: false,
@@ -62,7 +64,8 @@ export function useMarkRead() {
   return useMutation({
     mutationFn: (input: MarkReadInput) =>
       apiFetch<{ updated: number }>('/me/notifications/read', { method: 'POST', json: input }),
-    onMutate: (input) => {
+    onMutate: async (input) => {
+      await qc.cancelQueries({ queryKey: NOTIFICATION_KEYS.unread });
       const prev = qc.getQueryData<number>(NOTIFICATION_KEYS.unread);
       if ('all' in input) qc.setQueryData<number>(NOTIFICATION_KEYS.unread, 0);
       else qc.setQueryData<number>(NOTIFICATION_KEYS.unread, (c) => Math.max(0, (c ?? 0) - input.ids.length));
@@ -72,11 +75,9 @@ export function useMarkRead() {
       qc.setQueryData<number | undefined>(NOTIFICATION_KEYS.unread, ctx?.prev);
       toast.error('Okundu olarak işaretlenemedi. Bir süre sonra yeniden deneyin.');
     },
-    onSuccess: (res, input, ctx) => {
-      if ('all' in input) qc.setQueryData<number>(NOTIFICATION_KEYS.unread, 0);
-      else if (ctx?.prev !== undefined) qc.setQueryData<number>(NOTIFICATION_KEYS.unread, Math.max(0, ctx.prev - res.updated));
-    },
     onSettled: () => {
+      // Sayaç sunucudan yeniden türetilir (iyimser azaltma yalnızca geçici).
+      void qc.invalidateQueries({ queryKey: NOTIFICATION_KEYS.unread });
       void qc.invalidateQueries({ queryKey: NOTIFICATION_KEYS.list });
     },
   });

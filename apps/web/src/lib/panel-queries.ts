@@ -78,10 +78,8 @@ export function parseOpportunityParams(sp: URLSearchParams): { filters: Opportun
   const hasMake = !!sp.get('make') && validFilter('make', sp.get('make') ?? '');
   const kept = new URLSearchParams();
   for (const [k, v] of sp) {
-    if (!(OPPORTUNITY_FILTER_KEYS as readonly string[]).includes(k)) {
-      kept.append(k, v);
-      continue;
-    }
+    // Bilinmeyen anahtarlar (ör. kalıntı `_r`) atılır.
+    if (!(OPPORTUNITY_FILTER_KEYS as readonly string[]).includes(k)) continue;
     const key = k as (typeof OPPORTUNITY_FILTER_KEYS)[number];
     if (filters[key] !== undefined || !validFilter(k, v) || (k === 'model' && !hasMake)) continue;
     filters[key] = v;

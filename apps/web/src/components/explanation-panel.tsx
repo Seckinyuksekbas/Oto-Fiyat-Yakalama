@@ -123,6 +123,8 @@ function CompBadges({ c }: { c: ListingDetail['comparables'][number] }) {
   );
 }
 
+const hasBadge = (c: ListingDetail['comparables'][number]) => c.outlier || c.clamped || c.damaged || c.status === 'REMOVED';
+
 function CompTitle({ c }: { c: ListingDetail['comparables'][number] }) {
   return isHttpUrl(c.url) ? (
     <a href={c.url} target="_blank" rel="noopener noreferrer nofollow" className="inline-flex max-w-full items-center gap-1 hover:text-accent">
@@ -293,7 +295,7 @@ export function ExplanationPanel({ detail }: { detail: ListingDetail }) {
                     <th scope="col" className="px-3 py-2 text-right font-medium">Km</th>
                     <th scope="col" className="px-3 py-2 text-right font-medium">İlan fiyatı</th>
                     <th scope="col" className="px-3 py-2 text-right font-medium">Düzeltilmiş fiyat</th>
-                    <th scope="col" className="px-3 py-2 font-medium">Durum</th>
+                    {comps.some(hasBadge) && <th scope="col" className="px-3 py-2 font-medium">Durum</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -307,9 +309,11 @@ export function ExplanationPanel({ detail }: { detail: ListingDetail }) {
                       <td className="num px-3 py-2 text-right">{formatKm(c.km)}</td>
                       <td className="num px-3 py-2 text-right">{formatTl(c.price)}</td>
                       <td className="num px-3 py-2 text-right">{formatTl(c.adjusted)}</td>
-                      <td className="px-3 py-2">
-                        <CompBadges c={c} />
-                      </td>
+                      {comps.some(hasBadge) && (
+                        <td className="px-3 py-2">
+                          <CompBadges c={c} />
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>

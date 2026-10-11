@@ -94,7 +94,12 @@ export function FavoriteButton({ listingId, isFavorite, title, onChange, classNa
     onChange?.(next);
     try {
       await apiFetch<void>(`/me/favorites/${listingId}`, next ? { method: 'PUT', json: {} } : { method: 'DELETE' });
-      await Promise.all(FAVORITE_CACHE_ROOTS.map((root) => qc.invalidateQueries({ queryKey: [root] })));
+      // Fırsat listeleri yama ile zaten güncel; yeniden çekmek sıralamayı/kaydırmayı bozar. Diğerleri tazelenir.
+      await Promise.all(
+        FAVORITE_CACHE_ROOTS.map((root) =>
+          qc.invalidateQueries({ queryKey: [root], ...(root === 'opportunities' ? { refetchType: 'none' as const } : {}) }),
+        ),
+      );
     } catch (err) {
       for (const [key, data] of snapshot) qc.setQueryData(key, data);
       if (mounted.current) setFav(prev);

@@ -8,6 +8,7 @@ pnpm db:up && pnpm build:packages && pnpm db:migrate && pnpm db:seed
 PUBLIC_BASE_URL=http://localhost:3000 pnpm dev:api   # http://localhost:3001
 pnpm dev:web                                          # http://localhost:3000
 ```
+- **Geliştirme notu:** worker ve scheduler `nest start --watch` ile aynı `dist` klasörünü paylaşır; ikisini birden başlatmak derlemeleri çakıştırır. Birini önce başlatın ya da `pnpm --filter @oto/worker build` yapıp her ikisini `node dist/main.js` ile çalıştırın.
 - Tarayıcı yalnızca web origin'ine (`:3000`) konuşur. `/api/*` istekleri Next `rewrites` ile `API_ORIGIN` (varsayılan `http://localhost:3001`) adresine yönlenir; çerezler böylece birinci taraf kalır, CORS gerekmez.
 - **`API_ORIGIN` build zamanında sabitlenir** (rewrites `next build` sırasında çözülür). Üretim derlemesi doğru `API_ORIGIN` ile yapılmalıdır; `next start` sırasında değiştirmek etkisizdir.
 - API ortamında `PUBLIC_BASE_URL=http://localhost:3000` olmalıdır (e-posta bağlantıları ve Telegram "Analizi gör" düğmesi web'e gitsin).
@@ -31,12 +32,12 @@ pnpm dev:web                                          # http://localhost:3000
 | `/app/ayarlar`, `/app/ayarlar/guvenlik`, `/app/ayarlar/kanallar` | Hesap, oturumlar/şifre, Telegram bağlama ve kanallar |
 
 ## Oturum, middleware ve yenileme modeli
-- **Middleware (`src/middleware.ts`)** yalnızca `/app/*` için çalışır ve `access_token` çerezinin varlığına bakar. `refresh_token` çerezi yalnızca `/api/v1/auth` yoluna kısıtlı olduğundan `/app` isteklerinde görünmez. Çerez yoksa `/giris?next=<yol>&try_refresh=1` yönlendirmesi yapılır; giriş sayfası istemcide bir kez oturum yenilemeyi dener, başarılıysa `next`'e `_r=1` ekleyerek döner.
-- **`_r` döngü koruması:** `_r=1` ile gelen istek hâlâ çerezsizse `/giris?reason=failed` verilir (`try_refresh` eklenmez); yenileme sonsuz döngüye girmez. `next` içinden `_r` temizlenir.
+- **Middleware (`src/middleware.ts`)** yalnızca `/app/*` için çalışır ve `access_token` çerezinin varlığına bakar. `refresh_token` çerezi yalnızca `/api/v1/auth` yoluna kısıtlı olduğundan `/app` isteklerinde görünmez. Çerez yoksa `/giris?next=<yol>&try_refresh=1` yönlendirmesi yapılır; giriş sayfası istemcide bir kez oturum yenilemeyi dener, başarılıysa `next`'e `_r=1` ekleyerek **sert gezinme** (`window.location.replace`) ile döner.
+- **`_r` döngü koruması:** `_r=1` ile gelen istek hâlâ çerezsizse `/giris?reason=failed` verilir (`try_refresh` eklenmez); yenileme sonsuz döngüye girmez. `next` içinden `_r` temizlenir. **`_r` kalıcı olmaz:** sert gezinme istemci yönlendirme durumunu sıfırlar; ayrıca panel düzenindeki `RetryFlagStripper` adres çubuğundan `_r`yi siler (diğer parametreleri korur) ve `parseOpportunityParams` `_r` dahil bilinmeyen tüm anahtarları atar, böylece süzgeç değişikliklerinde de sızmaz.
 - **`safeNextPath`:** `next` parametresi yalnızca `/app` ile başlayan, aynı origin'e ait yollara izin verir (`//`, ters eğik çizgi, mutlak URL, kontrol karakterleri/DEL reddedilir); aksi halde `/app`.
 - **`apiFetch` (`lib/api.ts`)**: `credentials: 'include'`; mutasyonlarda `X-Requested-With: XMLHttpRequest` (API CSRF guard'ı). 401 (`UNAUTHENTICATED` / `TOKEN_INVALID`) gelirse tek uçuşlu (single-flight) `POST /auth/refresh` yapılıp istek bir kez tekrarlanır; eşzamanlı istekler aynı yenileme promise'ini paylaşır. `/auth/*` yolları ve `noRefresh: true` yenileme denemez.
 - **Üç durumlu yenileme sonucu** (`refreshSessionDetailed`): `ok` | `expired` | `transient`. Yalnızca 401 sonuçları (`TOKEN_INVALID`, `REFRESH_REUSED`, ikinci `REFRESH_RACE`) `expired` sayılır ve oturum-bitti işleyicisi çalışır (2 sn'de bir kez; `REFRESH_REUSED` için `/giris?reason=reused`). Ağ hatası, 5xx ve 429 `transient`tir: kullanıcı oturumdan atılmaz, istek özgün hatayla düşer. `REFRESH_RACE` 300 ms sonra bir kez yeniden denenir.
-- Çıkış: önce yönlendirme, sonra önbellek temizliği (navigate-then-clear); bildirim akışı oturum yayıncısıyla kapatılır.
+- Çıkış: `purgeUserCache` ile (katalog hariç) önbellek eşzamanlı iptal/silinir, sonra `/giris`e yönlenir ve oturum sonlandırılır; bildirim akışı oturum yayıncısıyla kapatılır. Giriş sayfasının "zaten girişli" denetimi kendi anahtarını (`['session-check']`, `gcTime: 0`) kullanır ve yalnızca bağlandıktan sonraki taze `/me` başarısında yönlendirir; bayat `['me']` önbelleği yönlendirme yapmaz.
 
 ## Veri çekme ve önbellek sözleşmesi
 - TanStack Query; sorgu anahtarları `lib/*-queries.ts` içinde.
@@ -51,6 +52,7 @@ Sunucu tarafı: [notifications.md](notifications.md). Akış `GET /api/v1/me/not
 - **Proaktif yenileme 14 dk 30 sn:** sunucu akışı 15 dk'da kapatır; kopuştan 30 sn önce `refreshSessionDetailed` ile token yenilenip yeniden bağlanılır.
 - Hata: üstel geri çekilme (1 sn → 30 sn, ±%20 jitter), her yeniden bağlanma öncesi yenileme. Yenileme `transient` ise (ya da fırlatırsa) yeniden denenir; **`expired` ise akış durur** ve bir daha bağlanmaz. Çıkışta akış `closeNotificationStream` ile kapatılır; tek aktif akış kuralı StrictMode çift bağlantısını engeller.
 - **Toast:** MATCH bildirimleri 5 sn'de en fazla 3 toast; fazlası tek "+N yeni eşleşme" toast'unda toplanır. SECURITY/SYSTEM bildirimleri sınırlayıcıya takılmaz.
+- Sayaç: `useUnreadCount` sunucu değerini döndürür (akış, istek başladıktan sonra `ready` yazdıysa o daha tazedir); okundu işaretleme iyimser düşürür, sonra sayacı sunucudan yeniden çeker.
 - Zil: sayaç `aria-live` bölgesiyle duyurulur; okundu işaretleme hata durumunda geri alınır.
 
 ## Tasarım sistemi: "Gece Showroom"
@@ -66,6 +68,7 @@ Sunucu tarafı: [notifications.md](notifications.md). Akış `GET /api/v1/me/not
 ## Erişilebilirlik kuralları
 - "İçeriğe geç" bağlantısı; tüm etkileşimli öğelerde görünür `:focus-visible` (amber, 2px); menülerde görünür odak çubuğu.
 - Durum değişiklikleri `aria-live` bölgeleriyle duyurulur (form hataları, zil, sihirbaz adımları); adım değişiminde odak taşınır.
+- Her sayfada tek `<h1>` (kabuk başlığı `<p>`; h1 sayfa içeriğinde, bazı sayfalarda `sr-only`); sayfa başlıkları rota `metadata`sından (`Fırsatlar · Oto Fırsat`).
 - Renk tek başına anlam taşımaz; `prefers-reduced-motion` animasyonları keser.
 - Mobil (390 px): çekmece menü yeniden boyutlanınca kapanır; tablolar kart satırlarına dönüşür.
 
