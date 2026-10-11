@@ -504,7 +504,8 @@ model ListingMatch {
   listingId       Int
   listing         Listing         @relation(fields: [listingId], references: [id], onDelete: Cascade)
   analysisId      Int
-  analysis        ListingAnalysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  /// NoAction: referanslı analiz silinemez (saklama yarışında eşleşme cascade ile silinmesin); Listing silinince eşleşme listingId üzerinden zaten silinir
+  analysis        ListingAnalysis @relation(fields: [analysisId], references: [id], onDelete: NoAction)
   reason          MatchReason
   matchedPrice    BigInt
   createdAt       DateTime        @default(now())

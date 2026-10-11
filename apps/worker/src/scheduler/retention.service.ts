@@ -52,51 +52,120 @@ export class RetentionService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  /** Günlük temizlik. Tablo başına silinen satır sayısını döner. Tablolar sırayla (paralel değil) işlenir. */
+  /**
+   * Günlük temizlik. Tablo başına silinen satır sayısını döner. Tablolar sırayla (paralel değil) işlenir;
+   * bir tablodaki hata loglanır ve diğer tablolar yine işlenir (o tablonun sayısı hataya kadar silinenlerdir).
+   */
   async run(now: Date = new Date()): Promise<RetentionResult> {
     const before = (days: number) => new Date(now.getTime() - days * DAY_MS);
     const created = (days: number) => Prisma.sql`t."createdAt" < ${before(days)}`;
     const usedOrExpired = (days: number) => Prisma.sql`(t."usedAt" < ${before(days)} OR t."expiresAt" < ${before(days)})`;
-    const r = {} as RetentionResult;
-
-    r.systemLogs = await this.deleteBatched('SystemLog', created(RETENTION.systemLogDays));
-    r.scrapeErrors = await this.deleteBatched('ScrapeError', created(RETENTION.scrapeErrorDays));
-    r.listingIssues = await this.deleteBatched('ListingIssue', created(RETENTION.listingIssueDays));
-    r.auditLogs = await this.deleteBatched('AuditLog', created(RETENTION.auditLogDays));
-    // Notification → ListingMatch FK'si bildirimden eşleşmeye doğrudur: bildirim silmek eşleşmeye dokunmaz.
-    r.notifications = await this.deleteBatched('Notification', created(RETENTION.notificationDays));
     const sessionCut = before(RETENTION.sessionDays);
-    r.sessions = await this.deleteBatched('Session', Prisma.sql`(t."expiresAt" < ${sessionCut} OR t."revokedAt" < ${sessionCut})`);
-    r.emailVerificationTokens = await this.deleteBatched('EmailVerificationToken', usedOrExpired(RETENTION.tokenDays));
-    r.passwordResetTokens = await this.deleteBatched('PasswordResetToken', usedOrExpired(RETENTION.tokenDays));
-    r.telegramLinkTokens = await this.deleteBatched('TelegramLinkToken', usedOrExpired(RETENTION.tokenDays));
-    // ListingMatch.analysisId ON DELETE CASCADE: eşleşmesi olan analiz silinirse eşleşme (ve bildirimleri) de silinir,
-    // dedup anahtarı kaybolur ve NEW yeniden tetiklenebilir. Bu yüzden referanslı analizler ASLA silinmez.
-    // Ek korumalar: eşleştirme kuyruğuna hiç gönderilememiş olay (sweep/admin yeniden gönderebilir) ve ilanın
-    // ilk analizi (bildirim planlayıcısı "ilk-görülme NEW" kararını önceki analiz sayısından verir) kalır.
-    r.analyses = await this.deleteBatched(
-      'ListingAnalysis',
-      Prisma.sql`${created(RETENTION.analysisDays)}
-        AND NOT EXISTS (SELECT 1 FROM "Listing" l WHERE l."latestAnalysisId" = t.id)
-        AND NOT EXISTS (SELECT 1 FROM "ListingMatch" m WHERE m."analysisId" = t.id)
-        AND (t."matchEvent" IS NULL OR t."matchQueuedAt" IS NOT NULL)
-        AND EXISTS (SELECT 1 FROM "ListingAnalysis" p WHERE p."listingId" = t."listingId" AND p.id < t.id)`,
-    );
+    const r = {} as RetentionResult;
+    const failed: string[] = [];
 
-    this.logger.log(`Saklama temizliği: ${Object.entries(r).map(([k, n]) => `${k}=${n}`).join(', ')}`);
+    const steps: Array<[keyof RetentionResult, Table, (add: (n: number) => void) => Promise<void>]> = [
+      ['systemLogs', 'SystemLog', (add) => this.deleteBatched('SystemLog', created(RETENTION.systemLogDays), add)],
+      ['scrapeErrors', 'ScrapeError', (add) => this.deleteBatched('ScrapeError', created(RETENTION.scrapeErrorDays), add)],
+      ['listingIssues', 'ListingIssue', (add) => this.deleteBatched('ListingIssue', created(RETENTION.listingIssueDays), add)],
+      ['auditLogs', 'AuditLog', (add) => this.deleteBatched('AuditLog', created(RETENTION.auditLogDays), add)],
+      // Notification → ListingMatch FK'si bildirimden eşleşmeye doğrudur: bildirim silmek eşleşmeye dokunmaz.
+      ['notifications', 'Notification', (add) => this.deleteBatched('Notification', created(RETENTION.notificationDays), add)],
+      ['sessions', 'Session', (add) => this.deleteBatched('Session', Prisma.sql`(t."expiresAt" < ${sessionCut} OR t."revokedAt" < ${sessionCut})`, add)],
+      ['emailVerificationTokens', 'EmailVerificationToken', (add) => this.deleteBatched('EmailVerificationToken', usedOrExpired(RETENTION.tokenDays), add)],
+      ['passwordResetTokens', 'PasswordResetToken', (add) => this.deleteBatched('PasswordResetToken', usedOrExpired(RETENTION.tokenDays), add)],
+      ['telegramLinkTokens', 'TelegramLinkToken', (add) => this.deleteBatched('TelegramLinkToken', usedOrExpired(RETENTION.tokenDays), add)],
+      ['analyses', 'ListingAnalysis', (add) => this.deleteAnalyses(before(RETENTION.analysisDays), add)],
+    ];
+    for (const [key, table, fn] of steps) {
+      r[key] = 0;
+      try {
+        await fn((n) => (r[key] += n));
+      } catch (err) {
+        failed.push(table);
+        this.logger.error(`Saklama temizliği "${table}" tablosunda başarısız: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    const summary = Object.entries(r).map(([k, n]) => `${k}=${n}`).join(', ');
+    this.logger.log(`Saklama temizliği: ${summary}${failed.length ? ` (hatalı: ${failed.join(', ')})` : ''}`);
     return r;
   }
 
+  /** Her parti kısa bir transaction'da, kilit ve ifade zaman aşımıyla çalışır (tabloyu uzun süre kilitlemez). */
+  private batchTx<T>(query: Prisma.PrismaPromise<T>): Promise<T> {
+    return this.prisma
+      .$transaction([
+        this.prisma.$executeRaw`SET LOCAL lock_timeout = '5s'`,
+        this.prisma.$executeRaw`SET LOCAL statement_timeout = '60s'`,
+        query,
+      ])
+      .then((res) => res[2] as T);
+  }
+
   /** `DELETE ... WHERE id IN (SELECT id ... LIMIT n)` döngüsü; bir parti n'den az silince biter. */
-  private async deleteBatched(table: Table, where: Prisma.Sql): Promise<number> {
+  private async deleteBatched(table: Table, where: Prisma.Sql, add: (n: number) => void): Promise<void> {
     const name = Prisma.raw(`"${table}"`);
-    let total = 0;
     for (;;) {
-      const n = await this.prisma.$executeRaw(
-        Prisma.sql`DELETE FROM ${name} WHERE id IN (SELECT t.id FROM ${name} t WHERE ${where} LIMIT ${RETENTION_BATCH})`,
+      const n = await this.batchTx(
+        this.prisma.$executeRaw(Prisma.sql`DELETE FROM ${name} WHERE id IN (SELECT t.id FROM ${name} t WHERE ${where} LIMIT ${RETENTION_BATCH})`),
       );
-      total += n;
-      if (n < RETENTION_BATCH) return total;
+      add(n);
+      if (n < RETENTION_BATCH) return;
     }
   }
+
+  /**
+   * Eski analizleri id sırasıyla ileri yürüyerek siler: her parti `id > lastId` olan en fazla 5000 eski adayı alır,
+   * korunanları atlar ve lastId'yi görülen en büyük id'ye taşır (korunan satırlar her partide yeniden taranmaz).
+   *
+   * Korunanlar: Listing.latestAnalysisId; herhangi bir ListingMatch referansı; eşleştirme kuyruğuna hiç gönderilememiş
+   * olay (sweep/admin yeniden gönderebilir); ilanın ilk analizi (bildirim planlayıcısı "ilk-görülme NEW" kararını
+   * önceki analiz sayısından verir).
+   *
+   * ListingMatch.analysisId FK'si ON DELETE NO ACTION'dır: NOT EXISTS anlık görüntüsünden sonra eşzamanlı bir
+   * eşleşme eklenirse DELETE FK hatasıyla reddedilir (cascade ile eşleşme silinmez); parti aynı lastId'den
+   * yeniden denenir ve yeni eşleşme artık görüldüğü için o analiz korunur.
+   */
+  private async deleteAnalyses(cut: Date, add: (n: number) => void): Promise<void> {
+    let lastId = 0;
+    let fkRetries = 0;
+    for (;;) {
+      let row: { maxId: number | null; deleted: number };
+      try {
+        [row] = await this.batchTx(
+          this.prisma.$queryRaw<{ maxId: number | null; deleted: number }[]>(Prisma.sql`
+            WITH cand AS (
+              SELECT t.id,
+                (EXISTS (SELECT 1 FROM "Listing" l WHERE l."latestAnalysisId" = t.id)
+                  OR EXISTS (SELECT 1 FROM "ListingMatch" m WHERE m."analysisId" = t.id)
+                  OR (t."matchEvent" IS NOT NULL AND t."matchQueuedAt" IS NULL)
+                  OR NOT EXISTS (SELECT 1 FROM "ListingAnalysis" p WHERE p."listingId" = t."listingId" AND p.id < t.id)) AS keep
+              FROM "ListingAnalysis" t
+              WHERE t.id > ${lastId} AND t."createdAt" < ${cut}
+              ORDER BY t.id
+              LIMIT ${RETENTION_BATCH}
+            ), del AS (
+              DELETE FROM "ListingAnalysis" a USING cand WHERE a.id = cand.id AND NOT cand.keep RETURNING a.id
+            )
+            SELECT (SELECT max(id) FROM cand) AS "maxId", (SELECT count(*) FROM del)::int AS deleted`),
+        );
+      } catch (err) {
+        if (isForeignKeyViolation(err) && fkRetries < 3) {
+          fkRetries += 1;
+          this.logger.warn('Saklama: analiz silinirken eşzamanlı eşleşme eklendi (FK reddi); parti yeniden deneniyor');
+          continue;
+        }
+        throw err;
+      }
+      if (row.maxId === null) return;
+      add(row.deleted);
+      lastId = row.maxId;
+    }
+  }
+}
+
+function isForeignKeyViolation(err: unknown): boolean {
+  const e = err as { code?: string; meta?: { code?: string }; message?: string };
+  return e?.meta?.code === '23503' || e?.code === 'P2003' || /23503|foreign key constraint/i.test(e?.message ?? '');
 }

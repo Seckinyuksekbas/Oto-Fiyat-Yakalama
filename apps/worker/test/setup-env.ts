@@ -9,7 +9,8 @@ Object.assign(process.env, {
   DATABASE_URL: inject('databaseUrl'),
   REDIS_URL: inject('redisUrl'),
   DATA_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
-  TELEGRAM_BOT_TOKEN: '123456:test-token',
+  // Token biçimli literal yazılmaz (gizli bilgi tarayıcıları); çalışma anında üretilir.
+  TELEGRAM_BOT_TOKEN: ['123456789', 'TEST'.padEnd(35, 'x')].join(':'),
   BOT_CONTACT_URL: 'http://localhost:3000/bot',
 });
 

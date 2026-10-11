@@ -17,6 +17,8 @@ export class SchedulerLoop implements OnApplicationBootstrap, OnModuleDestroy {
   private tickTimer?: NodeJS.Timeout;
   private cleanupTimer?: NodeJS.Timeout;
   private ticking = false;
+  /** Önceki temizlik bitmeden yenisi başlamaz (büyük birikimde bir koşu 24 saati aşabilir). */
+  private cleaning = false;
   private lastMonitorAt = 0;
 
   constructor(
@@ -74,10 +76,14 @@ export class SchedulerLoop implements OnApplicationBootstrap, OnModuleDestroy {
   }
 
   private async safeCleanup(): Promise<void> {
+    if (this.cleaning) return;
+    this.cleaning = true;
     try {
       await this.retention.run(); // sonuç (tablo → sayı) RetentionService içinde info log'una yazılır
     } catch (err) {
       this.logger.error(`Temizlik başarısız: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      this.cleaning = false;
     }
   }
 }
