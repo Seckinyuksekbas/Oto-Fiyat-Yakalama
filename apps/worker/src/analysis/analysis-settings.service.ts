@@ -29,7 +29,9 @@ export class AnalysisSettingsService implements OnModuleInit, OnModuleDestroy {
     const sub = this.redis.duplicate();
     sub.on('error', (err: Error) => this.logger.warn(`Ayar aboneliği hatası: ${err.message}`));
     sub.on('message', (_channel: string, key: string) => {
-      if (key === ANALYSIS_SETTINGS_KEY) this.invalidate();
+      if (key !== ANALYSIS_SETTINGS_KEY) return;
+      this.invalidate();
+      this.logger.log(`${SETTINGS_CHANGED_CHANNEL}: ${ANALYSIS_SETTINGS_KEY} önbelleği geçersiz kılındı`);
     });
     // Bağlantı sonradan (ilk abonelik başarısızsa) hazır olduğunda yeniden abone ol; kaçırılmış mesajlar için önbelleği at.
     sub.on('ready', () => {
