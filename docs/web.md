@@ -30,7 +30,10 @@ pnpm dev:web                                          # http://localhost:3000
 | `/app/bildirimler` | Bildirim listesi, okundu işaretleme |
 | `/app/abonelik` | Plan ve limitler (yükseltme ödeme gelene kadar devre dışı) |
 | `/app/ayarlar`, `/app/ayarlar/guvenlik`, `/app/ayarlar/kanallar` | Hesap, oturumlar/şifre, Telegram bağlama ve kanallar |
-| `/admin`, `/admin/kullanicilar`, `/admin/kullanicilar/[id]` | Yönetim paneli (Plan 07): genel bakış, kullanıcılar, kullanıcı detayı. Diğer bölümler Task 11–12 |
+| `/admin`, `/admin/kullanicilar`, `/admin/kullanicilar/[id]` | Yönetim paneli (Plan 07): genel bakış, kullanıcılar, kullanıcı detayı |
+| `/admin/ilanlar`, `/admin/analizler`, `/admin/kaynaklar`, `/admin/isler`, `/admin/proxyler` (+ detaylar) | İlanlar ve sorunlu kayıtlar, analizler, kaynaklar (dry-run test taraması), toplama işleri, proxy'ler |
+| `/admin/sistem`, `/admin/bildirimler`, `/admin/loglar` | Kuyruklar (yeniden dene/temizle), worker'lar, bildirim gecikmesi p50/p95, takılı eşleştirme gönderimleri; başarısız bildirimleri toplu yeniden deneme; sistem logları |
+| `/admin/paketler`, `/admin/ayarlar`, `/admin/denetim` | Yalnızca SUPER_ADMIN: paketler ve limitler, analiz katsayıları ve alarm eşikleri, denetim kayıtları (önce/sonra farkı) |
 
 ## Yönetim paneli (Plan 07, web)
 - **Koruma:** middleware `/admin/*` için de yalnızca `access_token` çerezine bakar. Rol `AdminLayoutClient` (`components/admin/admin-gate.tsx`) içinde `/me`'den okunur; ADMIN/SUPER_ADMIN değilse gerçek 404 ile birebir aynı `NotFoundView` gösterilir (403 değil), kabuk ve akış açılmaz. SUPER_ADMIN'e özel sayfalar gövdelerini `RequireSuperAdmin` ile sarar (ADMIN'e kabuk içinde 404). Asıl yetki API'dedir. `safeNextPath` `/admin` köküne de izin verir.

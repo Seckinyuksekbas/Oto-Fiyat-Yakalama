@@ -335,6 +335,10 @@ describe('subscription change', () => {
     const pro = await planId('PRO');
     expect((await admin.agent.patch(url).send({ planId: pro, endsAt: null, limitOverrides: { channels: ['EMAIL'] } })).status).toBe(400);
     expect((await admin.agent.patch(url).send({ planId: pro, endsAt: null, limitOverrides: { bogus: 1 } })).status).toBe(400);
+    // Paketle aynı üst sınırlar (PLAN_MAXIMA): geçersiz kılma limit sistemini kapatamaz.
+    const over = await admin.agent.patch(url).send({ planId: pro, endsAt: null, limitOverrides: { maxNotificationsPerDay: 100_001 } });
+    expect(over.status).toBe(400);
+    expect(JSON.stringify(over.body.error.details)).toContain('maxNotificationsPerDay');
     const unknown = await admin.agent.patch(url).send({ planId: 'nope', endsAt: null, limitOverrides: null });
     expect(unknown.status).toBe(400);
     expect(unknown.body.error.code).toBe('VALIDATION_FAILED');

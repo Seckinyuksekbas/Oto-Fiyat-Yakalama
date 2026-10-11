@@ -7,19 +7,12 @@ import { EmptyState } from '@/components/empty-state';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import type { AdminOverview, AdminSourceHealth } from '@/lib/admin-api';
+import { QUEUE_LABEL } from '@/lib/admin-ops-api';
 import { useAdminOverview, useRecentAlerts, type AlertItem } from '@/lib/admin-queries';
 import { cn } from '@/lib/cn';
 import { formatDateTime, formatRelative } from '@/lib/format';
 
 const REDIS_DOWN = "Redis'e ulaşılamıyor";
-
-export const QUEUE_LABEL: Record<string, string> = {
-  scrape: 'Tarama',
-  analyze: 'Analiz',
-  match: 'Eşleştirme',
-  notify: 'Bildirim',
-  'notify-telegram': 'Telegram bildirimi',
-};
 
 function Kpis({ o }: { o: AdminOverview }) {
   const n = o.notifications;

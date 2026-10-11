@@ -1,7 +1,7 @@
 'use client';
 import { useId, useState, type ReactNode } from 'react';
 import { Loader2, Lock } from 'lucide-react';
-import { adminPlanCreateSchema, adminPlanUpdateSchema, type PlanLimits } from '@oto/shared';
+import { adminPlanCreateSchema, adminPlanUpdateSchema, PLAN_MAXIMA, type PlanLimits } from '@oto/shared';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { adminErrorMessage, adminFieldErrors, type AdminPlan } from '@/lib/admin-api';
@@ -24,6 +24,8 @@ const LIMIT_FIELDS = [
 type LimitKey = (typeof LIMIT_FIELDS)[number]['key'];
 
 const INT_MESSAGE = '0 veya daha büyük bir tam sayı girin';
+const nf = new Intl.NumberFormat('tr-TR');
+const maxMessage = (max: number) => `En fazla ${nf.format(max)} olabilir`;
 const FREE = 'FREE';
 
 export interface PlanSaved {
@@ -62,12 +64,14 @@ export function PlanForm({ plan, onSaved, onCancel }: { plan?: AdminPlan; onSave
     setChannels((cur) => CHANNEL_ORDER.filter((x) => x === 'IN_APP' || (x === c ? !cur.includes(c) : cur.includes(x))));
   };
 
-  const int = (raw: string, key: string, errs: Record<string, string>): number => {
+  /** Tam sayı ve paylaşılan üst sınır (`PLAN_MAXIMA`, API ile aynı). */
+  const int = (raw: string, key: string, max: number, errs: Record<string, string>): number => {
     const t = raw.trim();
     if (!/^\d+$/.test(t) || !Number.isSafeInteger(Number(t))) {
       errs[key] = INT_MESSAGE;
       return 0;
     }
+    if (Number(t) > max) errs[key] = maxMessage(max);
     return Number(t);
   };
 
@@ -75,12 +79,12 @@ export function PlanForm({ plan, onSaved, onCancel }: { plan?: AdminPlan; onSave
     const errs: Record<string, string> = {};
     if (!editing && !/^[A-Z0-9_]{2,20}$/.test(code.trim())) errs.code = '2–20 karakter: büyük harf, rakam ya da alt çizgi';
     if (name.trim() === '') errs.name = 'Paket adı girin';
-    const priceMonthly = int(price, 'priceMonthly', errs);
+    const priceMonthly = int(price, 'priceMonthly', PLAN_MAXIMA.priceMonthly, errs);
     const lim = {
-      maxSearchProfiles: int(limits.maxSearchProfiles, 'limits.maxSearchProfiles', errs),
-      maxNotificationsPerDay: int(limits.maxNotificationsPerDay, 'limits.maxNotificationsPerDay', errs),
+      maxSearchProfiles: int(limits.maxSearchProfiles, 'limits.maxSearchProfiles', PLAN_MAXIMA.maxSearchProfiles, errs),
+      maxNotificationsPerDay: int(limits.maxNotificationsPerDay, 'limits.maxNotificationsPerDay', PLAN_MAXIMA.maxNotificationsPerDay, errs),
       channels: CHANNEL_ORDER.filter((c) => c === 'IN_APP' || channels.includes(c)),
-      opportunitiesDelayHours: int(limits.opportunitiesDelayHours, 'limits.opportunitiesDelayHours', errs),
+      opportunitiesDelayHours: int(limits.opportunitiesDelayHours, 'limits.opportunitiesDelayHours', PLAN_MAXIMA.opportunitiesDelayHours, errs),
     };
     if (Object.keys(errs).length > 0) return { errs };
     const base = { name: name.trim(), priceMonthly, isActive: isFree ? true : isActive, limits: lim };
@@ -184,9 +188,13 @@ export function PlanForm({ plan, onSaved, onCancel }: { plan?: AdminPlan; onSave
               className="num"
               value={price}
               onChange={(e) => setPrice(e.target.value)}
-              {...a11y('priceMonthly')}
+              {...a11y('priceMonthly', true)}
             />
-            {fieldError('priceMonthly')}
+            {fieldError('priceMonthly') ?? (
+              <p id={hintId('priceMonthly')} className="text-[13px] text-muted">
+                Tam sayı, en fazla <span className="num">{nf.format(PLAN_MAXIMA.priceMonthly)}</span>.
+              </p>
+            )}
           </div>
           <div className="flex flex-col justify-end gap-1.5 pb-1">
             <label className={cn('flex items-center gap-2.5 text-sm', isFree ? 'text-muted' : 'cursor-pointer')}>
@@ -230,7 +238,7 @@ export function PlanForm({ plan, onSaved, onCancel }: { plan?: AdminPlan; onSave
                 />
                 {fieldError(k) ?? (
                   <p id={hintId(k)} className="text-[13px] leading-snug text-muted">
-                    {f.hint}
+                    {f.hint} En fazla <span className="num">{nf.format(PLAN_MAXIMA[f.key])}</span>.
                   </p>
                 )}
               </div>

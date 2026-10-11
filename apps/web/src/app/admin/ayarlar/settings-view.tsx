@@ -1,6 +1,6 @@
 'use client';
-import { useId, useState } from 'react';
-import { AlertTriangle, Loader2, RotateCcw } from 'lucide-react';
+import { useEffect, useId, useState } from 'react';
+import { AlertTriangle, Loader2, RefreshCw, RotateCcw } from 'lucide-react';
 import { toast } from 'sonner';
 import { parseSettingValue, type SettingKey } from '@oto/shared';
 import { EmptyState } from '@/components/empty-state';
@@ -82,18 +82,36 @@ function parseNum(raw: string, kind: FieldKind): number | null {
 
 const isPlain = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 
-/** Doğrulama sorunlarını Türkçe alan mesajlarına çevirir (çapraz kurallar dahil). */
-function issueMessages(key: SettingKey, value: Record<string, unknown>, fields: FieldMeta[]): Record<string, string> {
-  const r = parseSettingValue(key, value);
+const CROSS_FIELDS = new Set(['smallPoolMax', 'theilSenMinPool']);
+
+/**
+ * Doğrulama sorunlarını Türkçe alan mesajlarına çevirir. Sınıflandırma, motorun göreceği tam değer
+ * (`{...defaults, ...merged}`) üzerinden yapılır: aralık içindeki `smallPoolMax`/`theilSenMinPool` sorunu çapraz
+ * kuraldır; bu yamada `minComparables` değiştiyse ona da karşılık gelen hata yazılır.
+ */
+function issueMessages(
+  key: SettingKey,
+  merged: Record<string, unknown>,
+  defaults: Record<string, unknown>,
+  fields: FieldMeta[],
+  patchKeys: ReadonlySet<string> = new Set(),
+): Record<string, string> {
+  const r = parseSettingValue(key, merged);
   if (r.ok) return {};
+  const full: Record<string, unknown> = { ...defaults, ...merged };
+  const label = (k: string) => fields.find((x) => x.key === k)?.label ?? k;
   const out: Record<string, string> = {};
   for (const i of r.issues) {
     const k = String(i.path[0] ?? '');
     const f = fields.find((x) => x.key === k);
     if (!f || out[k]) continue;
-    const v = value[k];
-    if ((k === 'smallPoolMax' || k === 'theilSenMinPool') && typeof v === 'number' && v >= f.min && v <= f.max) {
-      out[k] = 'Bu değer en az emsal sayısından küçük olamaz.';
+    const v = full[k];
+    const min = full.minComparables;
+    if (CROSS_FIELDS.has(k) && typeof v === 'number' && v >= f.min && v <= f.max && typeof min === 'number') {
+      out[k] = `Bu değer en az emsal sayısından (${nf.format(min)}) küçük olamaz; bu alanı artırın ya da en az emsal sayısını düşürün.`;
+      if (patchKeys.has('minComparables') && !out.minComparables) {
+        out.minComparables = `En az emsal sayısı ${label(k).toLocaleLowerCase('tr-TR')} değerinden (${nf.format(v)}) büyük olamaz.`;
+      }
     } else if (typeof v !== 'number') {
       out[k] = 'Kayıtlı değer sayı değil.';
     } else {
@@ -106,20 +124,33 @@ function issueMessages(key: SettingKey, value: Record<string, unknown>, fields: 
 const rangeMessage = (f: FieldMeta) =>
   `${nf.format(f.min)} ile ${nf.format(f.max)} arasında ${f.kind === 'int' ? 'bir tam sayı' : 'bir değer'} girin.`;
 
-function SettingForm({ setting, fields, title, intro, saveLabel, savedText }: {
-  setting: AdminSetting;
+interface SettingCopy {
   fields: FieldMeta[];
   title: string;
   intro: string;
   saveLabel: string;
   savedText: string;
-}) {
+}
+
+interface SettingFormProps extends SettingCopy {
+  setting: AdminSetting;
+  /** Taslak kirliyken sunucuda daha yeni bir değer geldi (başka yönetici). */
+  newer: AdminSetting | null;
+  onReload(): void;
+  onDirtyChange(dirty: boolean): void;
+  onSaved(s: AdminSetting): void;
+}
+
+function SettingForm({ setting, fields, title, intro, saveLabel, savedText, newer, onReload, onDirtyChange, onSaved }: SettingFormProps) {
   const fid = useId();
   const patch = usePatchSetting();
   const stored: Record<string, unknown> = {};
   if (isPlain(setting.value)) for (const f of fields) if (f.key in setting.value) stored[f.key] = setting.value[f.key];
-  const storedIssues = issueMessages(setting.key, stored, fields);
+  const storedIssues = issueMessages(setting.key, stored, setting.defaults, fields);
   const invalid = Object.keys(storedIssues).length > 0;
+  // Worker şeması çapraz kural içermez: kayıtlı değer çapraz kurala takılsa da motor onu uygular. Motor varsayılanlara
+  // ancak değer şemaya hiç uymuyorsa (tip/aralık) düşer; bu durumda API `effective` = varsayılanlar döner.
+  const engineUsesDefaults = fields.some((f) => setting.effective[f.key] !== (f.key in stored ? stored[f.key] : setting.defaults[f.key]));
   const baseline = (k: string): unknown => (k in stored ? stored[k] : setting.effective[k]);
 
   const [draft, setDraft] = useState<Record<string, string>>(() => Object.fromEntries(fields.map((f) => [f.key, toText(baseline(f.key))])));
@@ -127,6 +158,10 @@ function SettingForm({ setting, fields, title, intro, saveLabel, savedText }: {
   const [errors, setErrors] = useState<Record<string, string>>(storedIssues);
   const [formError, setFormError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+
+  const initialText = (k: string) => toText(baseline(k));
+  const dirty = resets.size > 0 || fields.some((f) => (draft[f.key] ?? '') !== initialText(f.key));
+  useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
 
   const edit = (k: string, v: string) => {
     setDraft((d) => ({ ...d, [k]: v }));
@@ -171,7 +206,7 @@ function SettingForm({ setting, fields, title, intro, saveLabel, savedText }: {
         if (v === null) delete merged[k];
         else merged[k] = v;
       }
-      Object.assign(errs, issueMessages(setting.key, merged, fields));
+      Object.assign(errs, issueMessages(setting.key, merged, setting.defaults, fields, new Set(Object.keys(value))));
     }
     setErrors(errs);
     if (Object.keys(errs).length > 0) return;
@@ -180,8 +215,9 @@ function SettingForm({ setting, fields, title, intro, saveLabel, savedText }: {
       return;
     }
     try {
-      await patch.mutateAsync({ key: setting.key, value });
+      const res = await patch.mutateAsync({ key: setting.key, value });
       toast.success(savedText);
+      if (res?.setting) onSaved(res.setting);
     } catch (err) {
       const raw = adminFieldErrors(err);
       const mapped: Record<string, string> = {};
@@ -229,12 +265,36 @@ function SettingForm({ setting, fields, title, intro, saveLabel, savedText }: {
         <p className="max-w-[72ch] text-[13px] text-muted">{intro}</p>
       </header>
 
+      {newer ? (
+        <div role="status" className="mx-5 mt-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-border-strong/60 bg-surface-2 px-3 py-2.5 text-sm">
+          <p>
+            Başka bir yönetici bu ayarı değiştirdi
+            {newer.updatedAt ? (
+              <>
+                {' '}(
+                <time dateTime={newer.updatedAt} title={formatDateTime(newer.updatedAt)}>
+                  {formatRelative(newer.updatedAt)}
+                </time>
+                )
+              </>
+            ) : null}
+            ; kaydetmeden önce yeniden yükleyin. Taslağınız yeniden yüklemede silinir.
+          </p>
+          <Button type="button" variant="secondary" size="sm" onClick={onReload}>
+            <RefreshCw aria-hidden />
+            Yeniden yükle
+          </Button>
+        </div>
+      ) : null}
+
       {invalid ? (
-        <div role="alert" className="mx-5 mt-4 flex items-start gap-2.5 rounded-md border border-warning/40 bg-warning/10 px-3 py-2.5 text-sm text-warning-text">
+        <div role="status" className="mx-5 mt-4 flex items-start gap-2.5 rounded-md border border-warning/40 bg-warning/10 px-3 py-2.5 text-sm text-warning-text">
           <AlertTriangle aria-hidden className="mt-0.5 size-4 shrink-0" />
           <p>
-            Kayıtlı değer geçersiz: motor şu anda bu bölümde varsayılanları kullanıyor ve her kayıt reddedilir. İşaretli alanları
-            düzeltin ya da varsayılana döndürüp kaydedin.
+            {engineUsesDefaults
+              ? 'Kayıtlı değer geçersiz: motor bu bölümde varsayılanları kullanıyor ve düzeltilene kadar her kayıt reddedilir.'
+              : 'Kayıtlı değer kurallarla çelişiyor; motor bu değerleri kullanıyor ama düzeltilene kadar her kayıt reddedilir.'}{' '}
+            İşaretli alanları düzeltin ya da varsayılana döndürüp kaydedin.
           </p>
         </div>
       ) : null}
@@ -325,8 +385,35 @@ function SettingForm({ setting, fields, title, intro, saveLabel, savedText }: {
   );
 }
 
-/** Ayar değiştikçe form yeniden kurulur (taslak sunucudaki son değerden başlar). */
-const formKey = (s: AdminSetting) => `${s.key}:${s.updatedAt ?? 'none'}:${JSON.stringify(s.value)}`;
+/** Ayar sürümü: kayıt zamanı + değer. */
+const versionOf = (s: AdminSetting) => `${s.key}:${s.updatedAt ?? 'none'}:${JSON.stringify(s.value)}`;
+
+/**
+ * Formun taban sürümünü tutar. Sunucuda yeni sürüm gelince taslak temizse form sessizce yenilenir; kirliyse taslak
+ * korunur ve "başka bir yönetici değiştirdi" uyarısı ile yeniden yükleme sunulur. Kendi kaydımız yanıtla tabana yazılır.
+ */
+function SettingSection({ latest, ...copy }: SettingCopy & { latest: AdminSetting }) {
+  const [base, setBase] = useState(latest);
+  const [dirty, setDirty] = useState(false);
+  const changed = versionOf(latest) !== versionOf(base);
+  useEffect(() => {
+    if (changed && !dirty) setBase(latest);
+  }, [changed, dirty, latest]);
+  return (
+    <SettingForm
+      key={versionOf(base)}
+      {...copy}
+      setting={base}
+      newer={changed && dirty ? latest : null}
+      onReload={() => setBase(latest)}
+      onDirtyChange={setDirty}
+      onSaved={(s) => {
+        setDirty(false);
+        setBase(s);
+      }}
+    />
+  );
+}
 
 export function SettingsView() {
   const q = useAdminSettings();
@@ -357,9 +444,8 @@ export function SettingsView() {
     <div className="flex flex-col gap-8">
       <h1 className="sr-only">Ayarlar</h1>
       {analysis ? (
-        <SettingForm
-          key={formKey(analysis)}
-          setting={analysis}
+        <SettingSection
+          latest={analysis}
           fields={ANALYSIS_FIELDS}
           title="Analiz katsayıları"
           intro="Fırsat analiz motorunun (rules-v1) katsayıları. Değişiklik yeni analizlerde geçerli olur; mevcut analizler gece yenilemesinde güncellenir."
@@ -368,9 +454,8 @@ export function SettingsView() {
         />
       ) : null}
       {alerts ? (
-        <SettingForm
-          key={formKey(alerts)}
-          setting={alerts}
+        <SettingSection
+          latest={alerts}
           fields={ALERT_FIELDS}
           title="Alarm eşikleri"
           intro="İzleyici her zamanlayıcı turunda bu eşikleri denetler; aynı alarm 30 dakikada bir kez verilir."

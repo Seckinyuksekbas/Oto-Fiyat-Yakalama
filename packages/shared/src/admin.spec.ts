@@ -19,6 +19,7 @@ import {
   escapeLike,
   maskUrlQuery,
   parseSettingValue,
+  PLAN_MAXIMA,
 } from './index';
 
 describe('escapeLike / maskUrlQuery', () => {
@@ -100,6 +101,15 @@ describe('admin body schemas', () => {
       adminSubscriptionSchema.safeParse({ ...ok, limitOverrides: { channels: ['IN_APP', 'TELEGRAM'] } }).success,
     ).toBe(true);
     expect(adminSubscriptionSchema.safeParse({ ...ok, endsAt: 'nope' }).success).toBe(false);
+  });
+  it('limitOverrides respect PLAN_MAXIMA (same bounds as plans)', () => {
+    const ok = { planId: 'p1', endsAt: null };
+    const r = adminSubscriptionSchema.safeParse({ ...ok, limitOverrides: { maxNotificationsPerDay: PLAN_MAXIMA.maxNotificationsPerDay + 1 } });
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues[0]!.path).toEqual(['limitOverrides', 'maxNotificationsPerDay']);
+    expect(adminSubscriptionSchema.safeParse({ ...ok, limitOverrides: { maxSearchProfiles: PLAN_MAXIMA.maxSearchProfiles } }).success).toBe(true);
+    expect(adminSubscriptionSchema.safeParse({ ...ok, limitOverrides: { opportunitiesDelayHours: 721 } }).success).toBe(false);
+    expect(adminSubscriptionSchema.safeParse({ ...ok, limitOverrides: { channels: ['IN_APP', 'IN_APP'] } }).success).toBe(false);
   });
   const src = {
     code: 'demo-site',

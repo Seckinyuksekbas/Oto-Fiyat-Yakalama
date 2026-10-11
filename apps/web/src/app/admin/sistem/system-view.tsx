@@ -16,6 +16,7 @@ import { ADMIN_PAGE_SIZE } from '@/lib/admin-api';
 import {
   CHANNEL_LABEL,
   EVENT_LABEL,
+  QUEUE_LABEL,
   opsErrorMessage,
   type AdminQueue,
   type AdminWorker,
@@ -33,7 +34,6 @@ import {
 } from '@/lib/admin-ops-queries';
 import { cn } from '@/lib/cn';
 import { formatDateTime, formatRelative } from '@/lib/format';
-import { QUEUE_LABEL } from '../overview-view';
 
 const REDIS_HINT = 'Redis bağlantısı gelince sayılar kendiliğinden yenilenir.';
 const NOTIFY_QUEUES = new Set<AdminQueueName>(['notify', 'notify-telegram']);
@@ -46,6 +46,23 @@ function SectionHead({ id, title, children }: { id: string; title: string; child
       </h2>
       {children}
     </div>
+  );
+}
+
+/** Önceki veri ekrandayken yenileme düştü (ör. Redis kopuk): sayıların bayat olduğunu söyler. */
+function StaleNote({ updatedAt }: { updatedAt: number }) {
+  const iso = new Date(updatedAt).toISOString();
+  return (
+    <p role="status" className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-[13px] text-warning-text">
+      <ServerCrash aria-hidden className="mt-0.5 size-4 shrink-0" />
+      <span>
+        Son veriler (
+        <time dateTime={iso} title={formatDateTime(iso)}>
+          {formatRelative(iso)}
+        </time>
+        ); şu an güncellenemiyor. {REDIS_HINT}
+      </span>
+    </p>
   );
 }
 
@@ -244,6 +261,11 @@ function Queues() {
         </p>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
+          {queues.isError ? (
+            <div className="sm:col-span-2 xl:col-span-3 2xl:col-span-5">
+              <StaleNote updatedAt={queues.dataUpdatedAt} />
+            </div>
+          ) : null}
           {queues.data.map((q) => (
             <QueueCard key={q.name} q={q} onAction={(kind) => setDialog({ kind, queue: q })} />
           ))}
@@ -304,11 +326,14 @@ function Workers() {
           Son 24 saatte sinyal gönderen worker yok. Worker ve zamanlayıcı süreçleri başladığında burada görünür.
         </p>
       ) : (
+        <>
+        {workers.isError ? <StaleNote updatedAt={workers.dataUpdatedAt} /> : null}
         <ul aria-label="Worker'lar" className="rounded-lg border border-border bg-surface text-sm">
           {workers.data.map((w) => (
             <WorkerRow key={`${w.host}:${w.pid}`} w={w} />
           ))}
         </ul>
+        </>
       )}
       <p className="text-xs text-muted">Sinyali 45 saniyeden eski süreçler yanıt vermiyor sayılır; son 24 saatte görülenler listelenir.</p>
     </section>

@@ -167,6 +167,15 @@ export function opsErrorMessage(err: unknown): string {
 
 // ---------------------------------------------------------------- etiketler
 
+/** Kuyruk adları (genel bakış ve sistem izleme). */
+export const QUEUE_LABEL: Record<string, string> = {
+  scrape: 'Tarama',
+  analyze: 'Analiz',
+  match: 'Eşleştirme',
+  notify: 'Bildirim',
+  'notify-telegram': 'Telegram bildirimi',
+};
+
 export const EVENT_LABEL: Record<string, string> = {
   NEW: 'Yeni ilan',
   PRICE_DROP: 'Fiyat düşüşü',

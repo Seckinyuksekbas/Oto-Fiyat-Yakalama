@@ -1,7 +1,7 @@
 import { cloneElement } from 'react';
 import { http, HttpResponse } from 'msw';
 import userEvent from '@testing-library/user-event';
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { server } from '@/test/server';
 import { renderWithClient } from '@/test/render';
@@ -39,6 +39,7 @@ import SettingsPage from './ayarlar/page';
 import AuditPage from './denetim/page';
 import { SystemLogsView } from './loglar/system-logs-view';
 import { JsonDiff } from '@/components/admin/json-diff';
+import { RETRY_SKIP_LABEL } from '@/lib/admin-ops-api';
 
 beforeEach(() => {
   toastMock.mockClear();
@@ -213,6 +214,38 @@ describe('Sistem izleme', () => {
   });
 });
 
+describe('Sistem izleme: bayat veri ve artık takılı olmayan satır', () => {
+  it('tells the admin when the row was no longer stuck', async () => {
+    server.use(
+      http.post('*/api/v1/admin/match-dispatches/:id/reset', () => HttpResponse.json({ analysisId: 12, matchDispatchAttempts: 3 })),
+      ...systemHandlers(),
+    );
+    const user = userEvent.setup();
+    renderWithClient(<SystemMonitorView />);
+    await user.click(await screen.findByRole('button', { name: 'Analiz #12 için sayacı sıfırla' }));
+    await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Sayacı sıfırla' }));
+    await waitFor(() => expect(toastMock).toHaveBeenCalledWith('Bu gönderim artık takılı değil', expect.anything()));
+    expect(toastMock.success).not.toHaveBeenCalled();
+  });
+
+  it('shows a stale-data banner when a refresh fails after data was loaded', async () => {
+    let fail = false;
+    server.use(
+      http.get('*/api/v1/admin/queues', () => (fail ? apiError(503, 'INTERNAL', 'x') : HttpResponse.json(queuesFixture))),
+      http.get('*/api/v1/admin/workers', () => (fail ? apiError(503, 'INTERNAL', 'x') : HttpResponse.json(workersFixture))),
+      ...systemHandlers(),
+    );
+    const { client } = renderWithClient(<SystemMonitorView />);
+    await screen.findByRole('article', { name: 'Tarama' });
+    await screen.findByRole('list', { name: "Worker'lar" });
+    fail = true;
+    await act(() => client.refetchQueries({ queryKey: ['admin', 'queues'] }).catch(() => undefined));
+    await act(() => client.refetchQueries({ queryKey: ['admin', 'workers'] }).catch(() => undefined));
+    expect(await screen.findAllByText(/şu an güncellenemiyor/)).toHaveLength(2);
+    expect(screen.getByRole('article', { name: 'Tarama' })).toBeInTheDocument();
+  });
+});
+
 // ---------------------------------------------------------------- bildirimler
 
 const notif = (id: number, over: Record<string, unknown> = {}) => ({
@@ -268,6 +301,40 @@ describe('Bildirimler', () => {
     expect(result).toHaveTextContent('1 bildirim atlandı');
     expect(within(result).getByText('#102')).toBeInTheDocument();
     expect(result).toHaveTextContent('Kullanıcı aktif değil');
+  });
+});
+
+describe('Bildirimler: sınırlar ve atlama nedenleri', () => {
+  it('disables retry when more than 100 rows are selected', async () => {
+    server.use(
+      meHandler('ADMIN'),
+      http.get('*/api/v1/admin/notifications', () =>
+        HttpResponse.json({ total: 101, items: Array.from({ length: 101 }, (_, i) => notif(1000 + i)) }),
+      ),
+    );
+    const user = userEvent.setup();
+    renderWithClient(<NotificationsOpsView />);
+    await screen.findByText('İlan 1000');
+    await user.click(screen.getByRole('checkbox', { name: 'Sayfadakilerin tümünü seç' }));
+    expect(screen.getByRole('button', { name: 'Seçilenleri yeniden dene (101)' })).toBeDisabled();
+    expect(screen.getByText(/en fazla 100 bildirim/)).toBeInTheDocument();
+    await user.click(screen.getByRole('checkbox', { name: 'Bildirim #1000 seç' }));
+    expect(screen.getByRole('button', { name: 'Seçilenleri yeniden dene (100)' })).toBeEnabled();
+  });
+
+  it.each(Object.entries(RETRY_SKIP_LABEL))('shows the Turkish label for skip reason %s', async (reason, label) => {
+    server.use(
+      meHandler('ADMIN'),
+      http.get('*/api/v1/admin/notifications', () => HttpResponse.json({ total: 1, items: [notif(201)] })),
+      http.post('*/api/v1/admin/notifications/retry', () => HttpResponse.json({ retried: [], skipped: [{ id: 201, reason }] })),
+    );
+    const user = userEvent.setup();
+    renderWithClient(<NotificationsOpsView />);
+    await user.click(await screen.findByRole('checkbox', { name: 'Bildirim #201 seç' }));
+    await user.click(screen.getByRole('button', { name: 'Seçilenleri yeniden dene (1)' }));
+    const result = await screen.findByRole('status', { name: 'Yeniden deneme sonucu' });
+    expect(result).toHaveTextContent('0 bildirim yeniden kuyruğa alındı');
+    expect(within(result).getByText(label)).toBeInTheDocument();
   });
 });
 
@@ -349,6 +416,13 @@ describe('Paketler', () => {
     await user.type(within(dialog).getByLabelText('Günlük bildirim sınırı'), '999999');
     await user.type(within(dialog).getByLabelText('Fırsat gecikmesi (saat)'), '0');
     await user.click(within(dialog).getByRole('button', { name: 'Paketi oluştur' }));
+    // İstemci, API ile aynı üst sınırı (PLAN_MAXIMA) uygular: istek gitmez.
+    expect(await within(dialog).findByText('En fazla 100.000 olabilir')).toBeInTheDocument();
+    expect(bodies).toHaveLength(0);
+    const daily = within(dialog).getByLabelText('Günlük bildirim sınırı');
+    await user.clear(daily);
+    await user.type(daily, '500');
+    await user.click(within(dialog).getByRole('button', { name: 'Paketi oluştur' }));
     await waitFor(() => expect(bodies).toHaveLength(1));
     expect(bodies[0]).toMatchObject({ code: 'GOLD', limits: { channels: ['IN_APP'] } });
     expect(await within(dialog).findByText('En fazla 100000')).toBeInTheDocument();
@@ -400,7 +474,7 @@ describe('Ayarlar', () => {
     await user.clear(small);
     await user.type(small, '3');
     await user.click(within(form).getByRole('button', { name: 'Analiz katsayılarını kaydet' }));
-    expect(await within(form).findByText('Bu değer en az emsal sayısından küçük olamaz.')).toBeInTheDocument();
+    expect(await within(form).findByText(/en az emsal sayısından \(5\) küçük olamaz; bu alanı artırın/)).toBeInTheDocument();
     expect(small).toHaveAttribute('aria-invalid', 'true');
     expect(patches).toHaveLength(0);
   });
@@ -427,12 +501,12 @@ describe('Ayarlar', () => {
     expect(win).toHaveAttribute('aria-invalid', 'true');
   });
 
-  it('flags an invalid stored value and lets the admin reset the field to its default (null)', async () => {
+  it('flags a stored value that breaks a cross-field rule and lets the admin reset the field (null)', async () => {
     const patches: unknown[] = [];
     server.use(
       meHandler('SUPER_ADMIN'),
-      // Kayıtlı smallPoolMax (2) < minComparables (5): motor varsayılanları kullanıyor.
-      http.get('*/api/v1/admin/settings', () => HttpResponse.json(settingsFixture({ smallPoolMax: 2 }, DEFAULT_ANALYSIS))),
+      // Gerçek API: worker şeması çapraz kural içermez → effective = varsayılanlar + kayıtlı değer.
+      http.get('*/api/v1/admin/settings', () => HttpResponse.json(settingsFixture({ smallPoolMax: 2 }))),
       http.patch('*/api/v1/admin/settings', async ({ request }) => {
         patches.push(await request.json());
         return HttpResponse.json({ setting: settingsFixture().items[0] });
@@ -441,12 +515,76 @@ describe('Ayarlar', () => {
     const user = userEvent.setup();
     renderWithClient(<SettingsPage />);
     const form = await screen.findByRole('form', { name: 'Analiz katsayıları' });
-    expect(within(form).getByRole('alert')).toHaveTextContent(/Kayıtlı değer geçersiz/);
+    expect(within(form).getByRole('status')).toHaveTextContent(
+      'Kayıtlı değer kurallarla çelişiyor; motor bu değerleri kullanıyor ama düzeltilene kadar her kayıt reddedilir.',
+    );
+    expect(within(form).getByText(/en az emsal sayısından \(5\) küçük olamaz/)).toBeInTheDocument();
     expect(within(form).getByLabelText('Küçük havuz sınırı')).toHaveValue('2');
     await user.click(within(form).getByRole('button', { name: 'Küçük havuz sınırı: varsayılana dön' }));
     await user.click(within(form).getByRole('button', { name: 'Analiz katsayılarını kaydet' }));
     await waitFor(() => expect(patches).toEqual([{ key: 'analysis.settings', value: { smallPoolMax: null } }]));
     expect(toastMock.success).toHaveBeenCalledWith('Analiz katsayıları kaydedildi');
+  });
+
+  it('says the engine uses defaults only when effective really falls back to defaults', async () => {
+    server.use(
+      meHandler('SUPER_ADMIN'),
+      // Tip hatası: worker şeması da reddeder → API effective = varsayılanlar.
+      http.get('*/api/v1/admin/settings', () => HttpResponse.json(settingsFixture({ smallPoolMax: 'yedi' }, DEFAULT_ANALYSIS))),
+    );
+    renderWithClient(<SettingsPage />);
+    const form = await screen.findByRole('form', { name: 'Analiz katsayıları' });
+    expect(within(form).getByRole('status')).toHaveTextContent(/motor bu bölümde varsayılanları kullanıyor/);
+    expect(within(form).getByLabelText('Küçük havuz sınırı')).toHaveValue('yedi');
+  });
+
+  it('raising minComparables above the pool fields marks all three with cross-field messages', async () => {
+    const patches: unknown[] = [];
+    server.use(
+      meHandler('SUPER_ADMIN'),
+      http.get('*/api/v1/admin/settings', () => HttpResponse.json(settingsFixture())),
+      http.patch('*/api/v1/admin/settings', async ({ request }) => {
+        patches.push(await request.json());
+        return HttpResponse.json({});
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithClient(<SettingsPage />);
+    const form = await screen.findByRole('form', { name: 'Analiz katsayıları' });
+    const min = within(form).getByLabelText('En az emsal');
+    await user.clear(min);
+    await user.type(min, '10');
+    await user.click(within(form).getByRole('button', { name: 'Analiz katsayılarını kaydet' }));
+    expect(await within(form).findAllByText(/en az emsal sayısından \(10\) küçük olamaz; bu alanı artırın/)).toHaveLength(2);
+    expect(within(form).getByLabelText('Küçük havuz sınırı')).toHaveAttribute('aria-invalid', 'true');
+    expect(within(form).getByLabelText('Theil–Sen için en az havuz')).toHaveAttribute('aria-invalid', 'true');
+    expect(min).toHaveAttribute('aria-invalid', 'true');
+    expect(within(form).getByText(/En az emsal sayısı .* büyük olamaz/)).toBeInTheDocument();
+    expect(patches).toHaveLength(0);
+  });
+
+  it('keeps a dirty draft when another admin changes the setting and offers a reload', async () => {
+    let version = 0;
+    server.use(
+      meHandler('SUPER_ADMIN'),
+      http.get('*/api/v1/admin/settings', () =>
+        HttpResponse.json(version === 0 ? settingsFixture() : settingsFixture({ poolWindowDays: 120 })),
+      ),
+    );
+    const user = userEvent.setup();
+    const { client } = renderWithClient(<SettingsPage />);
+    const form = await screen.findByRole('form', { name: 'Analiz katsayıları' });
+    const win = within(form).getByLabelText('Havuz penceresi (gün)');
+    await user.clear(win);
+    await user.type(win, '90');
+    version = 1;
+    await act(() => client.invalidateQueries({ queryKey: ['admin', 'settings'] }));
+    expect(await within(form).findByText(/Başka bir yönetici bu ayarı değiştirdi/)).toBeInTheDocument();
+    expect(within(form).getByLabelText('Havuz penceresi (gün)')).toHaveValue('90');
+    await user.click(within(form).getByRole('button', { name: 'Yeniden yükle' }));
+    const form2 = screen.getByRole('form', { name: 'Analiz katsayıları' });
+    expect(within(form2).getByLabelText('Havuz penceresi (gün)')).toHaveValue('120');
+    expect(within(form2).queryByText(/Başka bir yönetici/)).not.toBeInTheDocument();
   });
 
   it('saves alert thresholds with decimal comma input', async () => {
@@ -527,6 +665,34 @@ describe('JsonDiff', () => {
     expect(within(t).getByRole('row', { name: /^a/ })).toHaveTextContent('Kaldırıldı');
     expect(within(t).getByRole('row', { name: /^b/ })).toHaveTextContent('Eklendi');
     expect(within(t).getByRole('row', { name: /nested\.x/ })).toHaveTextContent('Değişti');
+  });
+});
+
+describe('JsonDiff: iç içe yapılar', () => {
+  it('ignores key order, compares arrays of objects as a whole and keeps dotted keys apart', async () => {
+    const before = {
+      limits: { channels: ['IN_APP', 'TELEGRAM'], maxSearchProfiles: 3 },
+      rules: [{ a: 1, b: { c: 2, d: 3 } }, { x: true }],
+      'a.b': 1,
+      a: { b: 2 },
+      deep: { l1: { l2: { l3: { v: 'eski' } } } },
+    };
+    const after = {
+      deep: { l1: { l2: { l3: { v: 'yeni' } } } },
+      a: { b: 2 },
+      'a.b': 5,
+      rules: [{ b: { d: 3, c: 2 }, a: 1 }, { x: true }],
+      limits: { maxSearchProfiles: 3, channels: ['IN_APP', 'TELEGRAM'] },
+    };
+    const user = userEvent.setup();
+    renderWithClient(<JsonDiff before={before} after={after} />);
+    const t = screen.getByRole('table', { name: /Önce ve sonra/ });
+    const rows = within(t).getAllByRole('row').slice(1);
+    expect(rows.map((r) => within(r).getByRole('rowheader').textContent)).toEqual(['["a.b"]', 'deep.l1.l2.l3.v']);
+    expect(within(t).getByRole('row', { name: /deep\.l1/ })).toHaveTextContent('"eski"');
+    await user.click(screen.getByRole('button', { name: /Değişmeyen 4 alanı göster/ }));
+    expect(within(t).getByRole('row', { name: /^rules/ })).toHaveTextContent('Aynı');
+    expect(within(t).getByRole('row', { name: /^a\.b Aynı/ })).toBeInTheDocument();
   });
 });
 

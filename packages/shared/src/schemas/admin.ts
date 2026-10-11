@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { planLimitsSchema } from '../plan';
+import { checkLimitMaxima, planLimitsSchema } from '../plan';
 import { analysisSettingsPatchSchema } from './analysis-settings';
 
 /** LIKE/ILIKE desenlerinde `\`, `%` ve `_` karakterlerini kaçışlar. */
@@ -134,6 +134,8 @@ export const adminSubscriptionSchema = z
         ...inAppMessage,
         path: ['channels'],
       })
+      // Paketle aynı üst sınırlar (PLAN_MAXIMA): kullanıcıya özel geçersiz kılma limit sistemini kapatamaz.
+      .superRefine((o, ctx) => checkLimitMaxima(o, ctx))
       .nullable(),
   })
   .strict();

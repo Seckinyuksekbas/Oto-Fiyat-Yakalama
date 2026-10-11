@@ -27,15 +27,27 @@ export function isRedacted(v: unknown): boolean {
 
 const MAX_DEPTH = 6;
 
-/** Nesneyi `yol → değer` eşlemesine düzleştirir. Boş nesne ve diziler yaprak sayılır. */
-export function flattenJson(v: unknown, prefix = '', depth = 0, out = new Map<string, unknown>()): Map<string, unknown> {
+export type JsonPath = string[];
+
+/**
+ * Nesneyi `yol → değer` listesine düzleştirir. Yol bir dizi parçadır (anahtar içinde nokta olsa da karışmaz).
+ * Boş nesne ve diziler yaprak sayılır (diziler bütün olarak karşılaştırılır).
+ */
+export function flattenJson(v: unknown, prefix: JsonPath = [], depth = 0, out = new Map<string, { path: JsonPath; value: unknown }>()) {
   if (v === undefined) return out;
   if (isPlain(v) && Object.keys(v).length > 0 && depth < MAX_DEPTH) {
-    for (const [k, child] of Object.entries(v)) flattenJson(child, prefix ? `${prefix}.${k}` : k, depth + 1, out);
+    for (const [k, child] of Object.entries(v)) flattenJson(child, [...prefix, k], depth + 1, out);
     return out;
   }
-  out.set(prefix, v);
+  out.set(JSON.stringify(prefix), { path: prefix, value: v });
   return out;
+}
+
+/** Anahtar sırasından bağımsız karşılaştırma için nesne anahtarlarını (iç içe, dizilerin içinde de) sıralar. */
+export function normalizeJson(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(normalizeJson);
+  if (isPlain(v)) return Object.fromEntries(Object.keys(v).sort().map((k) => [k, normalizeJson(v[k])]));
+  return v;
 }
 
 const show = (v: unknown): string => {
@@ -47,8 +59,21 @@ const show = (v: unknown): string => {
   }
 };
 
+const sameValue = (a: unknown, b: unknown) => show(normalizeJson(a)) === show(normalizeJson(b));
+
+const SIMPLE_KEY = /^[A-Za-z_$][\w$-]*$/;
+
+/** Yol gösterimi: `limits.channels`; nokta/boşluk içeren anahtar `["a.b"]` biçiminde. */
+export function formatPath(path: JsonPath): string {
+  if (path.length === 0) return '(değer)';
+  return path
+    .map((seg, i) => (SIMPLE_KEY.test(seg) ? (i === 0 ? seg : `.${seg}`) : `[${JSON.stringify(seg)}]`))
+    .join('');
+}
+
 export interface DiffRow {
-  path: string;
+  key: string;
+  path: JsonPath;
   kind: Kind;
   before: unknown;
   after: unknown;
@@ -57,18 +82,18 @@ export interface DiffRow {
 export function diffJson(before: unknown, after: unknown): DiffRow[] {
   const hideBefore = isRedacted(before);
   const hideAfter = isRedacted(after);
-  const a = hideBefore || before === null ? new Map<string, unknown>() : flattenJson(before);
-  const b = hideAfter || after === null ? new Map<string, unknown>() : flattenJson(after);
-  const paths = [...a.keys(), ...[...b.keys()].filter((k) => !a.has(k))];
-  return paths.map((path) => {
-    const inA = a.has(path);
-    const inB = b.has(path);
+  const a = hideBefore || before === null ? new Map<string, { path: JsonPath; value: unknown }>() : flattenJson(before);
+  const b = hideAfter || after === null ? new Map<string, { path: JsonPath; value: unknown }>() : flattenJson(after);
+  const keys = [...a.keys(), ...[...b.keys()].filter((k) => !a.has(k))];
+  return keys.map((key) => {
+    const x = a.get(key);
+    const y = b.get(key);
     let kind: Kind;
-    if ((!inA && hideBefore) || (!inB && hideAfter)) kind = 'hidden';
-    else if (!inA) kind = 'added';
-    else if (!inB) kind = 'removed';
-    else kind = show(a.get(path)) === show(b.get(path)) ? 'same' : 'changed';
-    return { path, kind, before: a.get(path), after: b.get(path) };
+    if ((!x && hideBefore) || (!y && hideAfter)) kind = 'hidden';
+    else if (!x) kind = 'added';
+    else if (!y) kind = 'removed';
+    else kind = sameValue(x.value, y.value) ? 'same' : 'changed';
+    return { key, path: (x ?? y)!.path, kind, before: x?.value, after: y?.value };
   });
 }
 
@@ -122,9 +147,9 @@ export function JsonDiff({ before, after }: { before: unknown; after: unknown })
                 </tr>
               ) : (
                 visible.map((r) => (
-                  <tr key={r.path || '(değer)'} className="border-t border-border align-top">
+                  <tr key={r.key} className="border-t border-border align-top">
                     <th scope="row" className="px-3 py-2 text-left font-medium break-all">
-                      {r.path || '(değer)'}
+                      {formatPath(r.path)}
                     </th>
                     <td className={cn('px-3 py-2 text-[13px] whitespace-nowrap', KIND[r.kind].cls)}>{KIND[r.kind].label}</td>
                     <td className="px-3 py-2">

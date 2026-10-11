@@ -15,19 +15,42 @@ import { cn } from '@/lib/cn';
 import { formatDateTime } from '@/lib/format';
 import { useDebounced } from '@/lib/use-debounced';
 
-/** Hedefe bağlantı verilebilen türler. */
-function targetHref(type: string | null, id: string | null): string | null {
-  if (!type || !id) return null;
-  if (type === 'User') return `/admin/kullanicilar/${encodeURIComponent(id)}`;
-  if (type === 'Source') return `/admin/kaynaklar/${encodeURIComponent(id)}`;
-  if (type === 'Listing') return `/admin/ilanlar/${encodeURIComponent(id)}`;
-  return null;
+const listingIdIn = (v: unknown): number | null =>
+  v && typeof v === 'object' && !Array.isArray(v) && Number.isInteger((v as Record<string, unknown>).listingId)
+    ? ((v as Record<string, unknown>).listingId as number)
+    : null;
+
+/**
+ * Hedefe bağlantı. Tür adları API'deki `recordInTx` çağrılarıyla aynıdır (User, DataSource, Listing, ProxyConfig,
+ * SubscriptionPlan, ListingAnalysis, …). Proxy ve paketin detay sayfası yok: listeye gidilir. ListingAnalysis kimliği
+ * analiz kimliğidir; ilan ancak kayıtta `listingId` varsa bağlanır.
+ */
+export function auditTargetHref(e: Pick<AuditLogItem, 'targetType' | 'targetId' | 'before' | 'after'>): string | null {
+  const id = e.targetId;
+  switch (e.targetType) {
+    case 'User':
+      return id ? `/admin/kullanicilar/${encodeURIComponent(id)}` : null;
+    case 'DataSource':
+      return id ? `/admin/kaynaklar/${encodeURIComponent(id)}` : null;
+    case 'Listing':
+      return id ? `/admin/ilanlar/${encodeURIComponent(id)}` : null;
+    case 'ProxyConfig':
+      return '/admin/proxyler';
+    case 'SubscriptionPlan':
+      return '/admin/paketler';
+    case 'ListingAnalysis': {
+      const listingId = listingIdIn(e.after) ?? listingIdIn(e.before);
+      return listingId !== null ? `/admin/ilanlar/${listingId}` : null;
+    }
+    default:
+      return null;
+  }
 }
 
 function AuditEntry({ e }: { e: AuditLogItem }) {
   const [open, setOpen] = useState(false);
   const panelId = useId();
-  const href = targetHref(e.targetType, e.targetId);
+  const href = auditTargetHref(e);
   return (
     <li className="border-t border-border first:border-t-0">
       <div className="grid gap-x-4 gap-y-1.5 px-4 py-3 md:grid-cols-[9.5rem_minmax(0,1fr)_auto] md:items-center">
