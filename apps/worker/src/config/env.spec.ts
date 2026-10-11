@@ -21,6 +21,29 @@ describe('worker env', () => {
     expect(() => parseEnv({ ...base, SHUTDOWN_TIMEOUT_MS: '0' })).toThrow(/SHUTDOWN_TIMEOUT_MS/);
   });
 
+  it('never echoes an invalid value in the error message', () => {
+    const marker = randomBytes(12).toString('hex');
+    let message = '';
+    try {
+      parseEnv({ ...base, ROLE: marker });
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).toMatch(/ROLE: şunlardan biri olmalı: worker \| scheduler/);
+    expect(message).not.toContain(marker);
+  });
+
+  it('does not crash on an unparseable URL in production', () => {
+    const prod = { ...base, NODE_ENV: 'production', BOT_CONTACT_URL: 'not a url', PUBLIC_BASE_URL: 'https://oto.example' };
+    expect(() => parseEnv(prod)).toThrow(/Invalid environment: .*BOT_CONTACT_URL/);
+  });
+
+  it('rejects IPv4-mapped and unspecified loopback URLs in production', () => {
+    const prod = { ...base, NODE_ENV: 'production', PUBLIC_BASE_URL: 'https://oto.example' };
+    expect(() => parseEnv({ ...prod, BOT_CONTACT_URL: 'https://[::ffff:127.0.0.1]/bot' })).toThrow(/BOT_CONTACT_URL/);
+    expect(() => parseEnv({ ...prod, BOT_CONTACT_URL: 'https://[::]/bot' })).toThrow(/BOT_CONTACT_URL/);
+  });
+
   it('bounds ANALYZE_CONCURRENCY', () => {
     expect(() => parseEnv({ ...base, ANALYZE_CONCURRENCY: '0' })).toThrow(/ANALYZE_CONCURRENCY/);
     expect(parseEnv({ ...base, ANALYZE_CONCURRENCY: '8' }).ANALYZE_CONCURRENCY).toBe(8);

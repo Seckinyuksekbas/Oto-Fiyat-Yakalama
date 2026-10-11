@@ -1,8 +1,8 @@
 import { z } from 'zod';
 
 /**
- * Web sürecinin (Next.js sunucu tarafı) ortam değişkenleri.
- * Not: next.config.mjs .ts içe aktaramadığı için aynı kural orada da uygulanır.
+ * Web sürecinin (Next.js sunucu tarafı) ortam değişkenleri. Tek doğruluk kaynağı:
+ * next.config.ts (derleme) ve src/instrumentation.ts (sunucu açılışı) bunu kullanır.
  */
 const webEnvSchema = z.object({
   API_ORIGIN: z

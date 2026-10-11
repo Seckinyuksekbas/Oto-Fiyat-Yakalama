@@ -10,7 +10,8 @@ pnpm dev:web                                          # http://localhost:3000
 ```
 - **Geliştirme notu:** worker ve scheduler `nest start --watch` ile aynı `dist` klasörünü paylaşır; ikisini birden başlatmak derlemeleri çakıştırır. Birini önce başlatın ya da `pnpm --filter @oto/worker build` yapıp her ikisini `node dist/main.js` ile çalıştırın.
 - Tarayıcı yalnızca web origin'ine (`:3000`) konuşur. `/api/*` istekleri Next `rewrites` ile `API_ORIGIN` (varsayılan `http://localhost:3001`) adresine yönlenir; çerezler böylece birinci taraf kalır, CORS gerekmez.
-- **`API_ORIGIN` build zamanında sabitlenir** (rewrites `next build` sırasında çözülür). Üretim derlemesi doğru `API_ORIGIN` ile yapılmalıdır; `next start` sırasında değiştirmek etkisizdir.
+- **`API_ORIGIN` build zamanında sabitlenir** (rewrites `next build` sırasında çözülür). Üretim derlemesi doğru `API_ORIGIN` ile yapılmalıdır; `next start` sırasında değiştirmek etkisizdir. Değer gizli değildir (derleme çıktısında görünür), bu yüzden build argümanı olarak verilebilir.
+- `API_ORIGIN` `apps/web/src/env.ts` (`parseWebEnv`, zod) ile doğrulanır: http(s) URL olmalı (iç ağ için http serbest), sondaki `/` kırpılır. `next.config.ts` derlemede, `src/instrumentation.ts` (`register()`, yalnız Node runtime) sunucu açılışında aynı fonksiyonu çağırır; geçersiz değerde derleme ya da açılış durur.
 - API ortamında `PUBLIC_BASE_URL=http://localhost:3000` olmalıdır (e-posta bağlantıları ve Telegram "Analizi gör" düğmesi web'e gitsin).
 - Üretim derlemesi: `pnpm --filter @oto/web build && pnpm --filter @oto/web start`. Derleme **ağ erişimi gerektirmez**: yazı tipleri kendi barındırılır (`geist`, `@fontsource-variable/inter`, `@fontsource-variable/instrument-sans`); Google Fonts kullanılmaz.
 
@@ -79,7 +80,7 @@ Sunucu tarafı: [notifications.md](notifications.md). Akış `GET /api/v1/me/not
 - İndirim rengi işarete göre seçilir; INSUFFICIENT tahminler "zayıf tahmin" etiketiyle gösterilir. Açıklama paneli motorun gerçek davranışını yansıtır (hasarlı ilan dışlama sayıları ham açıklamadan).
 
 ## Güvenlik başlıkları
-`next.config.mjs` her yola ekler: `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `X-Frame-Options: DENY`, `Permissions-Policy: camera=(), microphone=(), geolocation=()`; `X-Powered-By` kapalı. CSP henüz YOK (satır içi tema betiği nedeniyle nonce/hash gerekir; Plan 08'e taşındı).
+`next.config.ts` her yola ekler: `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `X-Frame-Options: DENY`, `Permissions-Policy: camera=(), microphone=(), geolocation=()`; `X-Powered-By` kapalı. CSP henüz YOK (satır içi tema betiği nedeniyle nonce/hash gerekir; Plan 08'e taşındı).
 
 ## Erişilebilirlik kuralları
 - "İçeriğe geç" bağlantısı; tüm etkileşimli öğelerde görünür `:focus-visible` (amber, 2px); menülerde görünür odak çubuğu.

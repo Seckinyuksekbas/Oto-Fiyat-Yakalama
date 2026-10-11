@@ -51,7 +51,14 @@ describe('TokenService', () => {
       (e: unknown) => e as Error,
     );
     expect(err?.message).toMatch(/JWT_PRIVATE_KEY.*JWT_PUBLIC_KEY/);
-    expect(err?.message).not.toContain(a.JWT_PRIVATE_KEY.slice(30, 60));
+    expect(err?.message).not.toContain('-----BEGIN');
+    const bodyLines = [...a.JWT_PRIVATE_KEY.split(/\r?\n/), ...b.JWT_PUBLIC_KEY.split(/\r?\n/)].filter(
+      (l) => l && !l.startsWith('-----'),
+    );
+    expect(bodyLines.length).toBeGreaterThan(0);
+    for (const line of bodyLines) {
+      expect(err?.message).not.toContain(line);
+    }
   });
 
   it('rejects garbage and HS256 tokens', async () => {

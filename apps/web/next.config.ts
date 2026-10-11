@@ -1,20 +1,11 @@
-import { z } from 'zod';
+import type { NextConfig } from 'next';
+import { parseWebEnv } from './src/env';
 
-// src/env.ts ile aynı kural (next.config.mjs .ts dosyası içe aktaramaz). Geçersiz değerde derleme/başlatma durur.
-const apiOriginResult = z
-  .string()
-  .url()
-  .refine((v) => URL.canParse(v) && ['http:', 'https:'].includes(new URL(v).protocol), 'http(s) adresi olmalı')
-  .transform((v) => v.replace(/\/+$/, ''))
-  .default('http://localhost:3001')
-  .safeParse(process.env.API_ORIGIN);
-if (!apiOriginResult.success) {
-  throw new Error(`Invalid environment: API_ORIGIN: ${apiOriginResult.error.issues.map((i) => i.message).join('; ')}`);
-}
-const API_ORIGIN = apiOriginResult.data;
+// API_ORIGIN derleme anında rewrites'a gömülür (gizli değildir). Geçersiz değerde derleme durur;
+// çalışma zamanı denetimi için bkz. src/instrumentation.ts.
+const { API_ORIGIN } = parseWebEnv(process.env);
 
-/** @type {import('next').NextConfig} */
-const nextConfig = {
+const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   eslint: { ignoreDuringBuilds: true }, // lint kökten (pnpm lint) çalışır
