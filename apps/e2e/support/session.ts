@@ -41,7 +41,8 @@ export async function apiContext(): Promise<APIRequestContext> {
   return request.newContext({ baseURL: `${API_URL}/api/v1/`, extraHTTPHeaders: { 'X-Requested-With': 'XMLHttpRequest' } });
 }
 
-async function call<T>(ctx: APIRequestContext, method: 'GET' | 'POST', path: string, data?: unknown): Promise<T> {
+/** API'ye çağrı; 2xx değilse gövdeyle birlikte hata fırlatır. */
+export async function apiCall<T>(ctx: APIRequestContext, method: 'GET' | 'POST' | 'PATCH', path: string, data?: unknown): Promise<T> {
   const res = await ctx.fetch(path, { method, data });
   const text = await res.text();
   if (!res.ok()) throw new Error(`${method} ${path} -> ${res.status()} ${text}`);
@@ -56,41 +57,41 @@ export interface LinkedUser {
   api: APIRequestContext;
 }
 
-/**
- * Hazırlık: kayıt + Mailpit doğrulama + sahte Telegram'da /start ile bağlama + profil (API üzerinden).
- * Kullanıcı arayüzü akışı user-journey'de ayrıca test edilir.
- */
 /** Hazırlık: kayıt + Mailpit doğrulama + oturum (API üzerinden). */
 export async function createVerifiedUser(prefix: string): Promise<{ email: string; password: string; api: APIRequestContext }> {
   const u = randomUser(prefix);
   const api = await apiContext();
-  await call(api, 'POST', 'auth/register', { name: u.name, email: u.email, password: u.password, kvkkAccepted: true });
+  await apiCall(api, 'POST', 'auth/register', { name: u.name, email: u.email, password: u.password, kvkkAccepted: true });
   const link = await waitForVerifyLink(u.email);
   const token = new URL(link).searchParams.get('token');
-  await call(api, 'POST', 'auth/verify-email', { token });
-  await call(api, 'POST', 'auth/login', { email: u.email, password: u.password });
+  await apiCall(api, 'POST', 'auth/verify-email', { token });
+  await apiCall(api, 'POST', 'auth/login', { email: u.email, password: u.password });
   return { email: u.email, password: u.password, api };
 }
 
+/**
+ * Hazırlık: kayıt + Mailpit doğrulama + sahte Telegram'da /start ile bağlama + profil (API üzerinden).
+ * Kullanıcı arayüzü akışı user-journey'de ayrıca test edilir.
+ */
 export async function createLinkedUser(prefix: string, profile: { make: string; model: string }): Promise<LinkedUser> {
   const u = await createVerifiedUser(prefix);
   const api = u.api;
 
-  const { deepLink } = await call<{ deepLink: string }>(api, 'POST', 'me/channels/telegram/link');
+  const { deepLink } = await apiCall<{ deepLink: string }>(api, 'POST', 'me/channels/telegram/link');
   const code = new URL(deepLink).searchParams.get('start')!;
   const chatId = randomChatId();
   await telegram.pushStart(chatId, code);
   await expect
     .poll(
       async () => {
-        const r = await call<{ items: Array<{ type: string; isVerified: boolean }> }>(api, 'GET', 'me/channels');
+        const r = await apiCall<{ items: Array<{ type: string; isVerified: boolean }> }>(api, 'GET', 'me/channels');
         return r.items.find((c) => c.type === 'TELEGRAM')?.isVerified ?? false;
       },
       { message: 'Telegram bağlantısı', timeout: 30_000 },
     )
     .toBe(true);
 
-  await call(api, 'POST', 'me/search-profiles', {
+  await apiCall(api, 'POST', 'me/search-profiles', {
     name: `${profile.make} ${profile.model} e2e`,
     make: profile.make,
     model: profile.model,
@@ -98,6 +99,6 @@ export async function createLinkedUser(prefix: string, profile: { make: string; 
     minConfidence: 'LOW',
     channels: ['IN_APP', 'TELEGRAM'],
   });
-  const me = await call<{ user: { id: string } }>(api, 'GET', 'me');
+  const me = await apiCall<{ user: { id: string } }>(api, 'GET', 'me');
   return { id: me.user.id, email: u.email, password: u.password, chatId, api };
 }

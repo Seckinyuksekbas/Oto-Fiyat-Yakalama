@@ -151,7 +151,8 @@ describe('demo site listing images', () => {
 
   it('rejects malformed ids with 400', async () => {
     const app = site().app;
-    for (const path of ['/img/bad%20id.jpg', '/img/D000001.png', '/img/.jpg', `/img/${'a'.repeat(65)}.jpg`, '/img/a%2Fb.jpg']) {
+    // 'D000001xjpg': uzantı noktası birebir eşleşmeli (kaçışsız '.' herhangi bir karakteri kabul ederdi).
+    for (const path of ['/img/bad%20id.jpg', '/img/D000001.png', '/img/.jpg', `/img/${'a'.repeat(65)}.jpg`, '/img/a%2Fb.jpg', '/img/D000001xjpg']) {
       expect((await request(app).get(path)).status, path).toBe(400);
     }
   });

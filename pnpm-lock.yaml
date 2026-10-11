@@ -172,6 +172,9 @@ importers:
       '@oto/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@oto/server-common':
+        specifier: workspace:*
+        version: link:../../packages/server-common
       '@playwright/test':
         specifier: 1.64.0
         version: 1.64.0

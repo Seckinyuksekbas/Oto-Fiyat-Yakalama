@@ -8,6 +8,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
  * Test:     GET  /__messages[?chatId=]  gönderilen mesajlar (sendMessage/sendPhoto)
  *           POST /__pushUpdate          { message } | { chatId, text } → update_id atanıp kuyruğa eklenir
  *           POST /__fail                { method, chatId?, status, description } → eşleşen çağrılar bu hatayla döner
+ *           POST /__clearFail           { chatId? } → o sohbetin (ya da tüm) hata kurallarını kaldırır
  *           POST /__reset
  */
 export interface SentMessage {
@@ -106,6 +107,11 @@ export class FakeTelegram {
         description: String(body.description ?? 'Forbidden: bot was blocked by the user'),
       });
       return send(201, { ok: true });
+    }
+    if (url.pathname === '/__clearFail' && req.method === 'POST') {
+      const chatId = body.chatId === undefined ? undefined : String(body.chatId);
+      this.failRules = chatId === undefined ? [] : this.failRules.filter((r) => r.chatId !== chatId);
+      return send(200, { ok: true });
     }
     if (url.pathname === '/__reset' && req.method === 'POST') {
       this.messages.length = 0;

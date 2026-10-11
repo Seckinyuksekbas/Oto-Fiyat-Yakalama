@@ -55,6 +55,7 @@ export const telegram = {
   },
   pushStart: (chatId: number, code: string) => post(`${TELEGRAM_URL}/__pushUpdate`, { chatId, text: `/start ${code}` }),
   fail: (rule: { method: string; chatId?: number; status: number; description: string }) => post(`${TELEGRAM_URL}/__fail`, rule),
+  clearFail: (chatId?: number) => post(`${TELEGRAM_URL}/__clearFail`, chatId === undefined ? {} : { chatId }),
 };
 
 /** Rastgele, çakışmayan Telegram sohbet kimliği. */

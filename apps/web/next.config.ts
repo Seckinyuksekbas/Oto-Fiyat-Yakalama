@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { NextConfig } from 'next';
 import { parseWebEnv } from './src/env';
@@ -7,14 +8,23 @@ import { parseWebEnv } from './src/env';
 const { API_ORIGIN } = parseWebEnv(process.env);
 
 // Standalone çıktı (Docker imajı). Windows'ta pnpm symlink'leri yönetici/Developer Mode ister (EPERM);
-// orada yerel derleme varsayılan çıktıyı kullanır, `NEXT_STANDALONE=1` ile zorlanabilir.
-const standalone = process.platform !== 'win32' || process.env.NEXT_STANDALONE === '1';
+// orada yerel derleme varsayılan çıktıyı kullanır, `NEXT_STANDALONE=1` ile zorlanabilir. `NEXT_STANDALONE=0` her platformda
+// kapatır (ör. E2E: `next start` ile çalıştırılan derleme).
+const standalone = process.env.NEXT_STANDALONE !== '0' && (process.platform !== 'win32' || process.env.NEXT_STANDALONE === '1');
+
+/** Monorepo kökü: `pnpm-workspace.yaml` bulunana dek yukarı çıkılır (kopyalanmış/iç içe derlemelerde de doğru kök). */
+function workspaceRoot(start: string): string {
+  for (let dir = start; ; dir = path.dirname(dir)) {
+    if (existsSync(path.join(dir, 'pnpm-workspace.yaml'))) return dir;
+    if (path.dirname(dir) === dir) return path.join(start, '../..');
+  }
+}
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   ...(standalone ? { output: 'standalone' as const } : {}),
   // Monorepo: izleme kökü repo kökü (workspace paketleri + pnpm node_modules standalone'a girsin).
-  outputFileTracingRoot: path.join(__dirname, '../..'),
+  outputFileTracingRoot: workspaceRoot(__dirname),
   poweredByHeader: false,
   eslint: { ignoreDuringBuilds: true }, // lint kökten (pnpm lint) çalışır
   transpilePackages: ['@oto/shared'],

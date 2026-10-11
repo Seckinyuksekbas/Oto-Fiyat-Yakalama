@@ -76,7 +76,7 @@ export function createDemoSite(opts: StoreOptions & { pageSize?: number }): Demo
   // uyumlu kalsın diye .jpg uzantılıdır; içerik türü dürüstçe image/png'dir. Bilinmeyen ama biçimi geçerli kimlik de
   // görsel alır (sade ve deterministik); biçimsiz kimlik 400.
   app.get('/img/:file', (req, res) => {
-    const m = /^(.+).jpg$/.exec(req.params.file);
+    const m = /^(.+)\.jpg$/.exec(req.params.file);
     if (!m || !IMAGE_ID_PATTERN.test(m[1]!)) return void res.status(400).type('text/plain').send('invalid image id');
     res.set('Cache-Control', 'public, max-age=3600').type('image/png').send(listingImagePng(m[1]!));
   });

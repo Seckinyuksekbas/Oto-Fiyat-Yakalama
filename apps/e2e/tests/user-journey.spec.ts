@@ -154,8 +154,15 @@ test('kullanıcı: kayıt → doğrulama → Telegram → profil → canlı fır
     await admin.getByLabel('Kanal').selectOption({ label: 'Telegram' });
     await admin.getByLabel('Kullanıcı kimliği').fill(dbUser.id);
     const table = admin.getByRole('region', { name: 'Bildirimler' });
-    const row = table.getByRole('row').filter({ hasText: user.email }).filter({ hasText: 'Gönderildi' });
-    await expect(row.first()).toBeVisible();
+    // Bu senaryonun eşleşmesine ait TELEGRAM bildirimi: satır kimliğiyle bulunur, durum ve alıcı doğrulanır.
+    const sent = await db().notification.findFirstOrThrow({
+      where: { userId: dbUser.id, kind: 'MATCH', channel: 'TELEGRAM', status: 'SENT', match: { listingId: listing!.id } },
+      select: { id: true },
+    });
+    const row = table.getByRole('row').filter({ hasText: `#${sent.id},` });
+    await expect(row).toBeVisible();
+    await expect(row).toContainText(user.email);
+    await expect(row).toContainText('Gönderildi');
     await ctx.close();
   });
 });

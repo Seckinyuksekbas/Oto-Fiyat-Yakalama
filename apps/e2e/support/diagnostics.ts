@@ -1,4 +1,5 @@
 import type { TestInfo } from '@playwright/test';
+import { redactSecrets } from '@oto/server-common';
 import { db } from './db';
 import { logTail } from './stack';
 
@@ -15,6 +16,7 @@ export async function attachDiagnostics(testInfo: TestInfo): Promise<void> {
   await testInfo.attach('collection-jobs.json', { body: json(jobs), contentType: 'application/json' });
   await testInfo.attach('match-notifications.json', { body: json(notifications), contentType: 'application/json' });
   for (const name of ['worker', 'scheduler', 'api']) {
-    await testInfo.attach(`${name}.log`, { body: logTail(name, 80), contentType: 'text/plain' });
+    // Log kuyrukları eklenmeden önce maskelenir (URL kimlik bilgileri, token'lar).
+    await testInfo.attach(`${name}.log`, { body: redactSecrets(logTail(name, 80)), contentType: 'text/plain' });
   }
 }

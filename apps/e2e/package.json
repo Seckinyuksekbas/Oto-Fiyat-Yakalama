@@ -8,6 +8,7 @@
   },
   "devDependencies": {
     "@oto/db": "workspace:*",
+    "@oto/server-common": "workspace:*",
     "@playwright/test": "1.64.0",
     "@types/node": "^22.20.5",
     "ioredis": "^5.4.2"

@@ -5,10 +5,12 @@ import { adminCredentials } from '../support/env';
 import { createVerifiedUser, loginViaUi } from '../support/session';
 
 /**
- * Nonce tabanlı CSP (web middleware): kullanıcı ve admin olarak sayfalar gezilir. Her sayfada:
+ * Nonce tabanlı CSP (web middleware): genel sayfalar oturumsuz, sonra kullanıcı ve admin olarak gezilir. Her sayfada:
  *  - `securitypolicyviolation` olayı 0,
  *  - `content-security-policy` başlığı var; `script-src` `'nonce-` içerir, `'unsafe-inline'` içermez,
- *  - CSP kaynaklı konsol mesajı ve `pageerror` 0 (/api'nin beklenen 4xx yanıtları sayılmaz).
+ *  - CSP kaynaklı konsol mesajı ve `pageerror` 0 (/api'nin beklenen 4xx yanıtları sayılmaz),
+ *  - hidrasyon kanıtı: yalnızca istemcide çalışan tema menüsü açılır ve seçim `<html data-theme>`'i değiştirir
+ *    (CSP Next'in satır içi betiklerini engellerse sunucu HTML'i görünür ama bu etkileşim çalışmaz).
  * İlan sayfasında en az bir ilan görseli (`<img>`) gerçekten yüklenmiş olmalı (naturalWidth > 0).
  */
 declare global {
@@ -20,6 +22,9 @@ declare global {
 test.afterAll(closeDb);
 
 const CSP_CONSOLE = /content security policy|content-security-policy|refused to (load|execute|apply|connect|frame)/i;
+
+/** İstemci denetimi olmayan statik sayfalar: hidrasyon kanıtı yerine yalnız CSP denetimleri. */
+const STATIC_PAGES = new Set(['/kvkk']);
 
 interface Seen {
   problems: string[];
@@ -51,6 +56,16 @@ function scriptSrc(csp: string): string {
   );
 }
 
+/** Tema menüsünü açıp karşı temayı seçer; `<html data-theme>` değişmeli (yalnız hidrasyondan sonra mümkün). */
+async function proveHydration(page: Page, path: string): Promise<void> {
+  const html = page.locator('html');
+  const current = await html.getAttribute('data-theme');
+  const [target, label] = current === 'dark' ? ['light', 'Açık'] : ['dark', 'Koyu'];
+  await page.getByRole('button', { name: 'Tema', exact: true }).filter({ visible: true }).first().click();
+  await page.getByRole('menuitemradio', { name: label, exact: true }).click();
+  await expect(html, `${path} hidrasyon (tema menüsü)`).toHaveAttribute('data-theme', target);
+}
+
 async function visitAndCheck(page: Page, seen: Seen, path: string): Promise<void> {
   await test.step(path, async () => {
     const before = seen.problems.length;
@@ -61,9 +76,8 @@ async function visitAndCheck(page: Page, seen: Seen, path: string): Promise<void
     const scripts = scriptSrc(csp!);
     expect(scripts, `${path} script-src`).toContain("'nonce-");
     expect(scripts, `${path} script-src`).not.toContain("'unsafe-inline'");
-    // Uygulama hidrasyonu: sayfa başlığı (h1) ve kabuk etkileşimli.
     await expect(page.getByRole('heading', { level: 1 }).first()).toBeAttached();
-    await expect(page.locator('body')).not.toBeEmpty();
+    if (!STATIC_PAGES.has(path)) await proveHydration(page, path);
     expect(await page.evaluate(() => window.__cspViolations ?? []), `${path} securitypolicyviolation`).toEqual([]);
     expect(seen.problems.slice(before), `${path} CSP konsol mesajları / pageerror`).toEqual([]);
   });
@@ -76,8 +90,14 @@ function userListing() {
   });
 }
 
-test('CSP: kullanıcı ve admin sayfaları nonce CSP ile ihlalsiz', async ({ browser }) => {
+test('CSP: genel sayfalar, kullanıcı ve admin sayfaları nonce CSP ile ihlalsiz ve hidrate', async ({ browser }) => {
   const listing = await userListing();
+
+  await test.step('oturumsuz genel sayfalar', async () => {
+    const { page, seen, close } = await openWatched(browser);
+    for (const path of ['/', '/giris', '/kayit', '/sifremi-unuttum', '/kvkk']) await visitAndCheck(page, seen, path);
+    await close();
+  });
 
   await test.step('kullanıcı', async () => {
     const user = await createVerifiedUser('csp');

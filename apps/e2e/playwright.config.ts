@@ -13,9 +13,10 @@ export default defineConfig({
   workers: 1,
   retries: 0,
   forbidOnly: !!process.env.CI,
-  timeout: 240_000,
+  timeout: 360_000,
   expect: { timeout: 15_000 },
-  reporter: [['list']],
+  // CI: konsol + GitHub açıklamaları + artefakt olarak yüklenecek HTML rapor (playwright-report/).
+  reporter: process.env.CI ? [['list'], ['github'], ['html', { open: 'never' }]] : [['list']],
   use: {
     baseURL: WEB_ORIGIN,
     trace: 'retain-on-failure',

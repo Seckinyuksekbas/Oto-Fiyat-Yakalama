@@ -4,13 +4,27 @@ import { attachDiagnostics } from '../support/diagnostics';
 import { closeDb, db, demoSource } from '../support/db';
 import { demo, telegram } from '../support/demo';
 import { adminCredentials } from '../support/env';
-import { createLinkedUser, loginViaUi } from '../support/session';
+import { apiCall, createLinkedUser, loginViaUi } from '../support/session';
+
+const SETTINGS_KEY = 'analysis.settings';
+/** Senaryo `minComparables`'ı değiştirir; özgün ayar (yoksa null) afterAll'da geri yazılır, sonraki senaryolara sızmaz. */
+let originalSettings: { value: unknown } | null | undefined;
+
+test.beforeAll(async () => {
+  originalSettings = await db().systemSetting.findUnique({ where: { key: SETTINGS_KEY }, select: { value: true } });
+});
 
 // Playwright ilk parametrede fixture nesnesi kalıbı ister.
 // eslint-disable-next-line no-empty-pattern
 test.afterEach(async ({}, testInfo) => attachDiagnostics(testInfo));
 
 test.afterAll(async () => {
+  if (originalSettings !== undefined) {
+    const restore = originalSettings
+      ? db().systemSetting.update({ where: { key: SETTINGS_KEY }, data: { value: originalSettings.value as object } })
+      : db().systemSetting.deleteMany({ where: { key: SETTINGS_KEY } });
+    await restore.catch(() => undefined);
+  }
   // Senaryo yarıda kalsa bile demo-site normal moda döner (sonraki senaryolar taramaya güvenir).
   await demo.mode('normal').catch(() => undefined);
   // Senaryo engel adımında düşerse kaynak PAUSED kalır ve sonraki senaryolar hiç tarama görmez: yalıtım için onarılır.
@@ -58,6 +72,10 @@ test('admin: dry-run, yeniden analiz, FAILED bildirim + yeniden dene, ayarlar, e
     await page.getByRole('button', { name: 'Yeniden analiz et' }).click();
     await expect(page.getByText('Yeni analiz hazır; değerler güncellendi.')).toBeVisible({ timeout: 90_000 });
     await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Yeniden analiz tamamlandı' })).toBeVisible();
+    // MANUAL yeniden analiz her zaman yeni satır yazar: DB'de son analiz değişmiş olmalı.
+    const after = await db().listing.findUniqueOrThrow({ where: { id: listing.id }, select: { latestAnalysisId: true } });
+    expect(after.latestAnalysisId).not.toBe(listing.latestAnalysisId);
+    expect(after.latestAnalysisId).toBeGreaterThan(listing.latestAnalysisId!);
   });
 
   await test.step('Telegram 403 (blocked) → bildirim FAILED; admin "yeniden dene" özeti', async () => {
@@ -89,11 +107,18 @@ test('admin: dry-run, yeniden analiz, FAILED bildirim + yeniden dene, ayarlar, e
     const row = table.getByRole('row').filter({ hasText: `#${failedId}` });
     await expect(row).toBeVisible();
     await expect(row).toContainText('Başarısız');
+    // Kullanıcı botun engelini kaldırdı: sahte Telegram 403 vermeyi bırakır, kullanıcı kanalı yeniden açar. Böylece
+    // yeniden deneme belirlenimli olarak SENT ile sonuçlanır (aksi halde kapalı kanal yüzünden yine FAILED olurdu).
+    await telegram.clearFail(victim.chatId);
+    await apiCall(victim.api, 'PATCH', 'me/channels/TELEGRAM', { isEnabled: true });
     await page.getByRole('checkbox', { name: `Bildirim #${failedId} seç` }).check();
     await page.getByRole('button', { name: 'Seçilenleri yeniden dene (1)' }).click();
     const summary = page.getByRole('status', { name: 'Yeniden deneme sonucu' });
     await expect(summary).toBeVisible();
-    await expect(summary).toContainText(/bildirim yeniden kuyruğa alındı|bildirim atlandı/);
+    await expect(summary).toContainText('1 bildirim yeniden kuyruğa alındı');
+    await expect
+      .poll(async () => (await db().notification.findUniqueOrThrow({ where: { id: failedId } })).status, { message: `bildirim #${failedId} durumu`, timeout: 60_000 })
+      .toBe('SENT');
     await victim.api.dispose();
   });
 
@@ -107,6 +132,9 @@ test('admin: dry-run, yeniden analiz, FAILED bildirim + yeniden dene, ayarlar, e
     await page.getByRole('button', { name: 'Analiz katsayılarını kaydet' }).click();
     await expect(page.locator('[data-sonner-toast]').filter({ hasText: 'Analiz katsayıları kaydedildi' })).toBeVisible();
     await expect(field).toHaveValue(next);
+    // Kalıcılık: sayfa yeniden yüklenince değer sunucudan gelir.
+    await page.reload();
+    await expect(page.getByRole('textbox', { name: 'En az emsal', exact: true })).toHaveValue(next);
   });
 
   await test.step('demo-site captcha → kaynak duraklatılır, genel bakışta 60 sn içinde alarm', async () => {
@@ -129,7 +157,8 @@ test('admin: dry-run, yeniden analiz, FAILED bildirim + yeniden dene, ayarlar, e
       .poll(
         async () =>
           db().collectionJob.count({ where: { sourceId: source.id, dryRun: false, status: 'SUCCEEDED', finishedAt: { gt: resumedAt } } }),
-        { message: 'etkinleştirme sonrası başarılı tarama', timeout: 60_000 },
+        // Spec sınırı değil (alarm 60 sn'de doğrulanır); yüklü makinede tek tarama ~60 sn sürebildiği için 120 sn.
+        { message: 'etkinleştirme sonrası başarılı tarama', timeout: 120_000 },
       )
       .toBeGreaterThan(0);
     expect((await demoSource()).health).not.toBe('PAUSED');

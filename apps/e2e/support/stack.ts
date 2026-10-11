@@ -44,6 +44,9 @@ export function generateSecrets(botToken: string): StackSecrets {
 interface Tracked {
   name: string;
   pid: number;
+  startedAt: string;
+  /** Süreci tanımlayan komut satırı parçası (betik yolu); öldürmeden önce PID'in hâlâ bizim olduğu bununla doğrulanır. */
+  cmd: string;
 }
 
 function readPids(): Tracked[] {
@@ -59,8 +62,34 @@ function writePids(list: Tracked[]): void {
   writeFileSync(PIDS_FILE, JSON.stringify(list, null, 2));
 }
 
+/** Verilen PID'lerin güncel komut satırları (yaşamayanlar haritada yer almaz). */
+function commandLines(pids: number[]): Map<number, string> {
+  const out = new Map<number, string>();
+  if (pids.length === 0) return out;
+  if (isWindows) {
+    const script = `Get-CimInstance Win32_Process | Where-Object { @(${pids.join(',')}) -contains $_.ProcessId } | ForEach-Object { "$($_.ProcessId)|$($_.CommandLine)" }`;
+    const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true });
+    for (const line of (r.stdout ?? '').split(/\r?\n/)) {
+      const sep = line.indexOf('|');
+      if (sep > 0) out.set(Number(line.slice(0, sep)), line.slice(sep + 1));
+    }
+    return out;
+  }
+  for (const pid of pids) {
+    try {
+      out.set(pid, readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').join(' '));
+    } catch {
+      const r = spawnSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' });
+      if (r.status === 0 && r.stdout.trim()) out.set(pid, r.stdout.trim());
+    }
+  }
+  return out;
+}
+
+const normalize = (s: string) => s.replace(/\\/g, '/').toLowerCase();
+
 /** Süreci ve tüm alt süreçlerini öldürür (Windows: taskkill /T /F; POSIX: süreç grubu). */
-export function killTree(pid: number): void {
+function killTree(pid: number): void {
   try {
     if (isWindows) {
       spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
@@ -76,17 +105,31 @@ export function killTree(pid: number): void {
   }
 }
 
-/** Kayıtlı tüm süreçleri öldürür (önceki yarıda kalmış koşu dahil). */
+/**
+ * Kayıtlı tüm süreçleri öldürür (önceki yarıda kalmış koşu dahil). PID yeniden kullanılmış olabilir: yalnızca komut
+ * satırı kayıttaki betik yolunu hâlâ içeren süreçler öldürülür; diğerleri uyarıyla atlanır.
+ */
 export function killAll(): void {
   const list = readPids();
-  for (const p of list.reverse()) killTree(p.pid);
+  if (list.length === 0) return;
+  const live = commandLines(list.map((p) => p.pid));
+  for (const p of [...list].reverse()) {
+    const cmdline = live.get(p.pid);
+    if (cmdline === undefined) continue; // zaten sonlanmış
+    if (!normalize(cmdline).includes(normalize(p.cmd))) {
+      console.warn(`[e2e] PID ${p.pid} (${p.name}, ${p.startedAt}) artık bizim süreç değil; öldürülmedi.`);
+      continue;
+    }
+    killTree(p.pid);
+  }
   rmSync(PIDS_FILE, { force: true });
 }
 
-export function spawnTracked(name: string, command: string, args: string[], opts: { cwd: string; env: NodeJS.ProcessEnv }): number {
+/** `script` süreç kimliği olarak saklanır (ör. dist/main.js ya da next ikilisi). */
+export function spawnTracked(name: string, script: string, args: string[], opts: { cwd: string; env: NodeJS.ProcessEnv }): number {
   mkdirSync(LOG_DIR, { recursive: true });
   const fd = openSync(join(LOG_DIR, `${name}.log`), 'w');
-  const child = spawn(command, args, {
+  const child = spawn(process.execPath, [script, ...args], {
     cwd: opts.cwd,
     env: opts.env,
     stdio: ['ignore', fd, fd],
@@ -96,7 +139,7 @@ export function spawnTracked(name: string, command: string, args: string[], opts
   closeSync(fd);
   if (!child.pid) throw new Error(`${name} başlatılamadı`);
   child.unref();
-  writePids([...readPids(), { name, pid: child.pid }]);
+  writePids([...readPids(), { name, pid: child.pid, startedAt: new Date().toISOString(), cmd: script }]);
   return child.pid;
 }
 
@@ -167,8 +210,23 @@ function baseEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
+/**
+ * Yıkıcı adımlar (migrate reset, FLUSHDB) yalnızca e2e hedeflerinde çalışır: veritabanı adı `_e2e` ile bitmeli,
+ * Redis db 14 olmalı (başka bir db için E2E_ALLOW_REDIS_DB=<n> açıkça verilmeli). Yanlış env ile geliştirme verisi silinmez.
+ */
+export function assertDestructiveTargets(databaseUrl = DATABASE_URL, redisUrl = REDIS_URL): void {
+  const dbName = decodeURIComponent(new URL(databaseUrl).pathname.slice(1));
+  if (!dbName.endsWith('_e2e')) throw new Error(`Güvenlik: veritabanı adı '_e2e' ile bitmeli (bulunan: '${dbName}'); reset yapılmadı.`);
+  const redisDb = new URL(redisUrl).pathname.slice(1) || '0';
+  const allowed = process.env.E2E_ALLOW_REDIS_DB?.trim();
+  if (redisDb !== '14' && redisDb !== allowed) {
+    throw new Error(`Güvenlik: Redis db 14 olmalı (bulunan: ${redisDb}); başka bir db için E2E_ALLOW_REDIS_DB=${redisDb} verin.`);
+  }
+}
+
 /** oto_e2e veritabanını sıfırlar (yoksa oluşturur), migrate eder ve seed'ler. */
 export function resetDatabase(secrets: StackSecrets): void {
+  assertDestructiveTargets();
   const env = { ...baseEnv(), DATABASE_URL };
   // Yüklü makinede Docker port yönlendirmesi anlık P1001 verebilir: en fazla 3 deneme.
   for (let attempt = 1; ; attempt++) {
@@ -199,6 +257,7 @@ export function resetDatabase(secrets: StackSecrets): void {
 }
 
 export async function flushRedis(): Promise<void> {
+  assertDestructiveTargets();
   const { default: Redis } = await import('ioredis');
   const redis = new Redis(REDIS_URL, { lazyConnect: true, maxRetriesPerRequest: 1 });
   try {
@@ -234,6 +293,8 @@ export function buildWeb(): { rebuilt: boolean; ms: number; source: string } {
   const started = Date.now();
   // E2E_WEB_REF=<git ref>: web kaynağı çalışma ağacı yerine o commit'ten alınır (çalışma ağacında yarım web
   // değişiklikleri varken yığını sabit bir web ile koşmak için). Varsayılan: çalışma ağacı.
+  // Karışık kaynak uyarısı: yalnızca apps/web ref'ten gelir; @oto/shared (transpilePackages) ve node_modules
+  // (pnpm-lock.yaml) her zaman çalışma ağacındandır. api/worker/demo-site da çalışma ağacının dist'idir.
   const ref = process.env.E2E_WEB_REF?.trim() || null;
   const commit = ref ? execFileSync('git', ['rev-parse', '--verify', `${ref}^{commit}`], { cwd: REPO, encoding: 'utf8' }).trim() : null;
   const source = commit ? `git ${ref} (${commit.slice(0, 7)})` : 'çalışma ağacı';
@@ -242,6 +303,8 @@ export function buildWeb(): { rebuilt: boolean; ms: number; source: string } {
   if (commit) h.update(`ref=${commit}\n`);
   else hashTree(WEB_SRC, h, WEB_SRC, WEB_SKIP);
   hashTree(join(REPO, 'packages', 'shared', 'src'), h, REPO, new Set());
+  // Bağımlılık sürümleri (next, react…) değişirse derleme yenilenir.
+  h.update(readFileSync(join(REPO, 'pnpm-lock.yaml')));
   const digest = h.digest('hex');
   const marker = join(WEB_BUILD, '.e2e-hash');
   if (existsSync(marker) && readFileSync(marker, 'utf8') === digest && existsSync(join(WEB_BUILD, '.next', 'BUILD_ID'))) {
@@ -264,7 +327,8 @@ export function buildWeb(): { rebuilt: boolean; ms: number; source: string } {
   mkdirSync(LOG_DIR, { recursive: true });
   const result = spawnSync(process.execPath, [join(WEB_BUILD, 'node_modules', 'next', 'dist', 'bin', 'next'), 'build'], {
     cwd: WEB_BUILD,
-    env: { ...baseEnv(), API_ORIGIN: API_URL, NEXT_TELEMETRY_DISABLED: '1' },
+    // NEXT_STANDALONE=0: `next start` ile çalıştırılır; Linux/CI'da da standalone çıktısı üretilmez.
+    env: { ...baseEnv(), API_ORIGIN: API_URL, NEXT_TELEMETRY_DISABLED: '1', NEXT_STANDALONE: '0' },
     encoding: 'utf8',
     windowsHide: true,
   });
@@ -291,12 +355,12 @@ export function startProcesses(secrets: StackSecrets): void {
     PUBLIC_BASE_URL: WEB_ORIGIN,
   };
 
-  spawnTracked('demo-site', process.execPath, [join(REPO, 'apps', 'demo-site', 'dist', 'main.js')], {
+  spawnTracked('demo-site', join(REPO, 'apps', 'demo-site', 'dist', 'main.js'), [], {
     cwd: join(REPO, 'apps', 'demo-site'),
     env: { ...baseEnv(), NODE_ENV: 'development', DEMO_HOST: '127.0.0.1', DEMO_PORT: String(PORTS.demo), DEMO_SEED: '42', DEMO_SIZE: String(DEMO_SIZE), DEMO_TICK_MS: '0' },
   });
 
-  spawnTracked('api', process.execPath, [join(REPO, 'apps', 'api', 'dist', 'main.js')], {
+  spawnTracked('api', join(REPO, 'apps', 'api', 'dist', 'main.js'), [], {
     cwd: join(REPO, 'apps', 'api'),
     env: {
       ...common,
@@ -330,15 +394,16 @@ export function startProcesses(secrets: StackSecrets): void {
     NOTIFY_CONCURRENCY: '2',
   };
   const workerMain = join(REPO, 'apps', 'worker', 'dist', 'main.js');
-  spawnTracked('worker', process.execPath, [workerMain], { cwd: join(REPO, 'apps', 'worker'), env: workerEnv });
-  spawnTracked('scheduler', process.execPath, [workerMain, '--role=scheduler'], { cwd: join(REPO, 'apps', 'worker'), env: workerEnv });
+  spawnTracked('worker', workerMain, [], { cwd: join(REPO, 'apps', 'worker'), env: workerEnv });
+  spawnTracked('scheduler', workerMain, ['--role=scheduler'], { cwd: join(REPO, 'apps', 'worker'), env: workerEnv });
 
-  spawnTracked('web', process.execPath, [join(WEB_BUILD, 'node_modules', 'next', 'dist', 'bin', 'next'), 'start', '-p', String(PORTS.web), '-H', '127.0.0.1'], {
+  spawnTracked('web', join(WEB_BUILD, 'node_modules', 'next', 'dist', 'bin', 'next'), ['start', '-p', String(PORTS.web), '-H', '127.0.0.1'], {
     cwd: WEB_BUILD,
     env: {
       ...baseEnv(),
       API_ORIGIN: API_URL,
       NEXT_TELEMETRY_DISABLED: '1',
+      NEXT_STANDALONE: '0',
       // Çalışma zamanı: demo-site ilan görselleri (http) CSP img-src'e eklenir.
       CSP_IMG_EXTRA: DEMO_URL,
     },
