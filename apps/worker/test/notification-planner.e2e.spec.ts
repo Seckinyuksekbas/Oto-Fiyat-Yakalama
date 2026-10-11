@@ -103,6 +103,21 @@ describe('notification planning inside the match transaction', () => {
     expect(await ref.get(QueueRegistry).notifyTelegram.count()).toBe(3);
   });
 
+  it('FAILED/USER_INACTIVE rows (suspension) do not count against the daily quota', async () => {
+    const u = await createUser(ref);
+    await createChannel(ref, u.id);
+    await createProfile(ref, u.id, { channels: ['IN_APP', 'TELEGRAM'] });
+    const free = await prisma.subscriptionPlan.findUniqueOrThrow({ where: { code: 'FREE' } });
+    await prisma.userSubscription.create({ data: { userId: u.id, planId: free.id, limitOverrides: { maxNotificationsPerDay: 1 } } });
+    await prisma.notification.create({
+      data: { userId: u.id, kind: 'MATCH', channel: 'TELEGRAM', status: 'FAILED', lastError: 'USER_INACTIVE', payload: {} },
+    });
+    const { l, a } = await deal();
+    await svc.process({ listingId: l.id, analysisId: a.id, event: 'NEW' });
+    const fresh = await prisma.notification.findMany({ where: { channel: 'TELEGRAM', matchId: { not: null } } });
+    expect(fresh.map((n) => n.status)).toEqual(['PENDING']);
+  });
+
   it('PRICE_DROP payload carries the previous matched price', async () => {
     const u = await createUser(ref);
     await createProfile(ref, u.id, { priceDropPct: 0.05 });

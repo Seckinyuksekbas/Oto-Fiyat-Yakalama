@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { resolveUserPlan, type User } from '@oto/db';
+import { anonymizeUser, resolveUserPlan, type User } from '@oto/db';
 import { PrismaService } from '../../infra/prisma.service';
 
 /** /me altındaki TEK veri erişim noktası. Her sorgu userId ile kapsamlanır. */
@@ -22,7 +22,7 @@ export class MeRepository {
 
   countExternalNotificationsSince(userId: string, since: Date) {
     return this.prisma.notification.count({
-      where: { userId, kind: 'MATCH', channel: { not: 'IN_APP' }, status: { not: 'SKIPPED_LIMIT' }, createdAt: { gte: since } },
+      where: { userId, kind: 'MATCH', channel: { not: 'IN_APP' }, status: { not: 'SKIPPED_LIMIT' }, NOT: { status: 'FAILED', lastError: 'USER_INACTIVE' }, createdAt: { gte: since } },
     });
   }
 
@@ -52,26 +52,8 @@ export class MeRepository {
     await this.prisma.user.update({ where: { id: userId }, data: { passwordHash } });
   }
 
-  /** KVKK: kişisel alanlar anonimleştirilir; profiller, kanallar, favoriler silinir. Bildirimler saklama süresi sonunda temizlenir. */
+  /** KVKK anonimleştirme kuralları packages/db'de paylaşılır (admin silme ile aynı). */
   async anonymizeAndDelete(userId: string): Promise<void> {
-    await this.prisma.$transaction([
-      this.prisma.searchProfile.deleteMany({ where: { userId } }),
-      this.prisma.notificationChannel.deleteMany({ where: { userId } }),
-      this.prisma.favorite.deleteMany({ where: { userId } }),
-      this.prisma.session.deleteMany({ where: { userId } }),
-      this.prisma.emailVerificationToken.deleteMany({ where: { userId } }),
-      this.prisma.passwordResetToken.deleteMany({ where: { userId } }),
-      this.prisma.telegramLinkToken.deleteMany({ where: { userId } }),
-      this.prisma.user.update({
-        where: { id: userId },
-        data: {
-          status: 'DELETED',
-          email: `deleted+${userId}@invalid.local`,
-          name: 'Silinmiş kullanıcı',
-          passwordHash: '',
-          emailVerifiedAt: null,
-        },
-      }),
-    ]);
+    await this.prisma.$transaction((tx) => anonymizeUser(tx, userId));
   }
 }

@@ -66,7 +66,7 @@ describe('admin users', () => {
     const victim = await registerUser(app, { email: 'victim@test.com' });
 
     const res = await admin.agent.post(`/api/v1/admin/users/${victim.user.id}/suspend`);
-    expect(res.status).toBe(201);
+    expect(res.status).toBe(200);
     expect(res.body.user.status).toBe('SUSPENDED');
 
     expect((await victim.agent.post('/api/v1/auth/refresh')).status).toBe(401);
@@ -156,7 +156,7 @@ describe('admin users: atomic audit', () => {
       return orig(tx, ctx, e);
     });
     try {
-      expect((await admin.agent.post(`/api/v1/admin/users/${victim.user.id}/suspend`)).status).toBe(201);
+      expect((await admin.agent.post(`/api/v1/admin/users/${victim.user.id}/suspend`)).status).toBe(200);
     } finally {
       spy.mockRestore();
     }
@@ -171,7 +171,7 @@ describe('admin users: atomic audit', () => {
     const spy = vi.spyOn(app.get(SessionService), 'revokeAllForUser').mockRejectedValueOnce(new Error('redis down'));
     try {
       const res = await admin.agent.post(`/api/v1/admin/users/${victim.user.id}/suspend`);
-      expect(res.status).toBe(201);
+      expect(res.status).toBe(200);
       expect(res.body.user.status).toBe('SUSPENDED');
     } finally {
       spy.mockRestore();
