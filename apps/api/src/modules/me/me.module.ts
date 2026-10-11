@@ -4,6 +4,11 @@ import { TelegramModule } from '../telegram/telegram.module';
 import { ChannelsController } from './channels.controller';
 import { ChannelsRepository } from './channels.repository';
 import { ChannelsService } from './channels.service';
+import { DashboardController } from './dashboard.controller';
+import { DashboardRepository } from './dashboard.repository';
+import { FavoritesController } from './favorites.controller';
+import { FavoritesRepository } from './favorites.repository';
+import { SubscriptionController } from './subscription.controller';
 import { LimitsService } from './limits.service';
 import { ListingsController } from './listings.controller';
 import { ListingsRepository } from './listings.repository';
@@ -22,7 +27,7 @@ import { SearchProfilesService } from './search-profiles.service';
 
 @Module({
   imports: [AuthModule, TelegramModule],
-  controllers: [MeController, SearchProfilesController, MatchesController, NotificationsController, ChannelsController, OpportunitiesController, ListingsController],
-  providers: [OpportunitiesRepository, ListingsRepository,ChannelsRepository, ChannelsService, MatchesRepository, NotificationsRepository, MeRepository, MeService, LimitsService, SearchProfilesRepository, SearchProfilesService],
+  controllers: [MeController, SearchProfilesController, MatchesController, NotificationsController, ChannelsController, OpportunitiesController, ListingsController, FavoritesController, DashboardController, SubscriptionController],
+  providers: [OpportunitiesRepository, ListingsRepository, FavoritesRepository, DashboardRepository, ChannelsRepository, ChannelsService, MatchesRepository, NotificationsRepository, MeRepository, MeService, LimitsService, SearchProfilesRepository, SearchProfilesService],
 })
 export class MeModule {}

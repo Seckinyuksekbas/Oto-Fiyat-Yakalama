@@ -1,7 +1,7 @@
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { PrismaService } from '../src/infra/prisma.service';
-import { createTestApp, registerUser, resetState, seedListing, verifyEmail } from './helpers';
+import { createTestApp, registerUser, resetState, seedListing, seedMatch, seedNotification, verifyEmail } from './helpers';
 
 let app: NestExpressApplication;
 
@@ -290,3 +290,73 @@ describe('GET /me/listings/:id', () => {
   });
 });
 
+describe('GET /me/subscription', () => {
+  it('returns the FREE plan with usage, and FALLBACK when no live subscription exists', async () => {
+    const A = await registerUser(app);
+    await A.agent.post('/api/v1/me/search-profiles').send({ name: 'p' });
+    const live = await A.agent.get('/api/v1/me/subscription');
+    expect(live.status).toBe(200);
+    expect(live.body).toMatchObject({ planCode: 'FREE', status: 'ACTIVE' });
+    await app.get(PrismaService).userSubscription.deleteMany({ where: { userId: A.user.id } });
+    const res = await A.agent.get('/api/v1/me/subscription');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      planCode: 'FREE',
+      status: 'FALLBACK',
+      endsAt: null,
+      usage: { searchProfiles: 1, notificationsToday: 0 },
+    });
+    expect(typeof res.body.planName).toBe('string');
+    expect(res.body.limits.maxSearchProfiles).toBeGreaterThan(0);
+  });
+
+  it('applies limit overrides', async () => {
+    const A = await registerUser(app);
+    await app
+      .get(PrismaService)
+      .userSubscription.updateMany({ where: { userId: A.user.id }, data: { limitOverrides: { maxSearchProfiles: 7 } } });
+    const res = await A.agent.get('/api/v1/me/subscription');
+    expect(res.body.limits.maxSearchProfiles).toBe(7);
+  });
+});
+
+describe('GET /me/dashboard', () => {
+  it('returns recent matches, 7-day zero-filled series, profiles and notifications', async () => {
+    const A = await registerUser(app);
+    await verifyEmail(app, A.user.id);
+    const p1 = (await A.agent.post('/api/v1/me/search-profiles').send({ name: 'p1' })).body.id;
+    await A.agent.post('/api/v1/me/search-profiles').send({ name: 'p2' });
+    await A.agent.post(`/api/v1/me/search-profiles/${p1}/pause`);
+    const m1 = await seedMatch(app, A.user.id, p1);
+    const m2 = await seedMatch(app, A.user.id, p1, { reason: 'PRICE_DROP' });
+    const old = await seedMatch(app, A.user.id, p1);
+    const prisma = app.get(PrismaService);
+    await prisma.listingMatch.update({ where: { id: old }, data: { createdAt: new Date(Date.now() - 8 * 86_400_000) } });
+    await seedNotification(app, A.user.id, { kind: 'MATCH', channel: 'TELEGRAM', payload: {} });
+    await seedNotification(app, A.user.id, { kind: 'MATCH', channel: 'IN_APP', payload: {} });
+
+    const res = await A.agent.get('/api/v1/me/dashboard');
+    expect(res.status).toBe(200);
+    expect(res.body.recentMatches.map((m: { id: number }) => m.id)).toEqual([m2, m1, old]);
+    expect(res.body.recentMatches[0]).toMatchObject({ reason: 'PRICE_DROP', profile: { id: p1, name: 'p1' }, listing: { price: '960000' } });
+    expect(res.body.series).toHaveLength(7);
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Istanbul' }).format(new Date());
+    expect(res.body.series[6]).toEqual({ day: today, matches: 2 });
+    const days = res.body.series.map((s: { day: string }) => s.day);
+    expect(days).toEqual([...days].sort());
+    expect(new Set(days).size).toBe(7);
+    expect(res.body.series.reduce((n: number, s: { matches: number }) => n + s.matches, 0)).toBe(2); // 8-day-old match is outside the series
+    expect(res.body.profiles).toMatchObject({ active: 1, total: 2 });
+    expect(res.body.profiles.max).toBeGreaterThan(0);
+    expect(res.body.notifications.today).toBe(1);
+    expect(res.body.notifications.limit).toBeGreaterThan(0);
+  });
+
+  it('caps recent matches at 8', async () => {
+    const A = await registerUser(app);
+    const p = (await A.agent.post('/api/v1/me/search-profiles').send({ name: 'p' })).body.id;
+    for (let i = 0; i < 10; i += 1) await seedMatch(app, A.user.id, p);
+    const res = await A.agent.get('/api/v1/me/dashboard');
+    expect(res.body.recentMatches).toHaveLength(8);
+  });
+});
