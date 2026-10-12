@@ -50,10 +50,11 @@ export class FakeTelegramApi {
         const next = this.scripted.get(method)?.shift();
         if (next) return send(next.status, next.body);
         if (method === 'getUpdates') {
+          // Gerçek Bot API gibi: offset'ten küçük güncellemeler onaylanmış sayılıp atılır,
+          // onaylanmayanlar sonraki çağrıda yeniden teslim edilir.
           const offset = Number(body.offset ?? 0);
-          const out = this.updates.filter((u) => u.update_id >= offset);
-          this.updates = [];
-          return send(200, { ok: true, result: out });
+          this.updates = this.updates.filter((u) => u.update_id >= offset);
+          return send(200, { ok: true, result: [...this.updates] });
         }
         this.messageId += 1;
         return send(200, { ok: true, result: { message_id: this.messageId } });

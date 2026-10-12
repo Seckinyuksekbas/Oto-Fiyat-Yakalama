@@ -234,7 +234,7 @@ describe('Telegram link flow', () => {
     expect(await prisma.notificationChannel.count({ where: { type: 'TELEGRAM' } })).toBe(1);
   });
 
-  it('webhook answers 200 {ok:true} even for junk bodies and handler failures', async () => {
+  it('webhook answers 200 {ok:true} for junk bodies and handled no-op updates (failures return 500, see telegram-webhook.e2e)', async () => {
     const junk = await hook({ hello: 'world' });
     expect(junk.status).toBe(200);
     expect(junk.body).toEqual({ ok: true });

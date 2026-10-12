@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { anonymizeUser, COUNTS_TOWARD_QUOTA, isLastActiveSuperAdmin, lockUserForUpdate, resolveUserPlan, type User } from '@oto/db';
 import { PrismaService } from '../../infra/prisma.service';
+import { boundLocks, HEAVY_TX_OPTIONS } from '../../infra/tx-options';
 
 /** /me altındaki TEK veri erişim noktası. Her sorgu userId ile kapsamlanır. */
 @Injectable()
@@ -48,11 +49,12 @@ export class MeRepository {
    */
   async anonymizeAndDelete(userId: string): Promise<'DELETED' | 'LAST_SUPER_ADMIN' | 'NOT_FOUND'> {
     return this.prisma.$transaction(async (tx) => {
+      await boundLocks(tx, 'heavy');
       const { target, activeSupers } = await lockUserForUpdate(tx, userId);
       if (!target || target.status === 'DELETED') return 'NOT_FOUND';
       if (isLastActiveSuperAdmin(target, activeSupers)) return 'LAST_SUPER_ADMIN';
       await anonymizeUser(tx, userId);
-      return 'DELETED';
-    });
+      return 'DELETED' as const;
+    }, HEAVY_TX_OPTIONS);
   }
 }

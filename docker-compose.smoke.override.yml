@@ -1,0 +1,25 @@
+# Yerel, prod-benzeri smoke (scripts/prod-smoke.sh). Production kurallarını GEVŞETMEZ; yalnız ortamı yerelleştirir:
+#   - Caddy: SITE_ADDRESS=oto.localtest.me:8443 + `tls internal` (ACME yok). localhost kullanılamaz: production env
+#     kuralları loopback PUBLIC_BASE_URL'yi reddeder; *.localtest.me herkese açık DNS'te 127.0.0.1'dir.
+#   - Portlar yalnız 127.0.0.1'e açılır: 8443 (HTTPS), 8080 (HTTP → HTTPS yönlendirme).
+#   - Mailpit smoke ağında 2525'te dinler (production 1025'i reddeder). Kimlik doğrulama yok → TLS zorunlu değil.
+# Kullanım: docker compose -f docker-compose.yml -f docker-compose.smoke.override.yml --env-file .env.prod.smoke ...
+
+services:
+  caddy:
+    ports: !override
+      - "127.0.0.1:8443:8443"
+      - "127.0.0.1:8080:80"
+    volumes:
+      - ./docker/caddy-smoke/tls-internal.caddy:/etc/caddy/site.d/tls-internal.caddy:ro
+
+  api:
+    depends_on:
+      mailpit: { condition: service_started }
+
+  mailpit:
+    image: axllent/mailpit:v1.21
+    environment:
+      MP_SMTP_BIND_ADDR: 0.0.0.0:2525
+      MP_UI_BIND_ADDR: 0.0.0.0:8025
+    networks: [edge]

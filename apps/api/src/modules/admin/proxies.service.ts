@@ -10,6 +10,7 @@ import { assertPublicHttpUrl } from '../../common/security/ssrf';
 import { ENV } from '../../config/config.module';
 import type { Env } from '../../config/env';
 import { PrismaService } from '../../infra/prisma.service';
+import { boundLocks, LOCK_TX_OPTIONS } from '../../infra/tx-options';
 import { RedisService } from '../../infra/redis.service';
 import { ALLOW_PRIVATE_URLS } from './admin.tokens';
 import { maskProxyUrl } from './url-mask';
@@ -92,6 +93,7 @@ export class AdminProxiesService {
   async update(ctx: AuditCtx, id: number, input: AdminProxyUpdate) {
     if (input.url !== undefined) await assertPublicHttpUrl(input.url, { allowPrivate: this.allowPrivate, allowCredentials: true });
     return this.prisma.$transaction(async (tx) => {
+      await boundLocks(tx);
       const [locked] = await tx.$queryRaw<{ id: number }[]>`SELECT id FROM "ProxyConfig" WHERE id = ${id} FOR NO KEY UPDATE`;
       if (!locked) throw Errors.notFound();
       const before = await tx.proxyConfig.findUniqueOrThrow({ where: { id } });
@@ -109,7 +111,7 @@ export class AdminProxiesService {
         after: { name: after.name, url: maskProxyUrl(input.url ?? beforeUrl), isEnabled: after.isEnabled },
       });
       return { proxy: this.view(after) };
-    });
+    }, LOCK_TX_OPTIONS);
   }
 
   /** Proxy üzerinden yapılandırılmış hedefe istek atar; sonucu (gecikme/hata) kaydeder. */

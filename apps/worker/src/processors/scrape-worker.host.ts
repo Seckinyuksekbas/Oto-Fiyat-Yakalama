@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger, Optional, type OnModuleDestroy, type OnModu
 import { QueueName, scrapeJobSchema, type ScrapeJobData } from '@oto/shared';
 import { Worker } from 'bullmq';
 import { ScrapeRunner } from '../collection/scrape-runner.service';
+import { closeWithTimeout } from '../common/close-with-timeout';
 import { ENV } from '../config/config.module';
 import type { Env } from '../config/env';
 import { bullConnection } from '../infra/bull';
@@ -37,9 +38,9 @@ export class ScrapeWorkerHost implements OnModuleInit, OnModuleDestroy {
     this.worker.on('failed', (job, err) => this.logger.error(`Scrape işi ${job?.id} başarısız: ${err.message}`));
   }
 
-  /** Graceful shutdown: aktif işler bitene kadar bekler. */
+  /** Sınırlı graceful shutdown: aktif işler SHUTDOWN_TIMEOUT_MS içinde bitmezse worker zorla kapatılır. */
   async onModuleDestroy(): Promise<void> {
-    await this.worker?.close();
+    if (this.worker) await closeWithTimeout(this.worker, this.env.SHUTDOWN_TIMEOUT_MS, this.logger);
     this.worker = undefined;
   }
 }

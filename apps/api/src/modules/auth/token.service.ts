@@ -23,6 +23,22 @@ export class TokenService implements OnModuleInit {
   async onModuleInit(): Promise<void> {
     this.privateKey = await importPKCS8(this.env.JWT_PRIVATE_KEY, 'EdDSA');
     this.publicKey = await importSPKI(this.env.JWT_PUBLIC_KEY, 'EdDSA');
+    await this.selfTest();
+  }
+
+  /** Açılışta imzala/doğrula gidiş-dönüşü: anahtarlar aynı çiftten değilse süreç başlamaz. */
+  private async selfTest(): Promise<void> {
+    const probe = await new SignJWT({ probe: true })
+      .setProtectedHeader({ alg: 'EdDSA' })
+      .setIssuer(JWT_ISSUER)
+      .setAudience(JWT_AUDIENCE)
+      .setExpirationTime('1m')
+      .sign(this.privateKey);
+    try {
+      await jwtVerify(probe, this.publicKey, { issuer: JWT_ISSUER, audience: JWT_AUDIENCE, algorithms: ['EdDSA'] });
+    } catch {
+      throw new Error('JWT anahtar self-test başarısız: JWT_PRIVATE_KEY ile JWT_PUBLIC_KEY aynı anahtar çiftine ait değil');
+    }
   }
 
   signAccess(c: AccessClaims): Promise<string> {

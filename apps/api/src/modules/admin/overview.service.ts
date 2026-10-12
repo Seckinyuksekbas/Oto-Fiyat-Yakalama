@@ -16,7 +16,8 @@ export interface AdminKpi {
   queues: Record<string, number> | null;
   /** Redis'e erişilemezse null. */
   workers: { alive: number; dead: number } | null;
-  sources: Array<{ id: number; code: string; health: string; lastSuccessAt: Date | null }>;
+  /** `isActive=false` yönetici duraklatmasıdır; `health=PAUSED` engel kaynaklıdır (ikisi ayrı gösterilir). */
+  sources: Array<{ id: number; code: string; health: string; isActive: boolean; permissionVerifiedAt: Date | null; lastSuccessAt: Date | null }>;
 }
 
 export interface AdminOverview extends AdminKpi {
@@ -90,7 +91,7 @@ export class AdminOverviewService {
       this.notificationCounts(dayStart),
       this.queueDepths(),
       this.workerCounts(),
-      this.prisma.dataSource.findMany({ select: { id: true, code: true, health: true, lastSuccessAt: true }, orderBy: { id: 'asc' } }),
+      this.prisma.dataSource.findMany({ select: { id: true, code: true, health: true, isActive: true, permissionVerifiedAt: true, lastSuccessAt: true }, orderBy: { id: 'asc' } }),
     ]);
     return { notifications, queues, workers, sources };
   }

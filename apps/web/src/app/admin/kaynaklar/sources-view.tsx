@@ -2,9 +2,9 @@
 import Link from 'next/link';
 import { Database, ShieldCheck, ShieldAlert } from 'lucide-react';
 import { PERMISSION_LABEL, When, formatDay } from '@/components/admin/catalog/cells';
-import { SourceToggle, isRunning } from '@/components/admin/catalog/source-toggle';
+import { BLOCK_PAUSED_COPY, SourceStatusBadges, isBlockPaused } from '@/components/admin/catalog/source-status';
+import { SourceToggle } from '@/components/admin/catalog/source-toggle';
 import { formatCount } from '@/components/admin/kpi-tile';
-import { StatusBadge } from '@/components/admin/status-badge';
 import { EmptyState } from '@/components/empty-state';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -23,7 +23,6 @@ const HEALTH_EDGE: Record<string, string> = {
 function SourceCard({ s }: { s: AdminSourceRow }) {
   const j = s.last24h.jobs;
   const l = s.last24h.listings;
-  const running = isRunning(s);
   return (
     <article
       aria-labelledby={`kaynak-${s.id}`}
@@ -45,10 +44,10 @@ function SourceCard({ s }: { s: AdminSourceRow }) {
           </p>
         </div>
         <div className="flex flex-wrap gap-1.5">
-          <StatusBadge status={s.health} />
-          {running ? null : s.health === 'PAUSED' ? null : <StatusBadge status="INACTIVE" label="Zamanlama kapalı" tone="neutral" />}
+          <SourceStatusBadges source={s} />
         </div>
       </header>
+      {isBlockPaused(s) ? <p className="text-[13px] text-danger-text">{BLOCK_PAUSED_COPY}</p> : null}
 
       <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
         <div className="flex flex-col gap-0.5">
@@ -112,8 +111,8 @@ export function AdminSourcesView() {
     <div className="flex flex-col gap-5">
       <h1 className="sr-only">Kaynaklar</h1>
       <p className="max-w-[72ch] text-sm text-muted">
-        Yalnızca izni doğrulanmış kaynaklar etkinleştirilebilir. Engel sinyali (403, captcha, robots) gelen kaynak kendiliğinden duraklar; nedeni
-        inceleyip elle etkinleştirin.
+        Yalnızca izni doğrulanmış kaynaklar etkinleştirilebilir. Yöneticinin duraklattığı kaynakta yalnızca zamanlama kapanır; sağlık olduğu gibi
+        kalır ve test taraması yapılabilir. Engel sinyali (403, captcha, robots) gelen kaynak kendiliğinden duraklar; nedeni inceleyip elle etkinleştirin.
       </p>
       {q.isPending ? (
         <div className="grid gap-4 lg:grid-cols-2" aria-busy="true">

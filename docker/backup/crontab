@@ -1,0 +1,4 @@
+# Oto Fırsat yedek zamanlaması (busybox crond, /etc/crontabs/root). entrypoint.sh @BACKUP_CRON@'u BACKUP_CRON ile
+# doldurur (varsayılan "0 3 * * *"; saat dilimi konteyner TZ'si, compose'da Europe/Istanbul).
+# crond root çalışır ama iş su-exec ile `postgres` kullanıcısına düşer; çıktı konteyner loglarına (PID 1) gider.
+@BACKUP_CRON@ . /run/backup/env && exec su-exec postgres /usr/local/bin/backup.sh >/proc/1/fd/1 2>/proc/1/fd/2

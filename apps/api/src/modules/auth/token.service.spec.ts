@@ -42,6 +42,25 @@ describe('TokenService', () => {
     expect(await svc.verifyAccess(token)).toBeNull();
   });
 
+  it('refuses to start when the private and public keys are not a pair', async () => {
+    const a = keys();
+    const b = keys();
+    const svc = new TokenService({ JWT_PRIVATE_KEY: a.JWT_PRIVATE_KEY, JWT_PUBLIC_KEY: b.JWT_PUBLIC_KEY } as Env);
+    const err = await svc.onModuleInit().then(
+      () => null,
+      (e: unknown) => e as Error,
+    );
+    expect(err?.message).toMatch(/JWT_PRIVATE_KEY.*JWT_PUBLIC_KEY/);
+    expect(err?.message).not.toContain('-----BEGIN');
+    const bodyLines = [...a.JWT_PRIVATE_KEY.split(/\r?\n/), ...b.JWT_PUBLIC_KEY.split(/\r?\n/)].filter(
+      (l) => l && !l.startsWith('-----'),
+    );
+    expect(bodyLines.length).toBeGreaterThan(0);
+    for (const line of bodyLines) {
+      expect(err?.message).not.toContain(line);
+    }
+  });
+
   it('rejects garbage and HS256 tokens', async () => {
     const svc = await make();
     expect(await svc.verifyAccess('garbage')).toBeNull();

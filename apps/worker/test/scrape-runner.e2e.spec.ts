@@ -259,6 +259,17 @@ describe('ScrapeRunner', () => {
       });
     });
 
+    it('runs for an admin-paused source (isActive=false, health untouched) but refuses a block-PAUSED one even when inactive', async () => {
+      const adminPaused = await createSource(ref, demo.baseUrl, { isActive: false, health: 'HEALTHY' });
+      const ok = await queuedDry(adminPaused.id);
+      expect(await runner.run(ok.id)).toMatchObject({ status: 'SUCCEEDED' });
+
+      const blocked = await createSource(ref, demo.baseUrl, { isActive: false, health: 'PAUSED' });
+      const refused = await queuedDry(blocked.id);
+      expect(await runner.run(refused.id)).toBeNull();
+      expect(await prisma.collectionJob.findUniqueOrThrow({ where: { id: refused.id } })).toMatchObject({ status: 'FAILED', pagesFetched: 0 });
+    });
+
     it('requires permissionVerifiedAt and refuses before touching the network', async () => {
       const source = await createSource(ref, demo.baseUrl, { permissionVerifiedAt: null, isActive: false });
       const queued = await queuedDry(source.id);

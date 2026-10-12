@@ -3,6 +3,7 @@
 //   WEB_URL, PG_CONTAINER; admin sayfaları için seed süper admin: SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD
 //   (yoksa .env.example varsayılanları). SKIP_ADMIN=1 admin sayfalarını atlar.
 import { execFileSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,7 +14,8 @@ const PG = process.env.PG_CONTAINER ?? 'oto-scraper-postgres-1';
 const OUT = join(dirname(fileURLToPath(import.meta.url)), '..', '.screenshots');
 const stamp = Date.now();
 const email = `smoke-${stamp}@example.com`;
-const password = 'Smoke-Test-Pass-123';
+// Tek kullanımlık smoke kullanıcısı: parola çalışma anında üretilir (repoda sabit parola yok).
+const password = 'Smoke-' + randomBytes(12).toString('base64url');
 const adminEmail = process.env.SEED_ADMIN_EMAIL ?? 'admin@example.com';
 const adminPassword = process.env.SEED_ADMIN_PASSWORD ?? 'change-me-please-123';
 const withAdmin = process.env.SKIP_ADMIN !== '1';

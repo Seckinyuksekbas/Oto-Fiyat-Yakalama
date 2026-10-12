@@ -1,4 +1,4 @@
-# Mimari (Plan 07 sonrası durum)
+# Mimari (Plan 08 sonrası durum)
 
 Ayrıntılı tasarım: `docs/superpowers/specs/2026-10-10-oto-firsat-platformu-design.md`.
 
@@ -55,7 +55,7 @@ Akış: `ListingMatch` + `Notification(PENDING)` (aynı transaction) → commit 
 ## Web katmanı (Plan 06)
 Ayrıntılar: [web.md](web.md).
 
-- `apps/web` (Next.js 15 App Router, React 19, TanStack Query) tarayıcının tek muhatabıdır; `/api/*` Next `rewrites` ile API'ye (`API_ORIGIN`, build zamanında sabit) yönlenir, böylece çerezler birinci taraftır. Üretimde tek origin Caddy ile sağlanacaktır (Plan 08).
+- `apps/web` (Next.js 15 App Router, React 19, TanStack Query) tarayıcının tek muhatabıdır; `/api/*` Next `rewrites` ile API'ye (`API_ORIGIN`, build zamanında sabit) yönlenir, böylece çerezler birinci taraftır. Üretimde tek origin Caddy ile sağlanır (bkz. Dağıtım).
 - **Oturum:** `middleware.ts` `/app/*` için `access_token` çerezine bakar; yoksa girişte tek seferlik istemci yenilemesi (`try_refresh`, `_r` döngü koruması). `apiFetch` 401'de tek uçuşlu, üç durumlu (`ok|expired|transient`) yenileme yapar; yalnızca `expired` oturumu bitirir.
 - **Canlı bildirim:** tek SSE bağlantısı (`ready`/`notification`/`ping`), 60 sn watchdog, 14 dk 30 sn'de proaktif yenileme, oturum bitince durur.
 - **Panel API'leri (Plan 06):** `/me/opportunities`, `/me/listings/:id`, `/me/favorites`, `/me/dashboard`, `/me/subscription`, `/catalog/*` — hepsi userId kapsamlı repository'ler üzerinden; `Favorite.id` (SERIAL, benzersiz) keyset imleci içindir.
@@ -69,3 +69,37 @@ Ayrıntılar: [admin.md](admin.md) (yetki matrisi, denetim, kaynak yaşam döng�
 - **Canlı akış:** `GET /admin/stream` (`ready`/`alert`/`job`/`kpi`/`ping`); sunucu oturumu ve rolü 30 sn'de bir yeniden kontrol eder (kullanıcı akışı da).
 - **SSRF:** admin girdisi URL'ler kayıtta (`assertPublicHttpUrl`) ve production'da çekim anında (`PoliteHttpClient` bağlantı yolunda `guardedLookup`, proxy soketi dahil; yönlendirmelerde her atlama) denetlenir.
 - **Web:** `/admin/*` Plan 06 tasarım sistemiyle; middleware çerez kontrolü + istemci rol kapısı (yetkisizse 404 görünümü); asıl yetki API'de.
+
+## Dağıtım (Plan 08)
+Tek sunucu, `docker-compose.yml`. Operasyon dokümanları: [operations/deploy.md](operations/deploy.md), [backup-restore.md](operations/backup-restore.md), [alarms.md](operations/alarms.md), [telegram-bot.md](operations/telegram-bot.md), [security.md](operations/security.md).
+
+```
+                 İnternet (80/443, HTTP/3)                         Telegram Bot API / ilan kaynakları
+                          │                                                     ▲
+             ┌────────────▼────────────┐                                        │ egress ağı
+             │ caddy (TLS, HSTS, tek   │                                        │
+  edge ağı   │ origin, SSE flush)      │                         ┌──────────────┴──────────────┐
+             └──────┬───────────┬──────┘                         │ worker ×WORKER_REPLICAS      │
+           /api/*   │           │ geri kalan                     │ (scrape/analyze/match/notify)│
+             ┌──────▼─────┐ ┌───▼────────┐                       │ scheduler ×1 (leader lock,   │
+             │ api :3001  │ │ web :3000  │                       │ monitör, süpürmeler, saklama)│
+             │ NestJS     │ │ Next.js    │──/api/* rewrite──▶api └──────────────┬──────────────┘
+             └──────┬─────┘ └────────────┘  (API_ORIGIN, derlemede sabit)       │
+                    │                                                           │
+  backend ağı ──────┴──────────────────────┬──────────────────────┬─────────────┘
+  (internal, dışa çıkış yok)               │                      │
+             ┌─────────────────────┐  ┌────▼─────────┐   ┌────────▼────────┐
+             │ migrate (tek sefer: │─▶│ postgres 16  │◀──│ backup (crond,  │──▶ backups volume
+             │ migrate deploy)     │  │ pgdata       │   │ pg_dump 03:00)  │    (+ sunucu dışı kopya)
+             └─────────────────────┘  └──────────────┘   └─────────────────┘
+                                      ┌──────────────┐
+                                      │ redis 7 (AOF,│  BullMQ kuyrukları, pub/sub, kilitler,
+                                      │ noeviction)  │  heartbeat, throttle
+                                      └──────────────┘
+```
+
+- **İmajlar:** `oto/api`, `oto/web` (Next standalone), `oto/worker` (worker ve scheduler aynı imaj, `--role=scheduler`), `oto/migrate`, `oto/backup`. Node imajları `node:22.23.3-alpine3.24` tabanına sabitlenmiştir. Hepsi non-root çalışır ve healthcheck içerir. Sırlar imaja girmez, yalnızca runtime env ile gelir.
+- **Başlatma sırası:** postgres/redis healthy → `migrate` başarıyla biter → api, worker ve scheduler başlar → api ve web healthy → caddy başlar.
+- **Ağlar:** `edge` (caddy, web, api), `backend` (internal: postgres, redis ve onlara bağlananlar), `egress` (worker ve scheduler'ın dış dünyaya çıkışı).
+- **Sağlık:** api `/api/v1/health/ready`; web `/`; worker ve scheduler kendi Redis heartbeat anahtarına bakar (`worker:heartbeat:<host>:<pid>`); backup en yeni dump'ın yaşına bakar.
+- **Uçtan uca test:** `apps/e2e` (Playwright) derlenmiş süreçleri ayrı portlarda başlatır (api 3101, web 3100, demo-site 4100, sahte Telegram 4200). Prod benzeri yığın için `scripts/prod-smoke.sh` kullanılır. Ayrıntılar: [apps/e2e/README.md](../apps/e2e/README.md).

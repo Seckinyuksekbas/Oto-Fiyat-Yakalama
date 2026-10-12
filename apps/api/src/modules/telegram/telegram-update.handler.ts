@@ -6,12 +6,17 @@ import { RedisService } from '../../infra/redis.service';
 import { UserEventsService } from '../../infra/user-events.service';
 import { PrismaService } from '../../infra/prisma.service';
 import { TELEGRAM_API } from './telegram.config';
+import { errorKind, isTransientDbError } from './telegram-errors';
 
 export function maskEmail(email: string): string {
   const at = email.lastIndexOf('@');
   if (at < 1) return '***';
   return `${email.slice(0, 1)}***${email.slice(at)}`;
 }
+
+type LinkResult = { note: Notification; email: string; previous: Notification[] };
+
+export const GENERIC_FAILURE_REPLY = 'İşlem şu anda tamamlanamadı, lütfen tekrar deneyin.';
 
 @Injectable()
 export class TelegramUpdateHandler {
@@ -25,6 +30,12 @@ export class TelegramUpdateHandler {
     @Inject(TELEGRAM_API) private readonly bot: TelegramClient | null,
   ) {}
 
+  /**
+   * Yinelenen teslimler: tekilleştirme `tg:update:<id>` (NX, 1 saat) ile yapılır ve hata durumunda anahtar silinir.
+   * Telegram aynı güncellemeyi eşzamanlı iki kez teslim ederse (ör. yavaş yanıt + yeniden deneme) ikinci kopya NX'i
+   * alamaz ve 200 döner; ilk kopya başarısız olursa anahtarı bırakır ve 500 döner, Telegram bir sonraki denemede
+   * güncellemeyi yeniden getirir. Yani yarış kendi kendini onarır; bağlama tx'i ayrıca usedAt CAS'ı ile tek seferliktir.
+   */
   async handle(u: TelegramUpdate): Promise<void> {
     if (!this.bot) return;
     const key = `tg:update:${u.update_id}`;
@@ -92,37 +103,17 @@ export class TelegramUpdateHandler {
       return;
     }
     const now = new Date();
-    let result: { note: Notification; email: string; previous: Notification[] } | null;
+    // null yalnızca "kod yok / kullanılmış / süresi dolmuş / hesap uygun değil" demektir → "geçersiz" yanıtı.
+    // Geçici DB hataları yeniden fırlatılır (webhook 500, Telegram yeniden dener); kalıcı hatalar genel yanıtla kapanır.
+    let result: LinkResult | null;
     try {
-      result = await this.prisma.$transaction(async (tx) => {
-        const token = await tx.telegramLinkToken.findUnique({ where: { codeHash: hashToken(code) }, include: { user: true } });
-        if (!token || token.usedAt || token.expiresAt <= now) return null;
-        if (token.user.status !== 'ACTIVE' || !token.user.emailVerifiedAt) return null;
-        const used = await tx.telegramLinkToken.updateMany({ where: { id: token.id, usedAt: null }, data: { usedAt: now } });
-        if (used.count !== 1) return null;
-        const hash = hashToken(String(chatId));
-        // Bir sohbet yalnızca bir kullanıcıya bağlı olabilir: önceki sahibin bağı kaldırılır.
-        const others = await tx.notificationChannel.findMany({
-          where: { type: 'TELEGRAM', externalIdHash: hash, userId: { not: token.userId } },
-          select: { id: true, userId: true },
-        });
-        const previous: Notification[] = [];
-        if (others.length > 0) {
-          await tx.notificationChannel.deleteMany({ where: { id: { in: others.map((o) => o.id) } } });
-          for (const o of others) previous.push(await this.securityNote(tx, o.userId, 'TELEGRAM_UNLINKED', now));
-        }
-        const data = { config: this.encryptor.encryptJson({ chatId }), externalIdHash: hash, isVerified: true, isEnabled: true };
-        await tx.notificationChannel.upsert({
-          where: { userId_type: { userId: token.userId, type: 'TELEGRAM' } },
-          update: data,
-          create: { userId: token.userId, type: 'TELEGRAM', ...data },
-        });
-        const note = await this.securityNote(tx, token.userId, 'TELEGRAM_LINKED', now);
-        return { note, email: token.user.email, previous };
-      });
+      result = await this.link(code, chatId, now);
     } catch (err) {
-      this.logger.warn(`Bağlama işlemi başarısız: ${String(err)}`);
-      result = null;
+      if (isTransientDbError(err)) throw err;
+      // Kalıcı (deterministik) hata: yeniden denemek aynı sonucu verir. Telegram'ı yeniden denemeye zorlamayız.
+      this.logger.error(`Bağlama işlemi kalıcı bir hatayla başarısız: ${JSON.stringify(errorKind(err))}`);
+      await this.reply(chatId, GENERIC_FAILURE_REPLY);
+      return;
     }
     if (!result) {
       await this.reply(chatId, 'Bağlantı kodu geçersiz veya süresi dolmuş. Panelden yeni bir kod oluşturun.');
@@ -130,6 +121,35 @@ export class TelegramUpdateHandler {
     }
     for (const n of [...result.previous, result.note]) await this.publishNote(n);
     await this.reply(chatId, `✅ ${maskEmail(result.email)} hesabı bağlandı. Eşleşen fırsatlar artık buraya gelecek.`);
+  }
+
+  private link(code: string, chatId: number, now: Date): Promise<LinkResult | null> {
+    return this.prisma.$transaction(async (tx): Promise<LinkResult | null> => {
+      const token = await tx.telegramLinkToken.findUnique({ where: { codeHash: hashToken(code) }, include: { user: true } });
+      if (!token || token.usedAt || token.expiresAt <= now) return null;
+      if (token.user.status !== 'ACTIVE' || !token.user.emailVerifiedAt) return null;
+      const used = await tx.telegramLinkToken.updateMany({ where: { id: token.id, usedAt: null }, data: { usedAt: now } });
+      if (used.count !== 1) return null;
+      const hash = hashToken(String(chatId));
+      // Bir sohbet yalnızca bir kullanıcıya bağlı olabilir: önceki sahibin bağı kaldırılır.
+      const others = await tx.notificationChannel.findMany({
+        where: { type: 'TELEGRAM', externalIdHash: hash, userId: { not: token.userId } },
+        select: { id: true, userId: true },
+      });
+      const previous: Notification[] = [];
+      if (others.length > 0) {
+        await tx.notificationChannel.deleteMany({ where: { id: { in: others.map((o) => o.id) } } });
+        for (const o of others) previous.push(await this.securityNote(tx, o.userId, 'TELEGRAM_UNLINKED', now));
+      }
+      const data = { config: this.encryptor.encryptJson({ chatId }), externalIdHash: hash, isVerified: true, isEnabled: true };
+      await tx.notificationChannel.upsert({
+        where: { userId_type: { userId: token.userId, type: 'TELEGRAM' } },
+        update: data,
+        create: { userId: token.userId, type: 'TELEGRAM', ...data },
+      });
+      const note = await this.securityNote(tx, token.userId, 'TELEGRAM_LINKED', now);
+      return { note, email: token.user.email, previous };
+    });
   }
 
   private async onCallback(cb: NonNullable<TelegramUpdate['callback_query']>): Promise<void> {
@@ -149,6 +169,22 @@ export class TelegramUpdateHandler {
       await this.prisma.favorite.upsert({ where: { userId_listingId: { userId: c.userId, listingId } }, update: {}, create: { userId: c.userId, listingId } });
     }
     await this.answer(cb.id, 'Favorilere eklendi ⭐');
+  }
+
+  /** Deneme sınırını aşan güncelleme atlanırken çağrılır: error log + SystemLog (gizli bilgi yok; yalnız kimlik ve hata türü). */
+  async recordSkipped(updateId: number, attempts: number, err: unknown, source: 'webhook' | 'polling'): Promise<void> {
+    const kind = errorKind(err);
+    this.logger.error(`Telegram güncellemesi ${attempts} denemede işlenemedi, atlandı (update_id=${updateId}, ${source}): ${JSON.stringify(kind)}`);
+    await this.prisma.systemLog
+      .create({
+        data: {
+          level: 'ERROR',
+          component: 'telegram',
+          message: `Telegram güncellemesi ${attempts} denemede işlenemedi ve atlandı`,
+          context: { updateId, attempts, source, error: kind },
+        },
+      })
+      .catch((e: unknown) => this.logger.error(`SystemLog yazılamadı (update_id=${updateId}): ${JSON.stringify(errorKind(e))}`));
   }
 
   private async reply(chatId: number, text: string) {

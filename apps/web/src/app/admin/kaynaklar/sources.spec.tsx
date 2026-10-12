@@ -414,3 +414,93 @@ describe('source detail: form robustness', () => {
     expect(screen.getByText(/Proxy listesi yüklenemedi/)).toBeInTheDocument();
   });
 });
+
+describe('two kinds of pause', () => {
+  it('the list shows "Duraklatıldı (yönetici)" for an admin pause and "Engel nedeniyle duraklatıldı" for a block, each with its own copy', async () => {
+    server.use(
+      meHandler('ADMIN'),
+      http.get('*/api/v1/admin/sources', () =>
+        HttpResponse.json({
+          total: 2,
+          items: [
+            row({ id: 1, name: 'Yönetici durdurdu', isActive: false, health: 'DEGRADED' }),
+            row({ id: 2, code: 'engelli', name: 'Engellenen', isActive: true, health: 'PAUSED' }),
+          ],
+        }),
+      ),
+    );
+    renderWithClient(<AdminSourcesView />);
+    const adminCard = (await screen.findByRole('heading', { name: 'Yönetici durdurdu' })).closest('article') as HTMLElement;
+    expect(within(adminCard).getByText('Duraklatıldı (yönetici)')).toBeInTheDocument();
+    expect(within(adminCard).getByText('Aksıyor')).toBeInTheDocument(); // sağlık olduğu gibi kalır
+    expect(within(adminCard).queryByText('Engel nedeniyle duraklatıldı')).toBeNull();
+    expect(within(adminCard).getByRole('button', { name: 'Etkinleştir' })).toBeEnabled();
+
+    const blockCard = screen.getByRole('heading', { name: 'Engellenen' }).closest('article') as HTMLElement;
+    expect(within(blockCard).getByText('Engel nedeniyle duraklatıldı')).toBeInTheDocument();
+    expect(within(blockCard).queryByText('Duraklatıldı (yönetici)')).toBeNull();
+    expect(within(blockCard).queryByText('Duraklatıldı')).toBeNull();
+    expect(within(blockCard).getByText(/engel sinyali/i)).toBeInTheDocument();
+    expect(within(blockCard).getByRole('button', { name: 'Etkinleştir' })).toBeEnabled();
+  });
+
+  it('both flags at once: a block-PAUSED source the admin also paused shows both badges; an unverified inactive source shows "Zamanlama kapalı"', async () => {
+    server.use(
+      meHandler('ADMIN'),
+      http.get('*/api/v1/admin/sources', () =>
+        HttpResponse.json({
+          total: 2,
+          items: [
+            row({ id: 1, name: 'İkisi birden', isActive: false, health: 'PAUSED' }),
+            row({ id: 2, code: 'izinsiz', name: 'İzinsiz', isActive: false, health: 'HEALTHY', permissionVerifiedAt: null }),
+          ],
+        }),
+      ),
+    );
+    renderWithClient(<AdminSourcesView />);
+    const both = (await screen.findByRole('heading', { name: 'İkisi birden' })).closest('article') as HTMLElement;
+    expect(within(both).getByText('Engel nedeniyle duraklatıldı')).toBeInTheDocument();
+    expect(within(both).getByText('Duraklatıldı (yönetici)')).toBeInTheDocument();
+
+    const unverified = screen.getByRole('heading', { name: 'İzinsiz' }).closest('article') as HTMLElement;
+    expect(within(unverified).getByText('Zamanlama kapalı')).toBeInTheDocument();
+    expect(within(unverified).queryByText('Duraklatıldı (yönetici)')).toBeNull();
+  });
+
+  it('detail: dry-run is allowed for an admin-paused source and refused (with the block reason) for a block-PAUSED one', async () => {
+    server.use(...detailHandlers(source({ isActive: false, health: 'HEALTHY' })));
+    const first = renderWithClient(<AdminSourceDetailView id={1} />);
+    expect(await screen.findByText('Duraklatıldı (yönetici)')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Test taraması başlat' })).toBeEnabled();
+    first.unmount();
+
+    server.use(...detailHandlers(source({ isActive: true, health: 'PAUSED' })));
+    renderWithClient(<AdminSourceDetailView id={1} />);
+    expect((await screen.findAllByText('Engel nedeniyle duraklatıldı')).length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Test taraması başlat' })).toBeDisabled();
+    expect(screen.getByText(/engel sinyali nedeniyle duraklatıldı/i)).toBeInTheDocument();
+    expect(screen.queryByText(/elle duraklatma/)).toBeNull();
+  });
+});
+
+describe('source detail: masked config secrets', () => {
+  it('shows the "***" hint and round-trips "***" values unchanged when another config key is edited', async () => {
+    let patch: Record<string, unknown> | undefined;
+    const masked = { baseUrl: 'http://127.0.0.1:4010/ilanlar', apiKey: '***', nested: { token: '***', pages: 3 } };
+    server.use(
+      ...detailHandlers(source({ config: masked })),
+      http.patch('*/api/v1/admin/sources/1', async ({ request }) => {
+        patch = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ source: source({ config: { ...masked, nested: { token: '***', pages: 4 } } }) });
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithClient(<AdminSourceDetailView id={1} />);
+    expect(await screen.findByText(/\*\*\* olarak görünen gizli değerleri değiştirmek için yeni değeri yazın/)).toBeInTheDocument();
+    const config = screen.getByLabelText('Yapılandırma (JSON)');
+    fireEvent.change(config, { target: { value: JSON.stringify({ ...masked, nested: { token: '***', pages: 4 } }, null, 2) } });
+    await user.click(screen.getByRole('button', { name: 'Değişiklikleri kaydet' }));
+    await waitFor(() => expect(patch).toEqual({ config: { ...masked, nested: { token: '***', pages: 4 } } }));
+    expect(toastMock.success).toHaveBeenCalledWith('Kaynak kaydedildi');
+  });
+});

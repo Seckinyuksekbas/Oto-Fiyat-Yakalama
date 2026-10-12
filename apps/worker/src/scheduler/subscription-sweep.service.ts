@@ -3,6 +3,7 @@ import { maxSearchProfilesFor, resolveUserPlan } from '@oto/db';
 import { userEventChannel, type UserEvent } from '@oto/shared';
 import { PrismaService } from '../infra/prisma.service';
 import { RedisService } from '../infra/redis.service';
+import { boundLocks, LOCK_TX_OPTIONS } from '../infra/tx-options';
 import { istanbulDayKey } from './analysis-sweep.service';
 
 export interface SubscriptionSweepResult {
@@ -77,9 +78,14 @@ export class SubscriptionSweepService {
     return total;
   }
 
-  /** Tek kullanıcı, tek transaction: süresi dolanları kapat + fazla profilleri duraklat + bildirimi yaz. */
+  /**
+   * Tek kullanıcı, tek transaction: süresi dolanları kapat + fazla profilleri duraklat + bildirimi yaz.
+   * Kullanıcı satırı kilitlendiği için tx sınırlıdır (LOCK_TX_OPTIONS + boundLocks): kilit tutulursa 5 sn'de 55P03 ile
+   * düşer, kullanıcı başarısız sayılır ve süpürme kısa bekleme sonrası yeniden dener.
+   */
   private async processUser(userId: string, now: Date): Promise<UserOutcome> {
     return this.prisma.$transaction(async (tx) => {
+      await boundLocks(tx);
       // Eşzamanlı profil oluşturma/aktifleştirme ile yarışmamak için kullanıcı satırını kilitle.
       await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${userId} FOR UPDATE`;
       const expired = await tx.userSubscription.updateMany({ where: { userId, status: 'ACTIVE', endsAt: { lte: now } }, data: { status: 'EXPIRED' } });
@@ -107,6 +113,6 @@ export class SubscriptionSweepService {
         notification: { id: note.id, kind: 'SYSTEM_ALERT', channel: 'IN_APP', status: 'SENT', payload: note.payload, createdAt: note.createdAt.toISOString() },
       };
       return { expired: expired.count, paused: excess.length, event: { userId, event } };
-    });
+    }, LOCK_TX_OPTIONS);
   }
 }

@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import type { NormalizedProfile } from '@oto/shared';
 import { countPreviewSince, previewListings, type MatchFilter, type PreviewListingRow, type SearchProfile } from '@oto/db';
 import { PrismaService } from '../../infra/prisma.service';
+import { boundLocks, LOCK_TX_OPTIONS } from '../../infra/tx-options';
 
 function toData(p: NormalizedProfile) {
   return {
@@ -36,10 +37,11 @@ export class SearchProfilesRepository {
   /** Kullanıcı başına advisory kilit altında sayar ve oluşturur; limit doluysa null. */
   createWithinLimit(userId: string, p: NormalizedProfile, max: number): Promise<SearchProfile | null> {
     return this.prisma.$transaction(async (tx) => {
+      await boundLocks(tx);
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`profiles:${userId}`}))`;
       if ((await tx.searchProfile.count({ where: { userId } })) >= max) return null;
       return tx.searchProfile.create({ data: { ...toData(p), userId } });
-    });
+    }, LOCK_TX_OPTIONS);
   }
 
   async update(userId: string, id: string, p: NormalizedProfile): Promise<SearchProfile | null> {
@@ -55,13 +57,14 @@ export class SearchProfilesRepository {
   /** Sürdürme: ACTIVE profil sayısı (bu profil hariç) < max ise ACTIVE yapar; kilit altında. */
   resumeWithinLimit(userId: string, id: string, max: number): Promise<SearchProfile | null | 'LIMIT'> {
     return this.prisma.$transaction(async (tx) => {
+      await boundLocks(tx);
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`profiles:${userId}`}))`;
       const own = await tx.searchProfile.findFirst({ where: { id, userId } });
       if (!own) return null;
       if (own.status === 'ACTIVE') return own;
       if ((await tx.searchProfile.count({ where: { userId, status: 'ACTIVE' } })) >= max) return 'LIMIT' as const;
       return tx.searchProfile.update({ where: { id: own.id }, data: { status: 'ACTIVE' } });
-    });
+    }, LOCK_TX_OPTIONS);
   }
 
   async delete(userId: string, id: string): Promise<boolean> {

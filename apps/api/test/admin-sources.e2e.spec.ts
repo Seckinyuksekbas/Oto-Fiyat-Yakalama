@@ -1,10 +1,11 @@
+import { randomBytes } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import { connect, type AddressInfo, type Socket } from 'node:net';
 import { Test } from '@nestjs/testing';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module';
-import { configureApp } from '../src/bootstrap';
+import { APP_OPTIONS, configureApp } from '../src/bootstrap';
 import { AdminQueues } from '../src/infra/admin-queues.service';
 import { PrismaService } from '../src/infra/prisma.service';
 import { RedisService } from '../src/infra/redis.service';
@@ -135,10 +136,11 @@ describe('sources CRUD and lifecycle', () => {
 
     const p1 = await agent.post(`${api}/sources/${s.id}/pause`);
     expect(p1.status).toBe(200);
-    expect(p1.body.source).toMatchObject({ isActive: false, health: 'PAUSED' });
+    expect(p1.body.source).toMatchObject({ isActive: false, health: 'HEALTHY' });
     await agent.post(`${api}/sources/${s.id}/pause`);
     expect(await audits('source.pause')).toHaveLength(1);
-    expect((await audits('source.pause'))[0]?.before).toMatchObject({ isActive: true, health: 'HEALTHY' });
+    expect((await audits('source.pause'))[0]?.before).toEqual({ isActive: true, health: 'HEALTHY' });
+    expect((await audits('source.pause'))[0]?.after).toEqual({ isActive: false, health: 'HEALTHY' });
   });
 
   it('PATCH changes fields with before/after audit, no-op writes nothing, revoking permission deactivates', async () => {
@@ -266,6 +268,125 @@ describe('test scrape', () => {
   });
 });
 
+describe('admin pause means inactive only', () => {
+  it('pause writes isActive=false and leaves health/failures untouched; the paused source still allows dry-run (202), not a real scrape', async () => {
+    const { agent } = await actor();
+    const s = await createSource(agent);
+    await agent.post(`${api}/sources/${s.id}/activate`);
+    await prisma.dataSource.update({ where: { id: s.id }, data: { health: 'DEGRADED', consecutiveFailures: 3 } });
+
+    const p = await agent.post(`${api}/sources/${s.id}/pause`);
+    expect(p.status).toBe(200);
+    expect(p.body.source).toMatchObject({ isActive: false, health: 'DEGRADED', consecutiveFailures: 3 });
+    expect(await prisma.dataSource.findUniqueOrThrow({ where: { id: s.id } })).toMatchObject({ isActive: false, health: 'DEGRADED', consecutiveFailures: 3 });
+    const [row] = await audits('source.pause');
+    expect(row?.before).toEqual({ isActive: true, health: 'DEGRADED' });
+    expect(row?.after).toEqual({ isActive: false, health: 'DEGRADED' });
+    // tekrar duraklatma no-op
+    expect((await agent.post(`${api}/sources/${s.id}/pause`)).status).toBe(200);
+    expect(await audits('source.pause')).toHaveLength(1);
+
+    const real = await agent.post(`${api}/sources/${s.id}/test-scrape`).send({ dryRun: false });
+    expect(real.status).toBe(409);
+    expect((await agent.post(`${api}/sources/${s.id}/test-scrape`).send({ dryRun: true })).status).toBe(202);
+
+    // yeniden etkinleştirme engel olmayan sağlığı sıfırlamaz
+    const a = await agent.post(`${api}/sources/${s.id}/activate`);
+    expect(a.body.source).toMatchObject({ isActive: true, health: 'DEGRADED', consecutiveFailures: 3 });
+  });
+
+  it('pausing a block-PAUSED (active) source keeps health=PAUSED; test scrape stays 409 until activate resets it', async () => {
+    const { agent } = await actor();
+    const s = await createSource(agent);
+    await prisma.dataSource.update({ where: { id: s.id }, data: { isActive: true, health: 'PAUSED', consecutiveFailures: 1 } });
+    const p = await agent.post(`${api}/sources/${s.id}/pause`);
+    expect(p.body.source).toMatchObject({ isActive: false, health: 'PAUSED' });
+    const refused = await agent.post(`${api}/sources/${s.id}/test-scrape`).send({ dryRun: true });
+    expect(refused.status).toBe(409);
+    expect(refused.body.error.message).toMatch(/engel/i);
+    const a = await agent.post(`${api}/sources/${s.id}/activate`);
+    expect(a.body.source).toMatchObject({ isActive: true, health: 'HEALTHY', consecutiveFailures: 0 });
+  });
+});
+
+describe('config secret masking', () => {
+  const secret = () => randomBytes(16).toString('hex');
+
+  it('masks secret-named config values in create/list/detail responses and audit before/after; "***" on PATCH keeps the stored value', async () => {
+    const { agent } = await actor();
+    const apiKey = secret();
+    const token = secret();
+    const res = await agent
+      .post(`${api}/sources`)
+      .send(sourceBody({ config: { baseUrl: 'http://127.0.0.1:4010/?sig=q', apiKey, nested: { token, pages: 3 } } }));
+    expect(res.status).toBe(201);
+    expect(res.body.source.config).toEqual({ baseUrl: 'http://127.0.0.1:4010/?…', apiKey: '***', nested: { token: '***', pages: 3 } });
+    const id = res.body.source.id as number;
+
+    const list = await agent.get(`${api}/sources`);
+    expect(list.body.items[0].config).toMatchObject({ apiKey: '***', nested: { token: '***' } });
+    const detail = await agent.get(`${api}/sources/${id}`);
+    expect(detail.body.source.config).toMatchObject({ apiKey: '***', nested: { token: '***' } });
+
+    // Maskeli görünümü geri gönder + yalnızca pages değişsin: gizli değerler korunur
+    const patched = await agent
+      .patch(`${api}/sources/${id}`)
+      .send({ config: { baseUrl: 'http://127.0.0.1:4010/?sig=q', apiKey: '***', nested: { token: '***', pages: 4 } } });
+    expect(patched.status).toBe(200);
+    expect(patched.body.source.config).toEqual({ baseUrl: 'http://127.0.0.1:4010/?…', apiKey: '***', nested: { token: '***', pages: 4 } });
+    expect((await prisma.dataSource.findUniqueOrThrow({ where: { id } })).config).toEqual({
+      baseUrl: 'http://127.0.0.1:4010/?sig=q', apiKey, nested: { token, pages: 4 },
+    });
+
+    // Yeni değer yazılırsa saklanır, ama yanıt ve audit yine maskeli
+    const rotated = secret();
+    const r2 = await agent.patch(`${api}/sources/${id}`).send({ config: { baseUrl: 'http://127.0.0.1:4010/?sig=q', apiKey: rotated, nested: { token: '***', pages: 4 } } });
+    expect(r2.status).toBe(200);
+    expect(r2.body.source.config.apiKey).toBe('***');
+    expect(((await prisma.dataSource.findUniqueOrThrow({ where: { id } })).config as { apiKey: string }).apiKey).toBe(rotated);
+
+    // Saklı karşılığı olmayan "***" reddedilir
+    const missing = await agent.patch(`${api}/sources/${id}`).send({ config: { baseUrl: 'http://127.0.0.1:4010', apiKey: '***', password: '***' } });
+    expect(missing.status).toBe(400);
+    expect(missing.body.error.code).toBe('VALIDATION_FAILED');
+
+    const rows = await prisma.auditLog.findMany({ where: { targetType: 'DataSource', targetId: String(id) } });
+    expect(rows.map((r) => r.action).sort()).toEqual(['source.create', 'source.update', 'source.update']);
+    const dump = JSON.stringify([rows, list.body, detail.body, patched.body, r2.body]);
+    for (const v of [apiKey, token, rotated]) expect(dump).not.toContain(v);
+    const create = rows.find((r) => r.action === 'source.create')!;
+    expect((create.after as { config: unknown }).config).toMatchObject({ apiKey: '***', nested: { token: '***' } });
+  });
+
+  it('create with "***" under a secret key is refused (400, nothing stored); a reordered masked array on PATCH is refused (400)', async () => {
+    const { agent } = await actor();
+    const bad = await agent.post(`${api}/sources`).send(sourceBody({ config: { baseUrl: 'http://127.0.0.1:4010/', auth: { user: '***' } } }));
+    expect(bad.status).toBe(400);
+    expect(bad.body.error.code).toBe('VALIDATION_FAILED');
+    expect(await prisma.dataSource.count()).toBe(0);
+
+    const accounts = [{ name: 'a', token: secret() }, { name: 'b', token: secret() }];
+    const res = await agent.post(`${api}/sources`).send(sourceBody({ config: { baseUrl: 'http://127.0.0.1:4010/', accounts } }));
+    expect(res.status).toBe(201);
+    const masked = res.body.source.config.accounts as unknown[];
+    const reordered = await agent.patch(`${api}/sources/${res.body.source.id}`).send({ config: { baseUrl: 'http://127.0.0.1:4010/', accounts: [masked[1], masked[0]] } });
+    expect(reordered.status).toBe(400);
+    expect(reordered.body.error.message).toMatch(/yeniden yazın/);
+    expect(((await prisma.dataSource.findUniqueOrThrow({ where: { id: res.body.source.id } })).config as { accounts: unknown }).accounts).toEqual(accounts);
+    expect(await audits('source.update')).toHaveLength(0);
+  });
+
+  it('a no-op PATCH that only echoes the masked config (keys in any order) writes nothing', async () => {
+    const { agent } = await actor();
+    const res = await agent.post(`${api}/sources`).send(sourceBody({ config: { baseUrl: 'http://127.0.0.1:4010/', authToken: secret(), opts: { pages: 2, apiKey: secret() } } }));
+    expect(res.body.source.config).toEqual({ baseUrl: 'http://127.0.0.1:4010/', authToken: '***', opts: { pages: 2, apiKey: '***' } });
+    // jsonb anahtarları yeniden sıralar; anahtar sırası farkı değişiklik sayılmaz
+    const echo = await agent.patch(`${api}/sources/${res.body.source.id}`).send({ config: { opts: { apiKey: '***', pages: 2 }, authToken: '***', baseUrl: 'http://127.0.0.1:4010/' } });
+    expect(echo.status).toBe(200);
+    expect(await audits('source.update')).toHaveLength(0);
+  });
+});
+
 describe('test scrape on an inactive source', () => {
   it('a real (non-dry-run) scrape of an inactive source is refused with 409 and frees the throttle; dry-run still works', async () => {
     const { agent } = await actor();
@@ -283,7 +404,7 @@ describe('SSRF (production mode)', () => {
   let prodApp: NestExpressApplication;
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).overrideProvider(ALLOW_PRIVATE_URLS).useValue(false).compile();
-    prodApp = moduleRef.createNestApplication<NestExpressApplication>({ bodyParser: false });
+    prodApp = moduleRef.createNestApplication<NestExpressApplication>(APP_OPTIONS);
     configureApp(prodApp);
     await prodApp.init();
   });

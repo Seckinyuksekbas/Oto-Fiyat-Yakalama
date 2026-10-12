@@ -5,6 +5,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, FlaskConical, Loader2 } from 'lucide-react';
 import { PERMISSION_LABEL, When, formatDay } from '@/components/admin/catalog/cells';
 import { DryRunPreview } from '@/components/admin/catalog/dry-run-preview';
+import { BLOCK_PAUSED_COPY, SourceStatusBadges, isBlockPaused } from '@/components/admin/catalog/source-status';
 import { SourceToggle } from '@/components/admin/catalog/source-toggle';
 import { StatusBadge } from '@/components/admin/status-badge';
 import { EmptyState } from '@/components/empty-state';
@@ -43,8 +44,8 @@ function DryRunPanel({ source }: { source: AdminSource }) {
 
   const blocked = !source.permissionVerifiedAt
     ? 'İzin doğrulanmadan test taraması yapılamaz.'
-    : source.health === 'PAUSED'
-      ? 'Kaynak engel ya da elle duraklatma nedeniyle durdu. Önce nedeni inceleyip etkinleştirin.'
+    : isBlockPaused(source)
+      ? 'Kaynak engel sinyali nedeniyle duraklatıldı. Önce nedeni inceleyip etkinleştirin.'
       : null;
 
   const mounted = useRef(true);
@@ -79,8 +80,8 @@ function DryRunPanel({ source }: { source: AdminSource }) {
             Test taraması (dry-run)
           </h2>
           <p className="text-[13px] text-muted">
-            En fazla 2 sayfa okur, ilk 20 ilanı normalize eder ve hiçbir şeyi kaydetmez. Etkin olmayan (duraklatılmamış) kaynakta da çalışır; engel
-            nedeniyle duraklatılmış kaynakta çalışmaz. Kaynak başına dakikada bir kez başlatılabilir.
+            En fazla 2 sayfa okur, ilk 20 ilanı normalize eder ve hiçbir şeyi kaydetmez. Yöneticinin duraklattığı (etkin olmayan) kaynakta da
+            çalışır; engel sinyali alıp duraklayan kaynakta çalışmaz. Kaynak başına dakikada bir kez başlatılabilir.
           </p>
         </div>
         <Button variant="secondary" disabled={blocked !== null || scrape.isPending || running} onClick={() => void start()}>
@@ -126,9 +127,9 @@ function Header({ s }: { s: AdminSource }) {
         <div className="flex flex-col gap-2">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <h1 className="font-display text-2xl font-semibold tracking-tight">{s.name}</h1>
-            <StatusBadge status={s.health} />
-            {s.isActive ? null : <StatusBadge status="INACTIVE" label="Zamanlama kapalı" tone="neutral" />}
+            <SourceStatusBadges source={s} />
           </div>
+          {isBlockPaused(s) ? <p className="text-[13px] text-danger-text">{BLOCK_PAUSED_COPY}</p> : null}
           <dl className="flex flex-wrap gap-x-6 gap-y-1 text-[13px] text-muted">
             <div className="flex gap-1.5">
               <dt>Kod</dt>

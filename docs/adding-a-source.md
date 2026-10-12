@@ -30,7 +30,7 @@ Kod yazmadan önce aşağıdakilerin **hepsi** yazılı olarak doğrulanmalıdı
 - `ScrapeError`: ağ/engel hataları. `ListingIssue`: ayrıştırılamayan/doğrulanamayan ilanlar.
 - `SystemLog` + admin panel bildirimi: engellenme, ardışık hata, %20 üzeri ayrıştırma hatası.
 - Kaynaktan kaynaklanmayan worker hataları (DB/Redis erişimi, kurulum) işi `Altyapı hatası` / `Kurulum hatası` mesajıyla FAILED yapar ve kaynağın sağlık durumunu etkilemez.
-- Duraklatılmış kaynağı yeniden açmak: `POST /admin/sources/:id/activate` (health `HEALTHY`, `consecutiveFailures=0`) — önce engelin nedenini ve izni kontrol edin.
+- Duraklatılmış kaynağı yeniden açmak: `POST /admin/sources/:id/activate` (engel kaynaklı PAUSED ise health `HEALTHY`, `consecutiveFailures=0`) — önce engelin nedenini ve izni kontrol edin. Yönetici duraklatması (`POST /admin/sources/:id/pause`) yalnız `isActive=false` yazar; sağlık değişmez ve dry-run yapılabilir.
 
 ## İlk gerçek kaynaktan önce (zorunlu)
 Demo kaynağı bu maddeleri gerektirmez; ilk gerçek kaynak canlıya alınmadan **hepsi** kapatılmalıdır:

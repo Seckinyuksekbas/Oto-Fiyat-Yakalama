@@ -19,7 +19,13 @@ export class MailService {
     this.transporter =
       env.MAIL_TRANSPORT === 'json'
         ? createTransport({ jsonTransport: true })
-        : createTransport({ host: env.SMTP_HOST, port: env.SMTP_PORT, secure: false });
+        : createTransport({
+            host: env.SMTP_HOST,
+            port: env.SMTP_PORT,
+            secure: env.SMTP_SECURE,
+            requireTLS: env.SMTP_REQUIRE_TLS,
+            auth: env.SMTP_USER ? { user: env.SMTP_USER, pass: env.SMTP_PASS } : undefined,
+          });
   }
 
   async send(mail: OutgoingMail): Promise<void> {

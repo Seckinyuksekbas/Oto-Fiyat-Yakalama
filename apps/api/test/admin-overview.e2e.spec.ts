@@ -3,7 +3,7 @@ import { Test } from '@nestjs/testing';
 import { ADMIN_EVENTS_CHANNEL, startOfIstanbulDay } from '@oto/shared';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppModule } from '../src/app.module';
-import { configureApp } from '../src/bootstrap';
+import { APP_OPTIONS, configureApp } from '../src/bootstrap';
 import { AdminQueues } from '../src/infra/admin-queues.service';
 import { PrismaService } from '../src/infra/prisma.service';
 import { RedisService } from '../src/infra/redis.service';
@@ -24,7 +24,7 @@ const RECHECK_MS = 200;
 
 beforeAll(async () => {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).overrideProvider(SSE_RECHECK_MS).useValue(RECHECK_MS).compile();
-  app = moduleRef.createNestApplication<NestExpressApplication>({ bodyParser: false });
+  app = moduleRef.createNestApplication<NestExpressApplication>(APP_OPTIONS);
   configureApp(app);
   await app.init();
   prisma = app.get(PrismaService);
@@ -131,7 +131,7 @@ describe('GET /admin/overview', () => {
       opportunities: { count: 2 },
       notifications: { sentToday: 3, failedToday: 1, skippedLimitToday: 2 },
       queues: { scrape: 1, analyze: 0, match: 0, notify: 3, 'notify-telegram': 0 },
-      sources: [{ id: src.id, code: 'test-src', health: 'HEALTHY', lastSuccessAt: null }],
+      sources: [{ id: src.id, code: 'test-src', health: 'HEALTHY', isActive: false, permissionVerifiedAt: null, lastSuccessAt: null }],
       workers: { alive: 1, dead: 1 },
       latency: { p50: 300, p95: 880 },
     });

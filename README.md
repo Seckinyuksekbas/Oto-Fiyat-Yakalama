@@ -7,9 +7,9 @@ Otomobil ilanlarını merkezi olarak toplayan, kural tabanlı ve açıklanabilir
 - Mimari: [`docs/architecture.md`](docs/architecture.md)
 
 ## Gereksinimler
-Node 22+, Docker Desktop (çalışır durumda), `corepack enable`.
+Node 22+, Docker Desktop (çalışır durumda), `corepack enable`. Windows'ta komutları **Git Bash**'te çalıştırın: PowerShell 5.1'de `>>` UTF-16 yazar ve `.env` dosyasını bozar.
 
-## Hızlı başlangıç
+## Hızlı başlangıç (geliştirme)
 ```bash
 pnpm install
 cp .env.example .env
@@ -35,7 +35,9 @@ Demo sitesinin kontrol uç noktaları: `POST /__tick` (piyasayı ilerlet), `POST
 
 Worker aynı süreçte analiz kuyruğunu da tüketir; analiz sonuçları `ListingAnalysis` tablosuna yazılır. Motorun kuralları: [`docs/analysis-engine.md`](docs/analysis-engine.md).
 
-Worker ayrıca `match` kuyruğunu tüketir: analiz olayları kullanıcıların arama profilleriyle eşleştirilir ve `ListingMatch` yazılır. Paralellik `MATCH_CONCURRENCY` (varsayılan 4) ile ayarlanır; `DATABASE_URL` `connection_limit` değeri `SCRAPE_CONCURRENCY + ANALYZE_CONCURRENCY + MATCH_CONCURRENCY` toplamından büyük olmalıdır. Ayrıntılar: [`docs/matching.md`](docs/matching.md).
+Worker ayrıca `match` kuyruğunu tüketir: analiz olayları kullanıcıların arama profilleriyle eşleştirilir ve `ListingMatch` yazılır. Paralellik `MATCH_CONCURRENCY` (varsayılan 4) ile ayarlanır. Ayrıntılar: [`docs/matching.md`](docs/matching.md).
+
+**Veritabanı havuzu (`connection_limit`):** her süreç `DATABASE_URL`'deki `?connection_limit=N` kadar bağlantı açar. Worker için en az `SCRAPE + ANALYZE + MATCH + NOTIFY_CONCURRENCY + 5 (notify-telegram) + 3` gerekir, varsayılanlarla 26. Scheduler (`ROLE=scheduler`) için en az 3 gerekir. Production'da değer eksik ya da düşükse süreç başlamaz; geliştirmede yalnızca uyarır. Production compose varsayılanları worker 30, scheduler 5, api 10'dur. Toplamları Postgres `max_connections` sınırının altında kalmalıdır: `api + WORKER_REPLICAS × worker + scheduler + ~10 < POSTGRES_MAX_CONNECTIONS` (varsayılan 150). Bkz. [`docs/operations/deploy.md`](docs/operations/deploy.md#connection_limit-hesabı).
 
 ## Bildirimler
 Eşleşen her ilan için `Notification` kaydı yazılır; worker `notify` / `notify-telegram` kuyruklarını tüketir (uygulama içi + SSE, Telegram). Akış, SSE sözleşmesi ve Telegram kurulumu: [`docs/notifications.md`](docs/notifications.md).
@@ -43,7 +45,7 @@ Eşleşen her ilan için `Notification` kaydı yazılır; worker `notify` / `not
 | Değişken | Süreç | Açıklama |
 |---|---|---|
 | `NOTIFY_CONCURRENCY` | worker | `notify` kuyruğu paralelliği (varsayılan 8, 1-32); `notify-telegram` sabit 5 paralel + 25 iş/sn limiter |
-| `TELEGRAM_BOT_TOKEN` | api, worker | BotFather token'ı. Yoksa bağlama 503 döner, TELEGRAM bildirimi planlanmaz |
+| `TELEGRAM_BOT_TOKEN` | api, worker | BotFather token'ı. Yoksa bağlama 503 döner ve TELEGRAM bildirimi planlanmaz. Production worker'ı token yoksa açılışta uyarır ve `SystemLog` WARN satırı yazar. Kurulum ve webhook: [`docs/operations/telegram-bot.md`](docs/operations/telegram-bot.md) |
 | `TELEGRAM_BOT_USERNAME` | api | Bağlama deep link'i için bot kullanıcı adı (token varken zorunlu) |
 | `TELEGRAM_MODE` | api | `polling` (geliştirme, varsayılan) veya `webhook` (üretim) |
 | `TELEGRAM_WEBHOOK_SECRET` | api | Webhook modunda zorunlu; 32-256 karakter `[A-Za-z0-9_-]`; `setWebhook` `secret_token` ile aynı |
@@ -55,7 +57,23 @@ Eşleşen her ilan için `Notification` kaydı yazılır; worker `notify` / `not
 pnpm lint && pnpm typecheck
 pnpm test        # birim testleri
 pnpm test:e2e    # Testcontainers ile Postgres + Redis (Docker gerekir)
+pnpm e2e         # Playwright uçtan uca senaryolar (derlenmiş süreçler; bkz. apps/e2e/README.md)
 ```
+
+## Production
+Tek sunucu, Docker Compose (Caddy + web + api + worker + scheduler + Postgres + Redis + gece yedeği):
+```bash
+cp .env.prod.example .env.prod && chmod 600 .env.prod    # yer tutucuları doldurun
+env -i HOME="$HOME" PATH="$PATH" docker compose --env-file .env.prod up -d --build --wait
+```
+Operasyon dokümanları:
+- [`docs/operations/deploy.md`](docs/operations/deploy.md): sunucu gereksinimleri, `.env.prod`, ilk kurulum, güncelleme/geri dönüş, ölçekleme ve bağlantı bütçesi
+- [`docs/operations/backup-restore.md`](docs/operations/backup-restore.md): gece yedeği, rotasyon, sunucu dışı kopya, aylık geri yükleme testi, geri yükleme prosedürü
+- [`docs/operations/alarms.md`](docs/operations/alarms.md): alarm anahtarları, eşikler, müdahale
+- [`docs/operations/telegram-bot.md`](docs/operations/telegram-bot.md): BotFather, webhook (`pnpm telegram:webhook set|info|delete`), secret/token rotasyonu
+- [`docs/operations/security.md`](docs/operations/security.md): CSP/HSTS, gizli bilgi politikası ve gitleaks, production env kuralları, anahtar rotasyonu, saklama süreleri, KVKK
+
+Yerel doğrulama: `sh scripts/docker-build-check.sh`, `sh scripts/prod-smoke.sh`, `sh scripts/backup-restore-check.sh`.
 
 ## Web uygulaması (kullanıcı paneli)
 ```bash

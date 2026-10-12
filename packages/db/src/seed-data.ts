@@ -32,12 +32,28 @@ export async function seedPlans(prisma: PrismaClient): Promise<void> {
   }
 }
 
+/**
+ * Seed süper admin parolası kuralı. Production'da: en az 12 karakter ve `<`/`>` içermez (`.env.prod.example`
+ * yer tutucusu `<...>` olduğu gibi kopyalanırsa reddedilir). Diğer ortamlarda en az 10 karakter.
+ * Mesaj değeri asla içermez.
+ */
+export function assertSeedAdminPassword(password: string, nodeEnv: string | undefined): void {
+  if (nodeEnv === 'production') {
+    if (/[<>]/.test(password)) {
+      throw new Error("SEED_ADMIN_PASSWORD: '<' ya da '>' içeremez (şablondaki yer tutucu değiştirilmemiş görünüyor)");
+    }
+    if (password.length < 12) throw new Error('SEED_ADMIN_PASSWORD: production ortamında en az 12 karakter olmalı');
+    return;
+  }
+  if (password.length < 10) throw new Error('SEED_ADMIN_PASSWORD: en az 10 karakter olmalı');
+}
+
 export async function seedSuperAdmin(
   prisma: PrismaClient,
   input: { email: string; password: string; name: string },
 ): Promise<User> {
   const email = input.email.trim().toLowerCase();
-  if (input.password.length < 10) throw new Error('SEED_ADMIN_PASSWORD en az 10 karakter olmalı');
+  assertSeedAdminPassword(input.password, process.env.NODE_ENV);
   const free = await prisma.subscriptionPlan.findUniqueOrThrow({ where: { code: 'FREE' } });
   const existing = await prisma.user.findUnique({ where: { email } });
   if (existing) {

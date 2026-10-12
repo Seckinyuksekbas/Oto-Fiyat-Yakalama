@@ -5,6 +5,7 @@ import type { AuditCtx } from '../../common/audit/audit-ctx.decorator';
 import { AuditService } from '../../common/audit/audit.service';
 import { AppError, Errors } from '../../common/errors/app-error';
 import { PrismaService } from '../../infra/prisma.service';
+import { boundLocks, LOCK_TX_OPTIONS } from '../../infra/tx-options';
 
 export const FREE_PLAN_CODE = 'FREE';
 
@@ -111,6 +112,7 @@ export class AdminPlansService {
 
   async update(ctx: AuditCtx, id: string, body: AdminPlanUpdate): Promise<{ plan: AdminPlanView & { usersOverProfileLimit: number } }> {
     const plan = await this.prisma.$transaction(async (tx) => {
+      await boundLocks(tx);
       const locked = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM "SubscriptionPlan" WHERE id = ${id} FOR NO KEY UPDATE`;
       if (locked.length === 0) throw Errors.notFound();
       const before = await tx.subscriptionPlan.findUniqueOrThrow({ where: { id } });
@@ -124,7 +126,7 @@ export class AdminPlansService {
       const after = await tx.subscriptionPlan.update({ where: { id }, data });
       await this.audit.recordInTx(tx, ctx, { targetType: 'SubscriptionPlan', targetId: id, before: snapshot(before), after: snapshot(after) });
       return after;
-    });
+    }, LOCK_TX_OPTIONS);
     const counts = await this.counts(this.prisma, [plan.id]);
     return { plan: { ...this.view(plan, counts.get(plan.id) ?? 0), usersOverProfileLimit: await this.usersOverProfileLimit(plan) } };
   }

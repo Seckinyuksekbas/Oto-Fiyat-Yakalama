@@ -3,5 +3,5 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   plugins: [swc.vite({ module: { type: 'es6' } })],
-  test: { include: ['src/**/*.spec.ts', 'test/lint/**/*.spec.ts'], root: './' },
+  test: { include: ['src/**/*.spec.ts', 'test/lint/**/*.spec.ts', 'test/scripts/**/*.spec.ts'], root: './' },
 });

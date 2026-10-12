@@ -1,0 +1,12 @@
+# gitleaks parmak izi allowlist'i (commit:dosya:kural:satır). Yeni satır yalnızca bulgu incelenip gerçek
+# olmadığı doğrulandıktan sonra, gerekçe yorumuyla eklenir. Gerçek test fixture'ları buraya EKLENMEZ;
+# kaynakta çalışma anında üretime çevrilir.
+
+# dummy PEM placeholder (body `abc` / `...`), not a key; .env.example placeholder exception
+6bb0e074ea563ce7230d3f6b14ac48f2f959a625:apps/api/src/config/env.spec.ts:private-key:8
+ac889f0162d228359afe2b4cc2a4bf39054215d9:docs/superpowers/plans/2026-10-10-01-foundation-auth.md:private-key:1476
+c65c9522a669885f26b1bc56a4904ea249666165:.env.example:private-key:15
+ac889f0162d228359afe2b4cc2a4bf39054215d9:docs/superpowers/plans/2026-10-10-01-foundation-auth.md:private-key:250
+
+# throwaway local smoke-user password, replaced with runtime generation in d2b42b5
+f4b70ac69d8cf56e92df5daa9e527c0353a5dc68:apps/web/scripts/screenshots.mjs:generic-api-key:14

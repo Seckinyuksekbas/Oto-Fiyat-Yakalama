@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger, Optional, type OnModuleDestroy, type OnModu
 import { analyzeJobSchema, QueueName, type AnalyzeJobData } from '@oto/shared';
 import { UnrecoverableError, Worker } from 'bullmq';
 import { AnalysisLockBusyError, AnalysisService } from '../analysis/analysis.service';
+import { closeWithTimeout } from '../common/close-with-timeout';
 import { ENV } from '../config/config.module';
 import type { Env } from '../config/env';
 import { bullConnection } from '../infra/bull';
@@ -48,7 +49,7 @@ export class AnalyzeWorkerHost implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleDestroy(): Promise<void> {
-    await this.worker?.close();
+    if (this.worker) await closeWithTimeout(this.worker, this.env.SHUTDOWN_TIMEOUT_MS, this.logger);
     this.worker = undefined;
   }
 }

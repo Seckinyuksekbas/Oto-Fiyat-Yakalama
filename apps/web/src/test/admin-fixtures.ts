@@ -38,8 +38,8 @@ export function overviewFixture(over: Record<string, unknown> = {}) {
     queues: { scrape: 3, analyze: 120, match: 0, notify: 4, 'notify-telegram': 1 },
     workers: { alive: 3, dead: 0 },
     sources: [
-      { id: 1, code: 'demo-site', health: 'HEALTHY', lastSuccessAt: '2026-10-11T09:58:00.000Z' },
-      { id: 2, code: 'partner-feed', health: 'DOWN', lastSuccessAt: null },
+      { id: 1, code: 'demo-site', health: 'HEALTHY', isActive: true, permissionVerifiedAt: '2026-10-01T09:00:00.000Z', lastSuccessAt: '2026-10-11T09:58:00.000Z' },
+      { id: 2, code: 'partner-feed', health: 'DOWN', isActive: true, permissionVerifiedAt: '2026-10-01T09:00:00.000Z', lastSuccessAt: null },
     ],
     latency: { p50: 4200, p95: 18400 },
     ...over,

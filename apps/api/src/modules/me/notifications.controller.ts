@@ -5,9 +5,10 @@ import {
   type ListNotificationsQuery,
   type MarkNotificationsReadInput,
 } from '@oto/shared';
-import { interval, Observable, takeUntil, timer } from 'rxjs';
+import { interval, merge, Observable, takeUntil, timer } from 'rxjs';
 import { CurrentUser } from '../../common/decorators/current-user';
 import { ZodPipe } from '../../common/zod.pipe';
+import { ShutdownSignal } from '../../infra/shutdown-signal.service';
 import { StreamSessionService } from '../../infra/stream-session.service';
 import { UserEventsService } from '../../infra/user-events.service';
 import type { AuthUser } from '../auth/auth-user';
@@ -35,6 +36,7 @@ export class NotificationsController {
     private readonly repo: NotificationsRepository,
     private readonly events: UserEventsService,
     private readonly session: StreamSessionService,
+    private readonly shutdown: ShutdownSignal,
   ) {}
 
   @Get()
@@ -102,6 +104,6 @@ export class NotificationsController {
         ping.unsubscribe();
         recheck.unsubscribe();
       };
-    }).pipe(takeUntil(timer(SSE_MAX_LIFETIME_MS)));
+    }).pipe(takeUntil(merge(timer(SSE_MAX_LIFETIME_MS), this.shutdown.signal$)));
   }
 }

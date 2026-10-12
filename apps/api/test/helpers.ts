@@ -5,14 +5,14 @@ import { seedPlans, type Notification, type Role } from '@oto/db';
 import request from 'supertest';
 import type TestAgent from 'supertest/lib/agent';
 import { AppModule } from '../src/app.module';
-import { configureApp } from '../src/bootstrap';
+import { APP_OPTIONS, configureApp } from '../src/bootstrap';
 import { PrismaService } from '../src/infra/prisma.service';
 import { RedisService } from '../src/infra/redis.service';
 import { MailService } from '../src/modules/mail/mail.service';
 
 export async function createTestApp(): Promise<NestExpressApplication> {
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
-  const app = moduleRef.createNestApplication<NestExpressApplication>({ bodyParser: false });
+  const app = moduleRef.createNestApplication<NestExpressApplication>(APP_OPTIONS);
   configureApp(app);
   await app.init();
   return app;

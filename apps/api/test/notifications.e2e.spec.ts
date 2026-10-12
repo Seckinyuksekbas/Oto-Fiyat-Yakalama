@@ -158,7 +158,7 @@ describe('/me/notifications', () => {
       sub.unsubscribe();
     } finally {
       spy.mockRestore();
-      await svc.onModuleDestroy();
+      await svc.onApplicationShutdown();
     }
   });
   it('SSE requires authentication', async () => {

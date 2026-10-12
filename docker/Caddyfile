@@ -1,0 +1,60 @@
+# Oto Fırsat — Caddy tek origin (docker-compose.yml). Tarayıcı yalnız bu siteyle konuşur:
+#   /api/*  → api:3001 (NestJS)      ·      geri kalan her şey → web:3000 (Next.js)
+# TLS: SITE_ADDRESS bir alan adıysa Let's Encrypt/ZeroSSL ile otomatik; HTTP (80) → HTTPS kalıcı yönlendirme.
+#
+# İstemci IP'si: Caddy en dış halkadır. `trusted_proxies` ayarlanmadığı için gelen X-Forwarded-For'a güvenmez ve
+# upstream'e gerçek istemci adresini yazar; api `TRUST_PROXY=1` ile tam bu tek halkaya güvenir. Caddy'nin önüne
+# bir CDN/yük dengeleyici konursa global `servers { trusted_proxies static <CIDR> }` eklenmeli ve api
+# TRUST_PROXY değeri artırılmalıdır.
+{
+	email {$ACME_EMAIL}
+	servers {
+		# Yavaş istemcilere karşı başlık okuma sınırı (SSE uzun yanıtlarını etkilemez)
+		timeouts {
+			read_header 10s
+		}
+	}
+}
+
+{$SITE_ADDRESS} {
+	# Ortama özgü site eklentileri (ör. yerel smoke'ta `tls internal`); production'da dizin boştur.
+	import /etc/caddy/site.d/*.caddy
+
+	header {
+		# HSTS yalnız bu (HTTPS) sitede; HTTP→HTTPS yönlendirme sitesine eklenmez
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Sürüm/yazılım ifşası yok (Caddy'nin ve upstream'in Server / X-Powered-By başlıkları silinir)
+		-Server
+		-X-Powered-By
+	}
+
+	# SSE akışları (/api/v1/me/notifications/stream, /api/v1/admin/stream): sıkıştırma yok, tamponlama yok.
+	@sse path_regexp ^/api/v1/.+/stream$
+	handle @sse {
+		reverse_proxy api:3001 {
+			flush_interval -1
+		}
+	}
+
+	handle /api/* {
+		# Kenar sınırı: api JSON gövdesini zaten 100 KB ile sınırlar (bootstrap.ts), dosya yükleme yok; büyük
+		# gövdeler upstream'e akıtılmadan 413 ile kesilir. SSE uçları (GET, gövdesiz) yukarıdaki handle'da.
+		request_body {
+			max_size 1MB
+		}
+		encode zstd gzip
+		reverse_proxy api:3001
+	}
+
+	handle {
+		encode zstd gzip
+		reverse_proxy web:3000
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

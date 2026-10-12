@@ -1,6 +1,7 @@
 generator client {
   provider        = "prisma-client-js"
   previewFeatures = ["postgresqlExtensions"]
+  binaryTargets   = ["native", "linux-musl-openssl-3.0.x"]
 }
 
 datasource db {
@@ -173,6 +174,8 @@ model Session {
   userId           String
   user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   familyId         String
+  /// Ailenin ilk oturumunun zamanı; rotasyonda taşınır (mutlak ömür sınırı)
+  familyStartedAt  DateTime  @default(now())
   refreshTokenHash String    @unique
   userAgent        String?
   ip               String?
@@ -183,6 +186,9 @@ model Session {
 
   @@index([userId])
   @@index([familyId])
+  /// Saklama temizliği: süresi dolmuş/iptal oturumlar (expiresAt OR revokedAt → BitmapOr)
+  @@index([expiresAt])
+  @@index([revokedAt])
 }
 
 model EmailVerificationToken {
@@ -499,7 +505,8 @@ model ListingMatch {
   listingId       Int
   listing         Listing         @relation(fields: [listingId], references: [id], onDelete: Cascade)
   analysisId      Int
-  analysis        ListingAnalysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  /// NoAction: referanslı analiz silinemez (saklama yarışında eşleşme cascade ile silinmesin); Listing silinince eşleşme listingId üzerinden zaten silinir
+  analysis        ListingAnalysis @relation(fields: [analysisId], references: [id], onDelete: NoAction)
   reason          MatchReason
   matchedPrice    BigInt
   createdAt       DateTime        @default(now())
@@ -508,6 +515,8 @@ model ListingMatch {
   @@unique([searchProfileId, listingId, reason, matchedPrice])
   @@index([userId, createdAt])
   @@index([userId, id])
+  /// ListingAnalysis silinirken FK (ON DELETE CASCADE) kontrolü ve saklama NOT EXISTS sorgusu
+  @@index([analysisId])
 }
 
 model Notification {
@@ -548,6 +557,8 @@ model Favorite {
   createdAt DateTime @default(now())
 
   @@id([userId, listingId])
+  /// Favori listesi keyset sayfalaması (userId, id)
+  @@index([userId, id])
 }
 
 // ---------- Sistem ----------

@@ -1,0 +1,10 @@
+# gitleaks yapılandırması (CI: .github/workflows/ci.yml → secrets işi).
+# Varsayılan kural seti olduğu gibi kullanılır; yol/regex ile geniş allowlist YOKTUR.
+# Bilinen, gerçek olmayan geçmiş bulgular yalnızca parmak iziyle .gitleaksignore'da tutulur.
+# Yerel tarama (tüm geçmiş, değerler maskeli):
+#   MSYS_NO_PATHCONV=1 docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.21.2 git /repo \
+#     --config /repo/.gitleaks.toml --redact
+title = "oto-firsat gitleaks"
+
+[extend]
+useDefault = true
